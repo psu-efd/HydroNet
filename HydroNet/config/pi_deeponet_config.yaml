@@ -1,0 +1,67 @@
+# Configuration for Physics-Informed DeepONet model
+
+# Architecture
+model:
+  name: "PI_DeepONet"
+  branch_net:
+    hidden_layers: [128, 128, 128]
+    activation: "relu"
+    dropout_rate: 0.0
+  trunk_net:
+    hidden_layers: [128, 128, 128]
+    activation: "tanh"  # tanh typically works better for physics-informed models
+    dropout_rate: 0.0
+  output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
+
+# Physics parameters
+physics:
+  gravity: 9.81  # Gravitational acceleration (m/s^2)
+  manning_coefficient: 0.03  # Manning's roughness coefficient
+  # Loss weights for different terms in the physics-informed loss
+  loss_weights:
+    data_loss: 1.0
+    continuity_eq: 0.1
+    momentum_x_eq: 0.1
+    momentum_y_eq: 0.1
+    initial_condition: 1.0
+    boundary_condition: 1.0
+
+# Training parameters
+training:
+  batch_size: 32
+  epochs: 2000
+  learning_rate: 0.001
+  weight_decay: 1e-5
+  scheduler:
+    use_scheduler: true
+    scheduler_type: "ReduceLROnPlateau"
+    patience: 20
+    factor: 0.5
+    min_lr: 1e-6
+  early_stopping:
+    use_early_stopping: true
+    patience: 50
+    min_delta: 1e-5
+
+# Data parameters
+data:
+  train_data_path: "../data/train"
+  val_data_path: "../data/val"
+  test_data_path: "../data/test"
+  input_dim: 0  # To be determined from data
+  output_dim: 3  # h, u, v
+  num_sensors: 0  # To be determined from data
+  normalization: "min_max"
+  
+# Sampling parameters for physics constraints
+sampling:
+  num_domain_points: 5000  # Number of points inside the domain for physics constraints
+  num_boundary_points: 1000  # Number of points on the boundary
+  num_initial_points: 1000  # Number of points at initial time
+  domain:
+    x_min: 0.0
+    x_max: 1.0
+    y_min: 0.0
+    y_max: 1.0
+    t_min: 0.0
+    t_max: 1.0 

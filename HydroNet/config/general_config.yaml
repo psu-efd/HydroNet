@@ -1,0 +1,23 @@
+# General configuration for HydroNet
+
+# Paths
+paths:
+  data_dir: "../data"
+  output_dir: "../outputs"
+  checkpoint_dir: "../checkpoints"
+  log_dir: "../logs"
+
+# Device settings
+device:
+  use_gpu: true
+  gpu_id: 0
+
+# Logging
+logging:
+  log_level: "INFO"
+  use_tensorboard: true
+  tensorboard_log_dir: "../logs/tensorboard"
+  save_freq: 10  # Save model every N epochs
+  
+# Random seed for reproducibility
+seed: 42 

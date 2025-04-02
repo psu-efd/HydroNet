@@ -1,0 +1,50 @@
+# Configuration for DeepONet model
+
+# Device configuration
+device:
+  use_gpu: true  # Set to false to force CPU usage
+  device_id: 0   # Specify which GPU to use if you have multiple
+
+# Architecture
+model:
+  name: "DeepONet"
+  branch_net:
+    hidden_layers: [32, 32, 32, 32]
+    activation: "relu"
+    dropout_rate: 0.05
+  trunk_net:
+    hidden_layers: [16, 32, 32, 32]
+    activation: "relu"
+    dropout_rate: 0.05
+  output_dim: 3  # u (x-velocity), v (y-velocity), h (water depth)
+
+# Training parameters
+training:
+  batch_size: 512
+  epochs: 100
+  learning_rate: 0.001
+  weight_decay: 2e-5
+  scheduler:
+    use_scheduler: true
+    scheduler_type: "ReduceLROnPlateau"
+    patience: 10
+    factor: 0.5
+    min_lr: 1e-6
+  early_stopping:
+    use_early_stopping: true
+    patience: 30
+    min_delta: 1e-5
+
+# Data parameters
+data:
+  train_data_path: "data/train"
+  val_data_path: "data/val"
+  test_data_path: "data/test"
+  branch_input_dim: 25  # Number of sensors (input functions)
+  trunk_input_dim: 3  # (x, y, t) coordinates
+  output_dim: 3  # u, v, h
+  normalization: "min_max" 
+  nCells: 100  # Number of cells in the SRH-2D cases
+  start_time: 0.0  # Start time of the simulation
+  end_time: 24.0  # End time of the simulation
+  nSaveTimes: 24  # Number of times that the data is saved in the SRH-2D cases

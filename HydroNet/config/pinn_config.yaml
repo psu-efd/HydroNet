@@ -1,0 +1,50 @@
+# Configuration for Physics-Informed Neural Network (PINN) for 2D Shallow Water Equations
+
+# Architecture
+model:
+  name: "SWE_PINN"
+  hidden_layers: [64, 128, 128, 64]
+  activation: "tanh"
+  output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
+  initialization: "xavier_normal"
+
+# Physics parameters
+physics:
+  gravity: 9.81  # Gravitational acceleration (m/s^2)
+  manning_coefficient: 0.03  # Manning's roughness coefficient
+  # Loss weights for different terms in the physics-informed loss
+  loss_weights:
+    continuity_eq: 1.0
+    momentum_x_eq: 1.0
+    momentum_y_eq: 1.0
+    initial_condition: 1.0
+    boundary_condition: 1.0
+    data_points: 1.0
+
+# Training parameters
+training:
+  batch_size: 1024  # Batch size for sampling points
+  epochs: 10000
+  learning_rate: 0.001
+  weight_decay: 1e-5
+  scheduler:
+    use_scheduler: true
+    scheduler_type: "ExponentialLR"
+    gamma: 0.999
+  early_stopping:
+    use_early_stopping: true
+    patience: 500
+    min_delta: 1e-5
+    
+# Sampling parameters
+sampling:
+  num_domain_points: 20000  # Number of points inside the domain
+  num_boundary_points: 5000  # Number of points on the boundary
+  num_initial_points: 5000  # Number of points at initial time
+  domain:
+    x_min: 0.0
+    x_max: 1.0
+    y_min: 0.0
+    y_max: 1.0
+    t_min: 0.0
+    t_max: 1.0 
