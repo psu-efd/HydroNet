@@ -19,6 +19,11 @@ logs/
 .cursorrules
 project_spec.md
 
+# Ignore DLLs, SOs, and EXEs
+*.dll
+*.so
+*.exe
+
 #SRH-2D case related ignores 
 Output_MISC/
 *.DAT 
@@ -29,7 +34,9 @@ Output_MISC/
 *_TSO.dat
 *_XMDFC.h5
 *_RST*.dat
-
+#allow SIF and DIP files to be tracked
+!*_SIF.dat  
+!*_DIP.dat
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

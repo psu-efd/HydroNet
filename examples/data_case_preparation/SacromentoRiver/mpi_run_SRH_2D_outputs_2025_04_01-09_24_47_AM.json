@@ -1,0 +1,20 @@
+{
+    "nSamples": 5,
+    "nSamples_successful": 5,
+    "nSamples_failed": 0,
+    "all_run_results": [
+        1,
+        2,
+        3,
+        4,
+        5
+    ],
+    "successful_runs": [
+        1,
+        2,
+        3,
+        4,
+        5
+    ],
+    "failed_runs": []
+}
