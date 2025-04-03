@@ -330,6 +330,9 @@ def run_one_SRH_2D_case_with_multiple_inlet_q(case_ID, srhcontrol_file, Q_bc_IDs
         for file in os.listdir("Output_MISC"):
             shutil.copy(os.path.join("Output_MISC", file), "../vtks/"+case_name+"/"+file)
 
+        #copy the SIF file to "cases" directory (one level above)
+        shutil.copy(srhcontrol_file, "../vtks/"+case_name+"/"+srhcontrol_file)
+
     # go back to the root
     os.chdir("../..")
 

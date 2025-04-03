@@ -248,18 +248,31 @@ def Monte_Carlo_simulations_mpi(srhcontrol_file, nSamples, Q_bc_IDs, inlet_Q_sam
     comm.Barrier()
 
     #for debugging, only run the first 5 cases
-    nSamples = 5
+    #nSamples = 5
     
     # Distribute work among processes
-    cases_per_proc = nSamples // size
-    remainder = nSamples % size
+    # Allow specifying a range of case IDs to run
+    start_case_id = 1  # start case ID
+    #end_case_id = nSamples  # end case ID
+    end_case_id = 8  # end case ID
+        
+    # Adjust the number of samples to the specified range
+    nSamples_in_range = end_case_id - start_case_id + 1
+    
+    # Distribute the work among processes
+    cases_per_proc = nSamples_in_range // size
+    remainder = nSamples_in_range % size
     
     if rank < remainder:
-        start_case = rank * (cases_per_proc + 1) + 1
+        start_case = start_case_id + rank * (cases_per_proc + 1)
         end_case = start_case + cases_per_proc
     else:
-        start_case = rank * cases_per_proc + remainder + 1
+        start_case = start_case_id + rank * cases_per_proc + remainder
         end_case = start_case + cases_per_proc - 1
+    
+    if rank == 0:
+        print(f"Running cases from {start_case_id} to {end_case_id} (total: {nSamples_in_range} cases)")
+        print(f"Work distribution: {size} processes, {cases_per_proc} cases per process, {remainder} processes get 1 extra case")
     
     # Run local cases
     local_outputs = []
