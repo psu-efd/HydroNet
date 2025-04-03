@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 
-#SBATCH --nodes=1            #node = a computer, 2 nodes = 2 computers
-#SBATCH --ntasks=4           #4 cores per node = 4 cores
+#SBATCH --nodes=2            #node = a computer, 2 nodes = 2 computers
+#####SBATCH --ntasks=4           #4 cores per node = 4 cores
+#SBATCH --ntasks-per-node=48
+#SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=2G     #using 12*4=48GB ram
-#SBATCH --time=01:00:00      #1 hours, general format:DD-HHH:MM:SS
+#SBATCH --time=24:00:00      #1 hours, general format:DD-HHH:MM:SS
 #SBATCH --job-name=pympi  #change this for each job to keep track
 #SBATCH --partition=open     #using open allocation
 #SBATCH --output=outputFile  #pick a name for this
@@ -17,7 +19,7 @@ NNODES=${SLURM_NNODES}
 
 ############## Print info ####################################
 echo -----------INFO for Debugging and Troubleshooting-----------------
-echo "This job is allocated ${NCPU} cpu(s) on node(s)"
+echo "This job is allocated ${NCPU} cpu(s) on ${NNODES} node(s)"
 echo 'Job is running on node(s): '
 # getting hostname for possible debugging and troubleshooting on faulty nodes
 #srun bash -c hostname
@@ -49,7 +51,8 @@ echo "MPI path: $(which mpirun)"
 
 #python run_SRH_2D_simulations.py
 #mpirun -np ${NCPU} python test_mpi.py
-mpirun -np ${NCPU} python run_SRH_2D_simulations.py
+#mpirun -np ${NCPU} python run_SRH_2D_simulations.py
+mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations.py
 
 #srun python test_mpi.py  #does not work
 #srun /storage/work/xzl123/python_env/HydroNet/bin/python test_mpi.py #runs but with cuda-related error message

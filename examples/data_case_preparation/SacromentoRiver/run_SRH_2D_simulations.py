@@ -247,14 +247,11 @@ def Monte_Carlo_simulations_mpi(srhcontrol_file, nSamples, Q_bc_IDs, inlet_Q_sam
     # Synchronize all processes
     comm.Barrier()
 
-    #for debugging, only run the first 5 cases
-    #nSamples = 5
-    
     # Distribute work among processes
     # Allow specifying a range of case IDs to run
     start_case_id = 1  # start case ID
-    #end_case_id = nSamples  # end case ID
-    end_case_id = 8  # end case ID
+    end_case_id = nSamples  # end case ID
+    #end_case_id = 8  # end case ID   #debug
         
     # Adjust the number of samples to the specified range
     nSamples_in_range = end_case_id - start_case_id + 1
