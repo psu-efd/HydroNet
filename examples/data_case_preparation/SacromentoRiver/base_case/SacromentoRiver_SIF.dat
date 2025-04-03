@@ -11,7 +11,7 @@ FLOW
 // Steady-or-Unsteady (STEADY/UNS)
 STEADY
 // Time Parameters: T_Start(hr) T_end(hr) Dt(s) [Dt_max(s) CFL]
-0.0 10 5 
+0.0 200 5 
 // Turbulence-Model
 PARABOLIC
 // A_TURB for the PARA Model (0.05 to 1.0)

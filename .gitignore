@@ -38,6 +38,9 @@ Output_MISC/
 *_TSO.dat
 *_XMDFC.h5
 *_RST*.dat
+*_LN*.dat
+*_PT*.dat
+*_RC*.dat
 #allow SIF and DIP files to be tracked
 !*_SIF.dat  
 !*_DIP.dat
