@@ -24,6 +24,10 @@ project_spec.md
 *.so
 *.exe
 
+# Slurm job files
+pympijob.slurm.*
+!pympijob.slurm
+
 #SRH-2D case related ignores 
 Output_MISC/
 *.DAT 
