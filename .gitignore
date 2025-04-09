@@ -1,4 +1,5 @@
 # Project specific ignores
+*.xlsx
 examples/**/*.png
 examples/DeepONet/dummy_example/
 examples/DeepONet/oneD_channel_unsteady/data/
