@@ -2,14 +2,14 @@
 
 #SBATCH --nodes=1            #node = a computer, 2 nodes = 2 computers
 #####SBATCH --ntasks=4           #4 cores per node = 4 cores
-#SBATCH --ntasks-per-node=20
+#SBATCH --ntasks-per-node=24
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=2G     #using 12*4=48GB ram
-#SBATCH --time=24:00:00      #1 hours, general format:DD-HHH:MM:SS
+#SBATCH --time=48:00:00      #1 hours, general format:DD-HHH:MM:SS
 #SBATCH --job-name=pympi  #change this for each job to keep track
 #SBATCH --partition=open     #using open allocation
-#SBATCH --output=outputFile1  #pick a name for this
-#SBATCH --error=errorFile1    #pick a name for this
+#SBATCH --output=outputFile2  #pick a name for this
+#SBATCH --error=errorFile2    #pick a name for this
 
 ##############################################################
 # Get the number of CPUs allocated to this job
@@ -52,7 +52,10 @@ echo "MPI path: $(which mpirun)"
 #python run_SRH_2D_simulations.py
 #mpirun -np ${NCPU} python test_mpi.py
 #mpirun -np ${NCPU} python run_SRH_2D_simulations.py
-mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations.py
+#mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations1.py
+
+python run_SRH_2D_simulations2.py
+
 
 #srun python test_mpi.py  #does not work
 #srun /storage/work/xzl123/python_env/HydroNet/bin/python test_mpi.py #runs but with cuda-related error message

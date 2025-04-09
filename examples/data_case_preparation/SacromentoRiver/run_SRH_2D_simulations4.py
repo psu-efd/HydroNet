@@ -249,8 +249,8 @@ def Monte_Carlo_simulations_mpi(srhcontrol_file, nSamples, Q_bc_IDs, inlet_Q_sam
 
     # Distribute work among processes
     # Allow specifying a range of case IDs to run
-    start_case_id = 1  # start case ID
-    end_case_id = 250 #nSamples  # end case ID
+    start_case_id = 751  # start case ID
+    end_case_id = 1000 #nSamples  # end case ID
     #end_case_id = 8  # end case ID   #debug
         
     # Adjust the number of samples to the specified range

@@ -4,8 +4,10 @@ examples/DeepONet/dummy_example/
 examples/DeepONet/oneD_channel_unsteady/data/
 examples/DeepONet/oneD_channel_steady/data/
 examples/PINN/dummy_example/
-examples/data_case_preparation/SacromentalRiver/case_preparation/
-examples/data_case_preparation/SacromentalRiver/cases/
+examples/data_case_preparation/SacromentoRiver/cases/
+examples/data_case_preparation/SacromentoRiver/errorFile1
+examples/data_case_preparation/SacromentoRiver/outputFile1
+examples/data_case_preparation/SacromentoRiver/parallel_run_SRH_2D_outputs_*.json
 test_mpi.py 
 history_*.json
 plots/

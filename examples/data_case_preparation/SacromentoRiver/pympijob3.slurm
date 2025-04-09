@@ -8,8 +8,8 @@
 #SBATCH --time=24:00:00      #1 hours, general format:DD-HHH:MM:SS
 #SBATCH --job-name=pympi  #change this for each job to keep track
 #SBATCH --partition=open     #using open allocation
-#SBATCH --output=outputFile1  #pick a name for this
-#SBATCH --error=errorFile1    #pick a name for this
+#SBATCH --output=outputFile3  #pick a name for this
+#SBATCH --error=errorFile3    #pick a name for this
 
 ##############################################################
 # Get the number of CPUs allocated to this job
@@ -52,7 +52,7 @@ echo "MPI path: $(which mpirun)"
 #python run_SRH_2D_simulations.py
 #mpirun -np ${NCPU} python test_mpi.py
 #mpirun -np ${NCPU} python run_SRH_2D_simulations.py
-mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations.py
+mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations3.py
 
 #srun python test_mpi.py  #does not work
 #srun /storage/work/xzl123/python_env/HydroNet/bin/python test_mpi.py #runs but with cuda-related error message

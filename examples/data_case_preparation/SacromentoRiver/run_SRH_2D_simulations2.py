@@ -111,7 +111,7 @@ def Monte_Carlo_simulations_multiprocessing(srhcontrol_file, nSamples, Q_bc_IDs,
     #optional or for debugging: only run a subset of cases 
     #args = args[:5]  #only run the first 10 cases 
     #args = args[0:1000]  #only run the first 1000 cases
-    #args = args[1000:2000]  #only run the first cases 1000 to 1999
+    args = args[500:1000]  #only run the first cases 1000 to 1999
     #args = args[50, 51, 108, 99]  #only run the first cases in the list
 
     #print("args = ", args)
@@ -249,8 +249,8 @@ def Monte_Carlo_simulations_mpi(srhcontrol_file, nSamples, Q_bc_IDs, inlet_Q_sam
 
     # Distribute work among processes
     # Allow specifying a range of case IDs to run
-    start_case_id = 1  # start case ID
-    end_case_id = 250 #nSamples  # end case ID
+    start_case_id = 251  # start case ID
+    end_case_id = 500 #nSamples  # end case ID
     #end_case_id = 8  # end case ID   #debug
         
     # Adjust the number of samples to the specified range

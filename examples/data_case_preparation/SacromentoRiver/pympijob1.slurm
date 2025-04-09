@@ -52,7 +52,7 @@ echo "MPI path: $(which mpirun)"
 #python run_SRH_2D_simulations.py
 #mpirun -np ${NCPU} python test_mpi.py
 #mpirun -np ${NCPU} python run_SRH_2D_simulations.py
-mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations.py
+mpirun -np ${SLURM_NTASKS} python run_SRH_2D_simulations1.py
 
 #srun python test_mpi.py  #does not work
 #srun /storage/work/xzl123/python_env/HydroNet/bin/python test_mpi.py #runs but with cuda-related error message
