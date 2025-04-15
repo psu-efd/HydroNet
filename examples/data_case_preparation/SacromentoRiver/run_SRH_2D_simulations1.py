@@ -109,9 +109,9 @@ def Monte_Carlo_simulations_multiprocessing(srhcontrol_file, nSamples, Q_bc_IDs,
     args = [(caseID, srhcontrol_file, Q_bc_IDs, inlet_Q_samples[caseID-1,:], system_name, bDeleteCaseDir) for caseID in caseIDs]
     
     #optional or for debugging: only run a subset of cases 
-    args = args[:5]  #only run the first 10 cases 
-    #args = args[0:200]  #only run the first 1000 cases
-    #args = args[1000:2000]  #only run the first cases 1000 to 1999
+    #args = args[:5]  #only run the first 10 cases 
+    #args = args[0:500]  #only run the first 1000 cases
+    args = args[500:1000]  #only run the first cases 1000 to 1999
     #args = args[50, 51, 108, 99]  #only run the first cases in the list
 
     #print("args = ", args)

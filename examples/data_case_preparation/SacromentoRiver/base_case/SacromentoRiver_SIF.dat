@@ -102,4 +102,4 @@ SRHC SI
 // Output File _MAX.dat is requested: Time_Start(hr) Time_End(hr)
 
 // Intermediate Result Output Control: INTERVAL(hour) OR List of T1 T2 ...  EMPTY means the end
-1
+10

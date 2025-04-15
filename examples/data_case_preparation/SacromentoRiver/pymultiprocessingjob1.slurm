@@ -2,12 +2,13 @@
 
 #SBATCH --nodes=1            #node = a computer, 2 nodes = 2 computers
 #####SBATCH --ntasks=4           #4 cores per node = 4 cores
-#SBATCH --ntasks-per-node=20
+#SBATCH --ntasks-per-node=48
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=1G     #using 12*4=48GB ram
-#SBATCH --time=24:00:00      #1 hours, general format:DD-HHH:MM:SS
-#SBATCH --job-name=pympi  #change this for each job to keep track
-#SBATCH --partition=open     #using open allocation
+#SBATCH --mem-per-cpu=4G     #using 12*4=48GB ram
+#SBATCH --time=36:00:00      #1 hours, general format:DD-HHH:MM:SS
+#SBATCH --job-name=pymulti  #change this for each job to keep track
+#SBATCH --account=xzl123_cr_usgs
+#SBATCH --partition=basic     #using open allocation
 #SBATCH --output=outputFile1  #pick a name for this
 #SBATCH --error=errorFile1    #pick a name for this
 

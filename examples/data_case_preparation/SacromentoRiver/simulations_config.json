@@ -57,7 +57,7 @@
         "comment_execution_mode": "mode to run the Monte Carlo simulations; serial: serial execution, multiprocessing: multiprocessing execution, mpi: MPI execution",
         "execution_mode": "multiprocessing",
         "comment_nProcess": "The number of cores to use for the parallel Monte Carlo simulations (if execution_mode is multiprocessing)",
-        "nProcess": 4,
+        "nProcess": 64,
         "comment_output_unit": "The unit of the simulation output from SRH-2D; EN: English units, SI: SI units",
         "output_unit": "SI"
     },    
