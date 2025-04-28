@@ -152,7 +152,7 @@ class DeepONetModel(nn.Module):
         
         # Input dimensions - use defaults if not specified
         self.branch_input_dim = self.config.get('data.branch_input_dim', 10)  # Default to 10 for dummy data
-        self.trunk_input_dim = self.config.get('data.trunk_input_dim', 3)  # (x, y, t) coordinates
+        self.trunk_input_dim = self.config.get('data.trunk_input_dim', 2)  # 2 for (x, y) coordinates, 3 for (x, y, t) coordinates
         
         # Output dimension - 3 for (h, u, v) in shallow water equations
         self.output_dim = self.config.get('model.output_dim', 3)

@@ -5,6 +5,8 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+import h5py
+from typing import Tuple, Optional
 
 
 class HydraulicDataset(Dataset):
@@ -182,4 +184,219 @@ def get_hydraulic_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available()
-    ) 
+    )
+
+
+class StreamingHydraulicDataset(Dataset):
+    """
+    A dataset class that streams data from HDF5 files in chunks to handle large datasets.
+    """
+    def __init__(self, 
+                 data_dir: str, 
+                 chunk_size: int = 10000,
+                 normalize: bool = True,
+                 transform: Optional[callable] = None,
+                 shuffle: bool = True):
+        """
+        Initialize the streaming dataset.
+        
+        Args:
+            data_dir (str): Directory containing the HDF5 files
+            chunk_size (int): Number of samples to load at once
+            normalize (bool): Whether to normalize the data
+            transform (callable, optional): Optional transform to be applied
+            shuffle (bool): Whether to shuffle the data
+        """
+        self.data_dir = data_dir
+        self.chunk_size = chunk_size
+        self.normalize = normalize
+        self.transform = transform
+        self.shuffle = shuffle
+        
+        # Get list of HDF5 files
+        self.h5_files = [f for f in os.listdir(data_dir) if f.endswith('.h5')]
+        self.h5_files.sort()  # Ensure consistent ordering
+        
+        # Initialize statistics for normalization
+        self.branch_mean = None
+        self.branch_std = None
+        self.trunk_mean = None
+        self.trunk_std = None
+        self.output_mean = None
+        self.output_std = None
+        
+        # Calculate total number of samples
+        self.total_samples = 0
+        for h5_file in self.h5_files:
+            with h5py.File(os.path.join(data_dir, h5_file), 'r') as f:
+                self.total_samples += f['branch_inputs'].shape[0]
+        
+        # Initialize current chunk
+        self.current_chunk = None
+        self.current_chunk_start = 0
+        self.current_file_index = 0
+        
+        # Initialize shuffle indices
+        self.shuffle_indices = None
+        if self.shuffle:
+            self._initialize_shuffle()
+        
+        # Load first chunk
+        self._load_next_chunk()
+        
+        # Calculate normalization parameters if needed
+        if normalize:
+            self._calculate_normalization_params()
+            
+    def _initialize_shuffle(self):
+        """Initialize the shuffle indices."""
+        self.shuffle_indices = np.random.permutation(self.total_samples)
+        
+    def _get_shuffled_index(self, idx: int) -> int:
+        """Get the shuffled index for a given index."""
+        if self.shuffle:
+            if self.shuffle_indices is None:
+                self._initialize_shuffle()
+            return self.shuffle_indices[idx]
+        return idx
+        
+    def _load_next_chunk(self):
+        """Load the next chunk of data from the current file."""
+        if self.current_file_index >= len(self.h5_files):
+            self.current_file_index = 0  # Reset to first file
+            self.current_chunk_start = 0
+        
+        h5_file = self.h5_files[self.current_file_index]
+        with h5py.File(os.path.join(self.data_dir, h5_file), 'r') as f:
+            # Get the remaining samples in current file
+            remaining_samples = f['branch_inputs'].shape[0] - self.current_chunk_start
+            samples_to_load = min(self.chunk_size, remaining_samples)
+            
+            # Load the chunk
+            self.current_chunk = {
+                'branch_inputs': f['branch_inputs'][self.current_chunk_start:self.current_chunk_start + samples_to_load],
+                'trunk_inputs': f['trunk_inputs'][self.current_chunk_start:self.current_chunk_start + samples_to_load],
+                'outputs': f['outputs'][self.current_chunk_start:self.current_chunk_start + samples_to_load]
+            }
+            
+            # Update indices
+            self.current_chunk_start += samples_to_load
+            if self.current_chunk_start >= f['branch_inputs'].shape[0]:
+                self.current_file_index += 1
+                self.current_chunk_start = 0
+                
+            # If we've loaded all files, reset to the beginning
+            if self.current_file_index >= len(self.h5_files):
+                self.current_file_index = 0
+                self.current_chunk_start = 0
+                self._load_next_chunk()  # Load the first chunk of the first file
+    
+    def _calculate_normalization_params(self):
+        """Calculate normalization parameters for the dataset."""
+        branch_sum = np.zeros(self.current_chunk['branch_inputs'].shape[1])
+        branch_sq_sum = np.zeros(self.current_chunk['branch_inputs'].shape[1])
+        trunk_sum = np.zeros(self.current_chunk['trunk_inputs'].shape[1])
+        trunk_sq_sum = np.zeros(self.current_chunk['trunk_inputs'].shape[1])
+        output_sum = np.zeros(self.current_chunk['outputs'].shape[1])
+        output_sq_sum = np.zeros(self.current_chunk['outputs'].shape[1])
+        n_samples = 0
+
+        # Process each chunk
+        for i in range(0, self.current_chunk['branch_inputs'].shape[0], self.chunk_size):
+            end_idx = min(i + self.chunk_size, self.current_chunk['branch_inputs'].shape[0])
+            indices = np.arange(i, end_idx)  # Create indices in ascending order
+            
+            with h5py.File(os.path.join(self.data_dir, self.h5_files[self.current_file_index]), 'r') as f:
+                # Read data for this chunk
+                branch_data = f['branch_inputs'][indices]
+                trunk_data = f['trunk_inputs'][indices]
+                output_data = f['outputs'][indices]
+            
+            # Update sums
+            branch_sum += np.sum(branch_data, axis=0)
+            branch_sq_sum += np.sum(branch_data ** 2, axis=0)
+            trunk_sum += np.sum(trunk_data, axis=0)
+            trunk_sq_sum += np.sum(trunk_data ** 2, axis=0)
+            output_sum += np.sum(output_data, axis=0)
+            output_sq_sum += np.sum(output_data ** 2, axis=0)
+            n_samples += len(indices)
+
+        # Calculate means and standard deviations
+        self.branch_mean = branch_sum / n_samples
+        self.branch_std = np.sqrt(branch_sq_sum / n_samples - self.branch_mean ** 2)
+        self.trunk_mean = trunk_sum / n_samples
+        self.trunk_std = np.sqrt(trunk_sq_sum / n_samples - self.trunk_mean ** 2)
+        self.output_mean = output_sum / n_samples
+        self.output_std = np.sqrt(output_sq_sum / n_samples - self.output_mean ** 2)
+
+        # Handle zero standard deviations
+        self.branch_std[self.branch_std == 0] = 1.0
+        self.trunk_std[self.trunk_std == 0] = 1.0
+        self.output_std[self.output_std == 0] = 1.0
+    
+    def __len__(self) -> int:
+        return self.total_samples
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Get a sample from the dataset.
+        
+        Args:
+            idx (int): Index of the sample to retrieve
+            
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (branch_input, trunk_input, output)
+        """
+        # Get the shuffled index if shuffling is enabled
+        idx = self._get_shuffled_index(idx)
+        
+        # Wrap the index around if it's beyond the total number of samples
+        idx = idx % self.total_samples
+        
+        # Calculate which file and position this index corresponds to
+        current_pos = 0
+        file_idx = 0
+        for i, h5_file in enumerate(self.h5_files):
+            with h5py.File(os.path.join(self.data_dir, h5_file), 'r') as f:
+                file_size = f['branch_inputs'].shape[0]
+                if idx < current_pos + file_size:
+                    file_idx = i
+                    local_idx = idx - current_pos
+                    break
+                current_pos += file_size
+        
+        # Load the appropriate chunk if needed
+        if (self.current_file_index != file_idx or 
+            local_idx < self.current_chunk_start or 
+            local_idx >= self.current_chunk_start + len(self.current_chunk['branch_inputs'])):
+            self.current_file_index = file_idx
+            self.current_chunk_start = (local_idx // self.chunk_size) * self.chunk_size
+            self._load_next_chunk()
+        
+        # Get the sample from the current chunk
+        local_idx = idx - self.current_chunk_start
+        if local_idx >= len(self.current_chunk['branch_inputs']):
+            # If we're beyond the current chunk, load the next one
+            self.current_chunk_start = (local_idx // self.chunk_size) * self.chunk_size
+            self._load_next_chunk()
+            local_idx = idx - self.current_chunk_start
+        
+        branch_input = self.current_chunk['branch_inputs'][local_idx]
+        trunk_input = self.current_chunk['trunk_inputs'][local_idx]
+        output = self.current_chunk['outputs'][local_idx]
+        
+        # Convert to tensors
+        branch_input = torch.from_numpy(branch_input).float()
+        trunk_input = torch.from_numpy(trunk_input).float()
+        output = torch.from_numpy(output).float()
+        
+        # Normalize if required
+        if self.normalize:
+            branch_input = (branch_input - torch.from_numpy(self.branch_mean).float()) / torch.from_numpy(self.branch_std).float()
+            trunk_input = (trunk_input - torch.from_numpy(self.trunk_mean).float()) / torch.from_numpy(self.trunk_std).float()
+            output = (output - torch.from_numpy(self.output_mean).float()) / torch.from_numpy(self.output_std).float()
+        
+        # Apply transform if provided
+        if self.transform:
+            branch_input, trunk_input, output = self.transform(branch_input, trunk_input, output)
+        
+        return branch_input, trunk_input, output 

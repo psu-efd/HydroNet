@@ -15,7 +15,7 @@ The postprocessing is done in the following steps:
 
 
 import numpy as np
-
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 
@@ -30,7 +30,9 @@ import re
 
 from vtk.util import numpy_support as VN
 import vtk
+
 from sklearn.model_selection import train_test_split
+import h5py    
 
 # Set the random seed before generating any random numbers
 np.random.seed(123456)  # You can use any integer as the seed
@@ -219,22 +221,22 @@ def probeUnstructuredGridVTKOverLine(lineVTK, readerUnstructuredGridVTK, varName
 
         return points, varProbedValues, elev
 
-def sample_vtk_at_points(vtk_reader, point_names, point_coordinates, variables):
+def sample_vtk_at_points(vtk_file, point_coordinates, variables):
     """Sample VTK data at specific points    
 
     Args:
-        vtk_reader: VTK reader object
-        point_names (list): List of point names
+        vtk_file: VTK file path
         point_coordinates (list): List of [x,y] coordinates
         variables (list): List of variable names to sample
-        
-
-
     Returns:
         dict: Dictionary of sampled values
         numpy.ndarray: Numpy array of sampled values of all variables
     """
 
+    # Read VTK file
+    vtk_reader = vtk.vtkUnstructuredGridReader()
+    vtk_reader.SetFileName(vtk_file)
+    vtk_reader.Update()
 
     #print("points = ", points)
        
@@ -247,21 +249,41 @@ def sample_vtk_at_points(vtk_reader, point_names, point_coordinates, variables):
 
     # Get results
     result_dict = {}  #result as a dictionary
-    result_array = np.zeros((len(variables), len(point_coordinates)))  #result as a numpy array
+    result_array = np.zeros((len(point_coordinates), len(variables)+1))  #result as a numpy array
 
-    for index_var, var in enumerate(variables):
+    index_var = 0
+    for var in variables:
         var_name = str(var)
 
         #print("var = ", var_name)
 
         #probe the variable at the probing point
-        _, array, _ = probeUnstructuredGridVTKOnPoints(points_vtk, vtk_reader, var_name)
+        _, array, elevation = probeUnstructuredGridVTKOnPoints(points_vtk, vtk_reader, var_name)
 
         #print("array = ", array)
 
         if array is not None:
-            result_dict[var_name] = array      
-            result_array[index_var,:] = array
+            if "Velocity" in var:
+                #extract the x and y components of the velocity vector
+                u = array[:,0]
+                v = array[:,1]
+
+                #save the x and y components of the velocity vector to the result dictionary
+                result_dict["Velocity_x"] = u
+                result_dict["Velocity_y"] = v
+
+                #save the x and y components of the velocity vector to the result array
+                result_array[:, index_var] = u 
+
+                index_var += 1
+
+                result_array[:, index_var] = v
+
+                index_var += 1
+            else:
+                result_dict[var_name] = array      
+                result_array[:, index_var] = array
+                index_var += 1
         else:
             raise ValueError("point sampling array is empty for variable = ", var_name)
 
@@ -269,15 +291,15 @@ def sample_vtk_at_points(vtk_reader, point_names, point_coordinates, variables):
     #print("result_dict = ", result_dict)
     #print("result_array = ", result_array)
 
-    return result_dict, result_array
+    return result_dict, result_array, elevation
 
 
-def sample_vtk_along_line(vtk_reader, start_point, end_point, num_points, variables):
+def sample_vtk_along_line(vtk_file, start_point, end_point, num_points, variables):
 
     """Sample VTK data along a line
     
     Args:
-        vtk_reader: VTK reader object
+        vtk_file: VTK file path
         start_point (list): [x,y] coordinates of line start
         end_point (list): [x,y] coordinates of line end
         num_points (int): Number of sampling points along line
@@ -286,15 +308,13 @@ def sample_vtk_along_line(vtk_reader, start_point, end_point, num_points, variab
     Returns:
         dict: Dictionary of sampled values
     """
+    
     # Create line points
     x = np.linspace(start_point[0], end_point[0], num_points)
     y = np.linspace(start_point[1], end_point[1], num_points)
     point_coordinates = np.column_stack((x, y))
 
-    #create point names
-    point_names = ["point_"+str(i) for i in range(num_points)]    
-
-    return sample_vtk_at_points(vtk_reader, point_names, point_coordinates, variables)
+    return sample_vtk_at_points(vtk_file, point_coordinates, variables)
 
 def point_in_polygon(point, polygon):
     """Check if a point is inside a polygon using ray casting algorithm
@@ -371,24 +391,36 @@ def get_cells_in_domain(vtk_reader):
     
     return cell_ids, cell_centers
 
-def sample_vtk_in_domain(vtk_reader, flow_variables, output_unit):
+def sample_vtk_in_domain(vtk_file, flow_variables, output_unit):
     """Sample VTK data within a domain
     
     Args:
-        vtk_data: VTK unstructured grid data
-        flow_variables: List of flow variables to sample
+        vtk_file: VTK file path
+        flow_variables: List of flow variables to sample in the order of (h, u, v)
         output_unit: Output unit, SI or EN
         
     Returns:
         dict: Dictionary of sampled values
+        numpy.ndarray: Numpy array of sampled values of all variables in the order of (h, u, v)
     """
-    vtk_data = vtk_reader.GetOutput()
+    # Read VTK file
+    reader = vtk.vtkUnstructuredGridReader()
+    reader.SetFileName(vtk_file)
+    reader.Update()
+
+    vtk_data = reader.GetOutput()
 
     # Get cells inside domain
-    cell_ids, cell_centers = get_cells_in_domain(vtk_reader)
+    cell_ids, cell_centers = get_cells_in_domain(reader)
 
     result_dict = {}
     result_array = np.zeros((len(cell_ids), len(flow_variables)+1))
+
+    #make sure "Water_Depth" is in the first position of the flow_variables list
+    if "Water_Depth" not in flow_variables[0]:
+        print("Water_Depth is not in the first position of the flow_variables list")
+        print("flow_variables = ", flow_variables)
+        raise ValueError("Water_Depth is not in the first position of the flow_variables list")
     
     # Sample data for these cells   
     index_var = 0
@@ -435,39 +467,22 @@ def sample_vtk_in_domain(vtk_reader, flow_variables, output_unit):
 
 
 
-def extract_all_simulation_results(vtk_files, flow_variables, output_unit):
-    """Extract simulation results from all VTK files for a given case
+def extract_simulation_results(vtk_file, flow_variables, output_unit):
+    """Extract simulation results from a given VTK file
     
     Args:
-        vtk_files (list): List of VTK file paths
-        flow_variables (list): List of flow variables to sample
+        vtk_file (str): VTK file path
+        flow_variables (list): List of flow variables to sample in the order of (h, u, v)
         output_unit (str): Output unit, SI or EN
     """
-    
-    all_results_list = []
-    all_results_array = []
-
+   
     #cell centers are the same for all VTK files
-    cell_centers = None
-    
-    #loop over all VTK files
-    for i, vtk_file in enumerate(vtk_files):
-    #for i, vtk_file in enumerate(vtk_files[0:2]):   #debugging
-        #print("processing ", vtk_file)
-
-        # Read VTK file
-        reader = vtk.vtkUnstructuredGridReader()
-        reader.SetFileName(vtk_file)
-        reader.Update()
+    cell_centers = None    
         
-        # Process sampling
-        cell_centers, results_dict, results_array = sample_vtk_in_domain(reader, flow_variables, output_unit)
+    # Process sampling
+    cell_centers, results_dict, results_array = sample_vtk_in_domain(vtk_file, flow_variables, output_unit)         
 
-        all_results_list.append(results_dict)
-        all_results_array.append(results_array)
-        
-
-    return cell_centers, all_results_list, all_results_array
+    return cell_centers, results_dict, results_array
 
 def convert_numpy_to_list(obj):
     """Convert numpy types to Python native types for JSON serialization"""
@@ -530,364 +545,184 @@ def split_indices(sample_indices, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1
     
     return train_indices.tolist(), val_indices.tolist(), test_indices.tolist()
 
-def postprocess_results(nSamples, nSaveTimes, nHydrograph_points, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction):
+def postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction):
     """Postprocess the results of the simulations
 
     The split is done based on the successful simulations. Also, the split is based on cases, not samples (cell center data).
 
     Args:
         nSamples (int): Number of samples
-        nSaveTimes (int): Number of save times in the simulation
-        nHydrograph_points (int): Number of points in the hydrograph
-        flow_variables (list): List of flow variables to sample
+        sampled_parameters (numpy array): Sampled parameters with shape (nSamples, n_features)
+        nCells (int): Number of cells per case
+        flow_variables (list): List of flow variables to sample in the order of (h, u, v)
         output_unit (str): Output unit, SI or EN
         training_fraction (float): Training fraction
         validation_fraction (float): Validation fraction
         test_fraction (float): Test fraction
     """
 
-    # Get list of subdirectories in "cases/vtks" directory
-    case_dirs = [d for d in os.listdir("cases/vtks") if os.path.isdir(os.path.join("cases/vtks", d)) and d.startswith("case_")]
-
-    # Extract indices using regular expression
-    case_indices = []
-    for case_dir in case_dirs:
-        # Extract the number from "case_XXXXXX"
-        match = re.search(r'case_(\d+)', case_dir)
-        if match:
-            case_indices.append(int(match.group(1)))  # Convert to integer
-
-    # Sort the indices if needed
-    case_indices.sort()
-
-    print(f"Found {len(case_dirs)} cases out of {nSamples} simulations")
-
-    #only do the first 10 cases for debugging
-    #case_indices = case_indices[0:10]
-    #case_dirs = case_dirs[0:10]
+    # Create output directories
+    os.makedirs('data/train', exist_ok=True)
+    os.makedirs('data/val', exist_ok=True)
+    os.makedirs('data/test', exist_ok=True)
     
-    #print("case_indices = ", case_indices)
-    #print("case_dirs = ", case_dirs)
-
-    #split the cases into training, validation, and test sets
-    # Split the indices (1-based)
-    train_indices, val_indices, test_indices = split_indices(case_indices, training_fraction, validation_fraction, test_fraction)
-
-    print("train_indices[0:5] = ", train_indices[0:5])
-    print("val_indices[0:5] = ", val_indices[0:5])
-
-    print("test_indices[0:5] = ", test_indices[0:5])
+    # Generate indices for splitting
+    indices_allSamples = list(range(1, nSamples+1))  #1-based index
+    train_indices, val_indices, test_indices = split_indices(indices_allSamples, training_fraction, validation_fraction, test_fraction)
     
-    #list of store the results for all cases
-    all_results_dict = []
-    all_results_array = []
-
-    #loop over all case directories
-    for case_dir in case_dirs:
-        print("case_dir = ", case_dir)
-
-        #Get a list of all vtk files in "cases/vtks"
-        files = glob.glob("cases/vtks/"+case_dir+"/SRH2D_oneD_channel_with_bump_C_*.vtk")
-
-        #Extract indices using regex
-        file_indices = []
-        pattern = re.compile(r'SRH2D_oneD_channel_with_bump_C_(\d+)\.vtk')
-
-        for file in files:
-            match = pattern.search(file)
-            if match:
-                index = int(match.group(1))          #index is 1-based
-                file_indices.append((file, index))
-
-        #Sort files by index
-        file_indices.sort(key=lambda x: x[1])   #file_indices is 1-based
-
-        #make sure the file indices are from 1 to nSaveTimes
-        if file_indices[0][1] != 1 or file_indices[-1][1] != nSaveTimes:
-            raise ValueError("File indices are not from 1 to nSaveTimes")
-
-        #Separate into two lists for the current case
-        vtk_files = [f[0] for f in file_indices]
-        sample_indices = [f[1] for f in file_indices]
-
-        #print("vtk_files[0:5] = ", vtk_files[0:5])
-        #print("sample_indices[0:5] = ", sample_indices[0:5])
-
-        #extract the results from the vtk results files of current case
-        #cell_centers: numpy array of shape (nCells, 3)
-        #result_dict_current_case: list of dictionaries of results for the current case
-        #result_array_current_case: list of numpy arrays of shape (nCells, nVariables)
-        cell_centers, result_dict_current_case, result_array_current_case = extract_all_simulation_results(vtk_files, flow_variables, output_unit)
-
-        #save the results for the current case
-        all_results_dict.append(result_dict_current_case)
-        all_results_array.append(result_array_current_case)
-
-
-    #save the sampled results to a json file
-    postprocessed_sampling_results_filename = "postprocessed_sampling_results"
-    with open("data/"+postprocessed_sampling_results_filename+".json", 'w') as f:
-        # Convert numpy types to Python native types before saving
-        results_for_json = convert_numpy_to_list(all_results_dict)
-        json.dump(results_for_json, f, indent=4)
-
-    #combine train_indices, val_indices, test_indices and then save to one json file
-    split_indices_dict = {"train_indices": train_indices, "val_indices": val_indices, "test_indices": test_indices, "sample_indices": case_indices}
-    with open("data/split_indices.json", 'w') as f:
+    # Save split indices for reference
+    split_indices_dict = {
+        'train_indices': train_indices,
+        'val_indices': val_indices,
+        'test_indices': test_indices
+    }
+    with open('data/split_indices.json', 'w') as f:
         json.dump(split_indices_dict, f, indent=4)
-
-    #print("cell_centers.shape = ", cell_centers.shape)
-    #print("len(all_results_list) = ", len(all_results_list))
-    #print("all_results_list[0].keys() = ", all_results_list[0].keys())
-    #print("len(all_results_array) = ", len(all_results_array))
-    #print("all_results_array[0].shape = ", all_results_array[0].shape)
     
-    #save the arrays of all results to a numpy file
-    np.savez("data/"+postprocessed_sampling_results_filename+".npz", all_results_array=all_results_array, cell_centers=cell_centers, sample_indices=case_indices)
+    # Process each split
+    for split_name, indices in [('train', train_indices), ('val', val_indices), ('test', test_indices)]:
+        print("Processing split = ", split_name)
 
-    print("All postprocessed results are saved to data/split_indices.json and data/", postprocessed_sampling_results_filename+".npz")
+        # Create HDF5 file for this split
+        h5_file = h5py.File(f'data/{split_name}/data.h5', 'w')
+        
+        # Calculate total number of data points for this split
+        total_data_points = len(indices) * nCells
+        
+        # Initialize datasets with chunking
+        chunk_size = min(10000, total_data_points)  # Adjust chunk size as needed
+        n_features = sampled_parameters.shape[1]  # Number of branch input features
+        n_coords = 2  # x, y coordinates for trunk inputs
+        n_outputs = 3  # h, u, v for outputs
+        
+        # Create datasets with chunking
+        branch_inputs = h5_file.create_dataset(
+            'branch_inputs',
+            shape=(total_data_points, n_features),
+            chunks=(chunk_size, n_features),
+            dtype='float32'
+        )
+        
+        trunk_inputs = h5_file.create_dataset(
+            'trunk_inputs',
+            shape=(total_data_points, n_coords),
+            chunks=(chunk_size, n_coords),
+            dtype='float32'
+        )
+        
+        outputs = h5_file.create_dataset(
+            'outputs',
+            shape=(total_data_points, n_outputs),
+            chunks=(chunk_size, n_outputs),
+            dtype='float32'
+        )
+        
+        # Process data in chunks
+        current_data_point = 0
+        for case_idx in indices:
+            print("    Processing case = ", case_idx)
 
-    #save the training, validation, and test sets to numpy files
+            vtk_file = f"cases/vtks/case_{case_idx:06d}.vtk"
+            cell_centers, results_dict, results_array = extract_simulation_results(vtk_file, flow_variables, output_unit)
+            
+            # Get the number of cells for this case
+            n_cells_case = len(cell_centers)
 
-    #if not exists, create the directories: data/train, data/val, data/test
-    if not os.path.exists("data"):
-        os.makedirs("data")
-    if not os.path.exists("data/train"):
-        os.makedirs("data/train")
-    if not os.path.exists("data/val"):
-        os.makedirs("data/val")
-    if not os.path.exists("data/test"):
-        os.makedirs("data/test")
-
-    #For each set, save the input for branch net, the trunk net, and the output for DeepONet
-    #For the branch net, the input is the hydrograph (discharge Q values at nHydrograph_points)
-    #For the trunk net, the input is x, y coordinates of the cell centers and time t (in hours)
-    #For the output, it is the velocity vector and the water depth (u, v, h)
-    #save the training set
-    #number of training samples = len(train_indices)*number of cells 
-    nCells = cell_centers.shape[0]
-    nTrainingSamples = len(train_indices)*nCells*nSaveTimes
-
-    #print("cell_centers.shape = ", cell_centers.shape)
-    #print("samples.shape = ", samples.shape)
-
-    #print("train_indices = ", train_indices)    
-    #print("val_indices = ", val_indices)
-    #print("test_indices = ", test_indices)
-
-    train_input_branch = np.zeros((nTrainingSamples, nHydrograph_points))    #The only one feature for the branch net is the discharge Q hydrograph
-    #loop over all simulations in the training set
-    for i in range(len(train_indices)):
-        #print("train_indices[i] = ", train_indices[i])
-        train_index = train_indices[i] #1-based index 
-
-        #read the hydrograph from "hydrographs/hydrograph_xxxx.xys" file
-        hydrograph_filename = "hydrographs/hydrograph_"+str(train_index-1).zfill(4)+".xys"   #hydrograph_filename is 0-based index
-        hydrograph = np.loadtxt(hydrograph_filename, comments="//", delimiter=" ")
-
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                #print("i, j, k = ", i, j, k)                
-
-                #extract the discharge Q values at nHydrograph_points
-                train_input_branch[i*nCells*nSaveTimes+j*nSaveTimes+k, :] = hydrograph[:, 1]
-
-    #The input for the trunk net is the x and y coordinates of the cell centers and time t (in hours)
-    train_input_trunk = np.zeros((nTrainingSamples, 3))
-    #loop over all simulations in the training set
-    for i in range(len(train_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                train_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = cell_centers[j, 0]
-                train_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = cell_centers[j, 1]
-                train_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = save_times[k]
-
-    #The output for the DeepONet is the velocity vector u and v and the water depth h
-    train_output = np.zeros((nTrainingSamples, 3))
-    #loop over all simulations in the training set
-    for i in range(len(train_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                train_output[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = all_results_array[train_indices[i]-1][k][j,0]
-                train_output[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = all_results_array[train_indices[i]-1][k][j,1]
-                train_output[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = all_results_array[train_indices[i]-1][k][j,2]
-
-    #save the training set
-    np.save("data/train/branch_inputs.npy", train_input_branch)
-    np.save("data/train/trunk_inputs.npy", train_input_trunk)
-    np.save("data/train/outputs.npy", train_output)
-
-    #save the validation set
-    nValidationSamples = len(val_indices)*nCells*nSaveTimes
-    val_input_branch = np.zeros((nValidationSamples, nHydrograph_points))
-    #loop over all simulations in the validation set
-    for i in range(len(val_indices)):
-
-        val_index = val_indices[i] #1-based index 
-
-        #read the hydrograph from "hydrographs/hydrograph_xxxx.xys" file
-        hydrograph_filename = "hydrographs/hydrograph_"+str(val_index-1).zfill(4)+".xys"   #hydrograph_filename is 0-based index
-        hydrograph = np.loadtxt(hydrograph_filename, comments="//", delimiter=" ")
-
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                val_input_branch[i*nCells*nSaveTimes+j*nSaveTimes+k, :] = hydrograph[:, 1]
-
-    #The input for the trunk net is the x and y coordinates of the cell centers and time t (in hours)
-    val_input_trunk = np.zeros((nValidationSamples, 3))
-    #loop over all simulations in the validation set
-    for i in range(len(val_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                val_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = cell_centers[j, 0]
-                val_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = cell_centers[j, 1]
-                val_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = save_times[k]
-
-    #The output for the DeepONet is the velocity vector u and v and the water depth h
-    val_output = np.zeros((nValidationSamples, 3))
-    #loop over all simulations in the validation set
-    for i in range(len(val_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                val_output[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = all_results_array[val_indices[i]-1][k][j,0]
-                val_output[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = all_results_array[val_indices[i]-1][k][j,1]
-                val_output[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = all_results_array[val_indices[i]-1][k][j,2]
-
-    #save the validation set
-    np.save("data/val/branch_inputs.npy", val_input_branch)
-    np.save("data/val/trunk_inputs.npy", val_input_trunk)
-    np.save("data/val/outputs.npy", val_output)
-
-    #save the test set
-    nTestSamples = len(test_indices)*nCells*nSaveTimes
-    test_input_branch = np.zeros((nTestSamples, nHydrograph_points))
-    #loop over all simulations in the test set
-    for i in range(len(test_indices)):
-        test_index = test_indices[i] #1-based index 
-
-        #read the hydrograph from "hydrographs/hydrograph_xxxx.xys" file
-        hydrograph_filename = "hydrographs/hydrograph_"+str(test_index-1).zfill(4)+".xys"   #hydrograph_filename is 0-based index
-        hydrograph = np.loadtxt(hydrograph_filename, comments="//", delimiter=" ")
-
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                test_input_branch[i*nCells*nSaveTimes+j*nSaveTimes+k, :] = hydrograph[:, 1]
-
-    #The input for the trunk net is the x and y coordinates of the cell centers and time t (in hours)
-    test_input_trunk = np.zeros((nTestSamples, 3))
-    #loop over all simulations in the test set
-    for i in range(len(test_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                test_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = cell_centers[j, 0]
-                test_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = cell_centers[j, 1]
-                test_input_trunk[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = save_times[k]
-
-    #The output for the DeepONet is the velocity vector u and v and the water depth h
-    test_output = np.zeros((nTestSamples, 3))
-    #loop over all simulations in the test set
-    for i in range(len(test_indices)):
-        #loop over all cells in the current simulation
-        for j in range(nCells):
-            #loop over all save times
-            for k in range(nSaveTimes):
-                test_output[i*nCells*nSaveTimes+j*nSaveTimes+k,0] = all_results_array[test_indices[i]-1][k][j,0]
-                test_output[i*nCells*nSaveTimes+j*nSaveTimes+k,1] = all_results_array[test_indices[i]-1][k][j,1]
-                test_output[i*nCells*nSaveTimes+j*nSaveTimes+k,2] = all_results_array[test_indices[i]-1][k][j,2]
-
-    #save the test set
-    np.save("data/test/branch_inputs.npy", test_input_branch)
-    np.save("data/test/trunk_inputs.npy", test_input_trunk)
-    np.save("data/test/outputs.npy", test_output)      
-
-    print("All postprocessed results are saved to data/train, data/val, and data/test")
+            #make sure the number of cells is correct
+            assert n_cells_case == nCells, "Number of cells is not correct"
+            
+            # Prepare data for this case
+            case_branch_inputs = np.tile(sampled_parameters[case_idx-1, :], (n_cells_case, 1))  # -1 because indices are 1-based
+            case_trunk_inputs = cell_centers[:, :2]  # Only need x,y coordinates
+            case_outputs = results_array[:, :3]  # h, u, v
+            
+            # Write this case's data to the HDF5 file
+            branch_inputs[current_data_point:current_data_point + n_cells_case] = case_branch_inputs
+            trunk_inputs[current_data_point:current_data_point + n_cells_case] = case_trunk_inputs
+            outputs[current_data_point:current_data_point + n_cells_case] = case_outputs
+            
+            current_data_point += n_cells_case
+        
+        # Add metadata
+        h5_file.attrs['n_samples'] = total_data_points
+        h5_file.attrs['n_features'] = n_features
+        h5_file.attrs['n_coords'] = n_coords
+        h5_file.attrs['n_outputs'] = n_outputs
+        h5_file.attrs['output_unit'] = output_unit
+        
+        # Close the HDF5 file
+        h5_file.close()
+        
+        print(f"Saved {total_data_points} data points to data/{split_name}/data.h5")
+    
+    print("Data postprocessing completed successfully!")
 
 
-def plot_profile_results_history(case_index, save_times, nSaveTimes, variable_name, output_unit):
+def plot_profile_results(case_index, variable_name, output_unit):
     """
-    Plot some results for visual checking
+    Plot some profile results for visual checking
 
     Args:
         case_index (int): The index of the case to plot (1-based index)
-        save_times (list): The save times
-        nSaveTimes (int): The number of save times
         variable_name (str): The name of the variable to plot
         output_unit (str): The output unit
     """
 
     print("Plotting the results for case index = ", case_index)
 
-    #load the postprocessed results
-    postprocessed_results = np.load("data/postprocessed_sampling_results.npz")
+    #load the postprocessed results: center line results for the current case (h, u, v, elevation, length)
+    postprocessed_results = np.load("data/center_line_results/case_"+str(case_index).zfill(6)+".npy")
 
-    #all_results_array[nCases][nSaveTimes][nCells,nVariables]
-    all_results_array = postprocessed_results["all_results_array"]
+    #water depth 
+    h = postprocessed_results[:, 0]
+
+    #velocity
+    u = postprocessed_results[:, 1]
+    v = postprocessed_results[:, 2]
+
+    #elevation
+    elevation = postprocessed_results[:, 3]
+
+    #length
+    length = postprocessed_results[:, 4]
+
+    #compute the water surface elevation
+    wse = h + elevation
+
+    #create a single plot of the selected samples
+    fig, axs = plt.subplots(1, 1, figsize=(8, 6))
+
+    #plot the water surface elevation
+    axs.plot(length, wse, 'b--', label='Water Surface Elevation')
+
+    #plot the bed elevation
+    axs.plot(length, elevation, color='k', label='Bed')
+
+    #add the legend
+    axs.legend()
+
+    #add the x-axis label
+    axs.set_xlabel('Length (m)', fontsize=14)
+
+    #add the y-axis label
+    axs.set_ylabel('Elevation (m)', fontsize=14)
+
+    #set y-axis limits
+    #axs.set_ylim(0, 1.0)
+
+    #set the fontsize of the tick labels
+    axs.tick_params(axis='both', labelsize=12)  
+
+    #set the fontsize of the title
+    axs.set_title('Case '+str(case_index), fontsize=14)
+
+    #save the plot
+    plt.savefig("example_wse_profile_case_"+str(case_index).zfill(4)+".png", dpi=300, bbox_inches='tight')
+
+    #show the plot
+    plt.show()
+
     
-    cell_centers = postprocessed_results["cell_centers"]
-    
-
-    #get the results for the current case: results_array[nSaveTimes][nCells,nVariables]
-    results_array = all_results_array[case_index-1]
-
-    #loop over all save times
-    for k in range(nSaveTimes):
-        #get the results for the current save time: results[nCells,nVariables]
-        results = results_array[k]
-
-        #compute the water surface elevation
-        wse = cell_centers[:, 2] + results[:, 2]
-
-        #create a single plot of the selected samples
-        fig, axs = plt.subplots(1, 1, figsize=(8, 6))
-
-        #plot the water surface elevation
-        axs.plot(cell_centers[:, 0], wse, 'k-', label=f'Case {case_index}')
-
-        #plot the bed elevation
-        axs.plot(cell_centers[:, 0], cell_centers[:, 2], color='k', label='Bed Elevation')
-
-        #add the legend
-        axs.legend()
-
-        #add the x-axis label
-        axs.set_xlabel('x (m)', fontsize=14)
-
-        #add the y-axis label
-        axs.set_ylabel('Elevation (m)', fontsize=14)
-
-        #set y-axis limits
-        axs.set_ylim(0, 1.0)
-
-        #set the fontsize of the tick labels
-        axs.tick_params(axis='both', labelsize=12)  
-
-        #set the fontsize of the title
-        axs.set_title('Case '+str(case_index)+', Time = '+str(save_times[k])+' hours', fontsize=14)
-
-        #save the plot
-        plt.savefig("example_wse_profile_case_"+str(case_index).zfill(4)+"_time_"+str(int(save_times[k])).zfill(4)+".png", dpi=300, bbox_inches='tight')
-
-        #show the plot
-        #plt.show()
-
-        plt.close()
-
 
 
 if __name__ == "__main__":
@@ -929,36 +764,37 @@ if __name__ == "__main__":
     #Get the system name: Windows or Linux
     system_name = platform.system()
     
-    # Define the flow variables to be postprocessed based on the output unit
+    # Define the flow variables to be postprocessed based on the output unit. The variables are in the order of (h, u, v)
     if output_unit == "SI":
-        flow_variables = ["Velocity_m_p_s", "Water_Depth_m"]
+        flow_variables = ["Water_Depth_m", "Velocity_m_p_s"]
     elif output_unit == "EN":     #It seems that the name of the variables are slightly different for Windows and Linux. So depending on the system for which the code is run, the name of the variables are slightly different. Check the VTK files to see the actual names of the variables.
         if system_name == "Windows":
-            flow_variables = ["Velocity_ft_p_s", "Water_Depth_ft"]
+            flow_variables = ["Water_Depth_ft", "Velocity_ft_p_s"]
         elif system_name == "Linux":
-            flow_variables = ["Velocity_ft_p_s", "Water_Depth_ft"]
+            flow_variables = ["Water_Depth_ft", "Velocity_ft_p_s"]
     else:
         raise ValueError("Unsupported output unit: " + output_unit)
 
 
-    #for unsteady simulations, the save times (in hours); This needs to be modified based on the actual simulation results
-    nHydrograph_points = postprocessing_specs['nHydrograph_points']
-    save_times_start = postprocessing_specs['save_times']['start']
-    save_times_end = postprocessing_specs['save_times']['end']
-    save_times_step = postprocessing_specs['save_times']['step']
-    save_times = np.arange(save_times_start, save_times_end, save_times_step)   
-    nSaveTimes = len(save_times)
+    #read the sampled parameters from the file 
+    #get the sample file name from "simulations_config.json"
+    sampled_parameters_file = run_specs['sampled_parameters_file']
+    #load the sampled parameters from the file (the first row is the header)
+    sampled_parameters = np.loadtxt(sampled_parameters_file, skiprows=1)
+
+    #read the number of cells from the postprocessing specifications
+    nCells = postprocessing_specs['nCells']
 
     #postprocess the results according to the postprocessing specifications
     print("Postprocessing the results ...")
-    #postprocess_results(nSamples, nSaveTimes, nHydrograph_points, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction)
+    postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction)
 
     #plot some results for visual checking
     print("Plotting the results ...")
-    #case_indices = [77, 372, 821, 522]    #1-based index
-    case_indices = [77]
-    for case_index in case_indices:
-        plot_profile_results_history(case_index, save_times, nSaveTimes, "wse", output_unit)
+    case_indices = [77, 372, 821, 522]    #1-based index
+    #case_indices = [77]
+    #for case_index in case_indices:
+    #    plot_profile_results(case_index, "wse", output_unit)
 
     #record the end time
     end_time = time.time()

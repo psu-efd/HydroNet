@@ -67,6 +67,7 @@
             "training": 0.7,
             "validation": 0.2,
             "test": 0.1
-        }
+        },
+        "nCells": 64577
     }
 }
