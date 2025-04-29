@@ -248,65 +248,63 @@ def deeponet_train_with_full_data():
     """
     # Load configuration
     config_file = './deeponet_config.yaml'
-    config = Config(config_file)  # Use Config class instead of load_config
+    config = Config(config_file)
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    def print_gpu_memory(label):
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**2
+            reserved = torch.cuda.memory_reserved() / 1024**2
+            print(f"{label}:")
+            print(f"  Allocated: {allocated:.2f} MB")
+            print(f"  Reserved: {reserved:.2f} MB")
+    
     # Monitor initial GPU memory
-    if torch.cuda.is_available():
-        initial_memory = torch.cuda.memory_allocated() / 1024**2  # Convert to MB
-        print(f"Initial GPU memory usage: {initial_memory:.2f} MB")
+    print_gpu_memory("Initial GPU memory")
     
     try:
         # Create dataset and dataloader
         print("Loading training dataset...")
         train_dataset = HydraulicDataset(
-            data_dir=config.get('data.train_data_path'),  # Use config.get() method
-            normalize=True,
+            data_dir=config.get('data.train_data_path'),
+            normalize=not config.get('data.bNormalized'),   #if bNormalized is true, the data is already normalized, thus no need to normalize it again
             transform=None
         )
         
         print("Loading validation dataset...")
         val_dataset = HydraulicDataset(
-            data_dir=config.get('data.val_data_path'),  # Use config.get() method
-            normalize=True,
+            data_dir=config.get('data.val_data_path'),
+            normalize=not config.get('data.bNormalized'),   #if bNormalized is true, the data is already normalized, thus no need to normalize it again
             transform=None
         )
         
         # Monitor memory after dataset loading
-        if torch.cuda.is_available():
-            dataset_memory = torch.cuda.memory_allocated() / 1024**2
-            print(f"GPU memory after dataset loading: {dataset_memory:.2f} MB")
-            print(f"Dataset memory usage: {dataset_memory - initial_memory:.2f} MB")
+        print_gpu_memory("GPU memory after dataset loading")
         
         # Create dataloaders with multiple workers for faster data loading
         train_loader = DataLoader(
             train_dataset,
-            batch_size=config.get('training.batch_size'),  # Use config.get() method
+            batch_size=config.get('training.batch_size'),
             shuffle=True,
-            num_workers=4,
+            num_workers=1,
             pin_memory=True
         )
         
         val_loader = DataLoader(
             val_dataset,
-            batch_size=config.get('training.batch_size'),  # Use config.get() method
+            batch_size=config.get('training.batch_size'),
             shuffle=False,
-            num_workers=4,
+            num_workers=1,
             pin_memory=True
         )
         
         # Initialize model
         print("Initializing model...")
         model = DeepONetModel(config_file=config_file, config=config).to(device)
-        
-        # Monitor memory after model initialization
-        if torch.cuda.is_available():
-            model_memory = torch.cuda.memory_allocated() / 1024**2
-            print(f"GPU memory after model initialization: {model_memory:.2f} MB")
-            print(f"Model memory usage: {model_memory - dataset_memory:.2f} MB")
+        print_gpu_memory("GPU memory after model initialization")
         
         # Initialize trainer
         trainer = DeepONetTrainer(
@@ -315,27 +313,40 @@ def deeponet_train_with_full_data():
             config=config
         )
         
+        # Monitor memory after first batch
+        print("\nMonitoring memory during first batch...")
+        for batch in train_loader:
+            branch_input, trunk_input, target = [b.to(device) for b in batch]
+            print_gpu_memory("GPU memory after data transfer")
+            
+            # Forward pass
+            output = model(branch_input, trunk_input)
+            print_gpu_memory("GPU memory after forward pass")
+            
+            # Backward pass
+            loss = trainer.loss_fn(output, target)
+            loss.backward()
+            print_gpu_memory("GPU memory after backward pass")
+            
+            # Optimizer step
+            trainer.optimizer.step()
+            trainer.optimizer.zero_grad()
+            print_gpu_memory("GPU memory after optimizer step")
+            break
+        
         # Train the model
-        print("Starting training...")
+        print("\nStarting training...")
         history = trainer.train(
             train_loader=train_loader,
             val_loader=val_loader
         )
-        
-        # Save the model
-        trainer.save_model('deeponet_full_data.pt')
-        
-        # Plot training history
-        plot_training_history(history)
         
         return model, history
         
     except RuntimeError as e:
         if "out of memory" in str(e):
             print("\n⚠️ CUDA out of memory error detected!")
-            if torch.cuda.is_available():
-                print(f"Current GPU memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-                print(f"Total GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**2:.2f} MB")
+            print_gpu_memory("Current GPU memory")
             
             print("\nSuggestions to resolve out of memory:")
             print("1. Reduce batch size")
@@ -355,9 +366,7 @@ def deeponet_train_with_full_data():
         # Clean up
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            final_memory = torch.cuda.memory_allocated() / 1024**2
-            print(f"\nFinal GPU memory usage: {final_memory:.2f} MB")
-            print(f"Total memory freed: {initial_memory - final_memory:.2f} MB")
+            print_gpu_memory("Final GPU memory")
 
 def deeponet_test(best_model_path):
     """

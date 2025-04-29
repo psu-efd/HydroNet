@@ -17,7 +17,7 @@ class HydraulicDataset(Dataset):
     It consists of input functions (branch net inputs) and coordinates (trunk net inputs),
     along with corresponding output values.
     """
-    def __init__(self, data_dir, transform=None, normalize=True):
+    def __init__(self, data_dir, transform=None, normalize=False):
         """
         Initialize the hydraulic dataset.
         
@@ -39,8 +39,7 @@ class HydraulicDataset(Dataset):
             
     def _load_data(self):
         """
-        Load the hydraulic simulation data from files.
-        
+        Load the hydraulic simulation data from HDF5 files.
         """
         # Path to data files
         data_path = self.data_dir
@@ -50,24 +49,22 @@ class HydraulicDataset(Dataset):
             raise FileNotFoundError(f"Data directory {data_path} does not exist")
                 
         try:
-            # Check if required files exist
-            branch_file = os.path.join(data_path, 'branch_inputs.npy')
-            trunk_file = os.path.join(data_path, 'trunk_inputs.npy')
-            outputs_file = os.path.join(data_path, 'outputs.npy')
+            # Check if required HDF5 file exists
+            h5_file = os.path.join(data_path, 'data.h5')
             
-            if not (os.path.exists(branch_file) and 
-                   os.path.exists(trunk_file) and 
-                   os.path.exists(outputs_file)):
-                raise FileNotFoundError(f"Required files (branch_inputs.npy, trunk_inputs.npy, outputs.npy) not found in {data_path}")
+            if not os.path.exists(h5_file):
+                raise FileNotFoundError(f"Required file data.h5 not found in {data_path}")
                 
-            # Load input functions (for branch net)
-            self.branch_inputs = np.load(branch_file)
-            
-            # Load coordinates (for trunk net)
-            self.trunk_inputs = np.load(trunk_file)
-            
-            # Load output values (h, u, v)
-            self.outputs = np.load(outputs_file)
+            # Load data from HDF5 file
+            with h5py.File(h5_file, 'r') as f:
+                # Load input functions (for branch net)
+                self.branch_inputs = f['branch_inputs'][:].astype(np.float64)
+                
+                # Load coordinates (for trunk net)
+                self.trunk_inputs = f['trunk_inputs'][:].astype(np.float64)
+                
+                # Load output values (h, u, v)
+                self.outputs = f['outputs'][:].astype(np.float64)
 
             print("branch_inputs.shape: ", self.branch_inputs.shape)
             print("trunk_inputs.shape: ", self.trunk_inputs.shape)
@@ -76,37 +73,16 @@ class HydraulicDataset(Dataset):
             print(f"Loaded {len(self.branch_inputs)} samples from {data_path}")
             
         except Exception as e:
-            print(f"Error loading data: {e}")
-            print("Creating dummy data for demonstration purposes")
-            self._create_dummy_data(data_path)
-            
-    def _create_dummy_data(self, data_path):
-        """
-        Create dummy data for demonstration purposes.
-        """
-        # Create some simple dummy data
-        # Branch inputs: 100 samples, 10 features each (input function samples)
-        self.branch_inputs = np.random.rand(100, 10)
-        
-        # Trunk inputs: 100 samples, 3 coordinates (x, y, t) coordinates
-        # The model expects 3D coordinates, not 2D
-        self.trunk_inputs = np.random.rand(100, 3)
-        
-        # Outputs: 100 samples, 3 variables (h, u, v)
-        self.outputs = np.random.rand(100, 3)
-        
-        # Save the dummy data
-        os.makedirs(data_path, exist_ok=True)
-        np.save(os.path.join(data_path, 'branch_inputs.npy'), self.branch_inputs)
-        np.save(os.path.join(data_path, 'trunk_inputs.npy'), self.trunk_inputs)
-        np.save(os.path.join(data_path, 'outputs.npy'), self.outputs)
-        
-        print(f"Created and saved dummy data in {data_path}")
+            print(f"Error loading data: {e}")            
+            raise RuntimeError("Error loading data. Please check the data directory and file structure.")
             
     def _normalize_data(self):
         """
         Normalize the data to improve training stability.
         """
+
+        print("HydraulicDataset: Normalizing the data ...")
+
         # Branch input normalization
         self.branch_mean = np.mean(self.branch_inputs, axis=0, keepdims=True)
         self.branch_std = np.std(self.branch_inputs, axis=0, keepdims=True) + 1e-8
@@ -131,6 +107,10 @@ class HydraulicDataset(Dataset):
             'output_mean': self.output_mean,
             'output_std': self.output_std
         }
+
+        #print the normalization parameters
+        print("Normalization parameters:")
+        print(self.normalization)
         
     def __len__(self):
         """Return the number of samples in the dataset."""

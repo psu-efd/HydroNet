@@ -548,7 +548,7 @@ def split_indices(sample_indices, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1
 def postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction):
     """Postprocess the results of the simulations
 
-    The split is done based on the successful simulations. Also, the split is based on cases, not samples (cell center data).
+    The split is done based on the successful simulations. First, the split (train, val, test) is based on cases, not samples (cell center data). Then, the train and validation cases are combined and then split based on shuffled samples (cell center data).
 
     Args:
         nSamples (int): Number of samples
@@ -583,8 +583,8 @@ def postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, ou
     for split_name, indices in [('train', train_indices), ('val', val_indices), ('test', test_indices)]:
         print("Processing split = ", split_name)
 
-        # Create HDF5 file for this split
-        h5_file = h5py.File(f'data/{split_name}/data.h5', 'w')
+        # Create the temporary HDF5 file for this split (to be used for shuffling and normalization)
+        h5_file = h5py.File(f'data/{split_name}/data_temp.h5', 'w')
         
         # Calculate total number of data points for this split
         total_data_points = len(indices) * nCells
@@ -654,7 +654,262 @@ def postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, ou
         h5_file.close()
         
         print(f"Saved {total_data_points} data points to data/{split_name}/data.h5")
+
+    #read the train and validation data again and combine/shuffle them; also read in the test data so we can compute the mean and std of the whole dataset
+    train_data = h5py.File('data/train/data_temp.h5', 'r')
+    val_data = h5py.File('data/val/data_temp.h5', 'r')
+    test_data = h5py.File('data/test/data_temp.h5', 'r')
+
+    #compute the mean and std of the whole dataset (train, val, test)
+    train_val_test_data_branch_inputs = np.concatenate((train_data['branch_inputs'], val_data['branch_inputs'], test_data['branch_inputs']), axis=0).astype(np.float64)
+    train_val_test_data_trunk_inputs = np.concatenate((train_data['trunk_inputs'], val_data['trunk_inputs'], test_data['trunk_inputs']), axis=0).astype(np.float64)
+    train_val_test_data_outputs = np.concatenate((train_data['outputs'], val_data['outputs'], test_data['outputs']), axis=0).astype(np.float64)
+
+    #compute the mean and std of the whole dataset (train, val, test)
+    train_val_test_mean_branch_inputs = np.mean(train_val_test_data_branch_inputs, axis=0)
+    train_val_test_std_branch_inputs = np.std(train_val_test_data_branch_inputs, axis=0)
+    train_val_test_mean_trunk_inputs = np.mean(train_val_test_data_trunk_inputs, axis=0)
+    train_val_test_std_trunk_inputs = np.std(train_val_test_data_trunk_inputs, axis=0)
+    train_val_test_mean_outputs = np.mean(train_val_test_data_outputs, axis=0)
+    train_val_test_std_outputs = np.std(train_val_test_data_outputs, axis=0)
+
+    #print the mean and std of the whole dataset (train, val, test)
+    print("train_val_test_mean_branch_inputs = ", train_val_test_mean_branch_inputs)
+    print("train_val_test_std_branch_inputs = ", train_val_test_std_branch_inputs)
+    print("train_val_test_mean_trunk_inputs = ", train_val_test_mean_trunk_inputs)
+    print("train_val_test_std_trunk_inputs = ", train_val_test_std_trunk_inputs)
+    print("train_val_test_mean_outputs = ", train_val_test_mean_outputs)
+    print("train_val_test_std_outputs = ", train_val_test_std_outputs)
+
+    #save the mean and std of the whole dataset to a json file
+    dataset_mean_std_dict = {
+        'mean_branch_inputs': train_val_test_mean_branch_inputs.tolist(),
+        'std_branch_inputs': train_val_test_std_branch_inputs.tolist(),
+        'mean_trunk_inputs': train_val_test_mean_trunk_inputs.tolist(),
+        'std_trunk_inputs': train_val_test_std_trunk_inputs.tolist(),
+        'mean_outputs': train_val_test_mean_outputs.tolist(),
+        'std_outputs': train_val_test_std_outputs.tolist()
+    }
+    with open('data/dataset_mean_std.json', 'w') as f:
+        json.dump(dataset_mean_std_dict, f, indent=4)
+
+    #combine the train and validation data
+    train_val_data_branch_inputs = np.concatenate((train_data['branch_inputs'], val_data['branch_inputs']), axis=0)
+    train_val_data_trunk_inputs = np.concatenate((train_data['trunk_inputs'], val_data['trunk_inputs']), axis=0)
+    train_val_data_outputs = np.concatenate((train_data['outputs'], val_data['outputs']), axis=0)
+
+    #get the test data
+    test_data_branch_inputs = test_data['branch_inputs']
+    test_data_trunk_inputs = test_data['trunk_inputs']
+    test_data_outputs = test_data['outputs']
+
+    #normalize the data
+    train_val_data_branch_inputs = (train_val_data_branch_inputs - train_val_test_mean_branch_inputs) / train_val_test_std_branch_inputs
+    train_val_data_trunk_inputs = (train_val_data_trunk_inputs - train_val_test_mean_trunk_inputs) / train_val_test_std_trunk_inputs
+    train_val_data_outputs = (train_val_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
+    test_data_branch_inputs = (test_data_branch_inputs - train_val_test_mean_branch_inputs) / train_val_test_std_branch_inputs
+    test_data_trunk_inputs = (test_data_trunk_inputs - train_val_test_mean_trunk_inputs) / train_val_test_std_trunk_inputs
+    test_data_outputs = (test_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
+
+    print("Combined data shapes:")
+    print(f"Branch inputs: {train_val_data_branch_inputs.shape}")
+    print(f"Trunk inputs: {train_val_data_trunk_inputs.shape}")
+    print(f"Outputs: {train_val_data_outputs.shape}")
+
+    #get the total number of train and validation data points
+    n_train_val_data_points = train_val_data_branch_inputs.shape[0]
+
+    print("n_train_val_data_points = ", n_train_val_data_points)
+
+    #split the train and validation data into training and validation sets based on training_fraction and validation_fraction only
+    # Calculate the new training fraction (relative to train+val)
+    training_fraction_new = training_fraction/(training_fraction + validation_fraction)
+
+    # Calculate split point
+    n_train = int(n_train_val_data_points * training_fraction_new)
+
+    # Split into train and val
+    train_indices = np.random.choice(n_train_val_data_points, size=n_train, replace=False)
+    val_indices = np.setdiff1d(np.arange(n_train_val_data_points), train_indices)
+
+    print("Split sizes:")
+    print(f"Train: {len(train_indices)}")
+    print(f"Val: {len(val_indices)}")
+
+    #save the train data to the train HDF5 file
+    train_data = h5py.File('data/train/data.h5', 'w')
+    train_data['branch_inputs'] = train_val_data_branch_inputs[train_indices]
+    train_data['trunk_inputs'] = train_val_data_trunk_inputs[train_indices]
+    train_data['outputs'] = train_val_data_outputs[train_indices]
+
+    #save the validation data to the validation HDF5 file
+    val_data = h5py.File('data/val/data.h5', 'w')
+    val_data['branch_inputs'] = train_val_data_branch_inputs[val_indices]
+    val_data['trunk_inputs'] = train_val_data_trunk_inputs[val_indices]
+    val_data['outputs'] = train_val_data_outputs[val_indices]
+
+    #save the test data to the test HDF5 file
+    test_data = h5py.File('data/test/data.h5', 'w')
+    test_data['branch_inputs'] = test_data_branch_inputs
+    test_data['trunk_inputs'] = test_data_trunk_inputs
+    test_data['outputs'] = test_data_outputs
+
+    #close the train and validation HDF5 files
+    train_data.close()
+    val_data.close()
+    test_data.close()
+
+    #read the train, validation and test data again and verify the mean and standard deviation 
+    print("\nVerifying the mean and standard deviation of the data ...")
+    train_data = h5py.File('data/train/data.h5', 'r')
+    val_data = h5py.File('data/val/data.h5', 'r')
+    test_data = h5py.File('data/test/data.h5', 'r')
+
+    #compute the mean and standard deviation of the data
+    #branch inputs (as float64 is required for the computation of statistics because the dataset is very large; otherwise, the computation will be incorrect due to overflow)
+    train_mean_branch_inputs = np.mean(train_data['branch_inputs'].astype(np.float64), axis=0)
+    train_std_branch_inputs = np.std(train_data['branch_inputs'].astype(np.float64), axis=0)
+    val_mean_branch_inputs = np.mean(val_data['branch_inputs'].astype(np.float64), axis=0)
+    val_std_branch_inputs = np.std(val_data['branch_inputs'].astype(np.float64), axis=0)
+    test_mean_branch_inputs = np.mean(test_data['branch_inputs'].astype(np.float64), axis=0)
+    test_std_branch_inputs = np.std(test_data['branch_inputs'].astype(np.float64), axis=0)
+
+    print("train_mean_branch_inputs = ", train_mean_branch_inputs)
+    print("train_std_branch_inputs = ", train_std_branch_inputs)
+    print("val_mean_branch_inputs = ", val_mean_branch_inputs)
+    print("val_std_branch_inputs = ", val_std_branch_inputs)
+    print("test_mean_branch_inputs = ", test_mean_branch_inputs)
+    print("test_std_branch_inputs = ", test_std_branch_inputs)
+
+    #trunk inputs
+    train_mean_trunk_inputs = np.mean(train_data['trunk_inputs'].astype(np.float64), axis=0)
+    train_std_trunk_inputs = np.std(train_data['trunk_inputs'].astype(np.float64), axis=0)
+    val_mean_trunk_inputs = np.mean(val_data['trunk_inputs'].astype(np.float64), axis=0)
+    val_std_trunk_inputs = np.std(val_data['trunk_inputs'].astype(np.float64), axis=0)
+    test_mean_trunk_inputs = np.mean(test_data['trunk_inputs'].astype(np.float64), axis=0)
+    test_std_trunk_inputs = np.std(test_data['trunk_inputs'].astype(np.float64), axis=0)
+
+    print("train_mean_trunk_inputs = ", train_mean_trunk_inputs)
+    print("train_std_trunk_inputs = ", train_std_trunk_inputs)
+    print("val_mean_trunk_inputs = ", val_mean_trunk_inputs)
+    print("val_std_trunk_inputs = ", val_std_trunk_inputs)
+    print("test_mean_trunk_inputs = ", test_mean_trunk_inputs)
+    print("test_std_trunk_inputs = ", test_std_trunk_inputs)
+
+    #outputs
+    train_mean_outputs = np.mean(train_data['outputs'].astype(np.float64), axis=0)
+    train_std_outputs = np.std(train_data['outputs'].astype(np.float64), axis=0)
+    val_mean_outputs = np.mean(val_data['outputs'].astype(np.float64), axis=0)
+    val_std_outputs = np.std(val_data['outputs'].astype(np.float64), axis=0)
+    test_mean_outputs = np.mean(test_data['outputs'].astype(np.float64), axis=0)
+    test_std_outputs = np.std(test_data['outputs'].astype(np.float64), axis=0)
+
+    print("train_mean_outputs = ", train_mean_outputs)
+    print("train_std_outputs = ", train_std_outputs)
+    print("val_mean_outputs = ", val_mean_outputs)
+    print("val_std_outputs = ", val_std_outputs)
+    print("test_mean_outputs = ", test_mean_outputs)
+    print("test_std_outputs = ", test_std_outputs)    
+
+    print("Data postprocessing completed successfully!")
+
+
+def postprocess_results_shuffle(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction):
+    """Postprocess the results of the simulations"""
     
+    #read the train and validation data again and combine them
+    train_data = h5py.File('data/train/data_before_shuffle.h5', 'r')
+    val_data = h5py.File('data/val/data_before_shuffle.h5', 'r')
+
+    # Debug: Check data before reading
+    print("Train data first column mean before reading:", np.mean(train_data['branch_inputs'][:, 0]))
+    print("Val data first column mean before reading:", np.mean(val_data['branch_inputs'][:, 0]))
+
+    # Explicitly read the data from HDF5 files
+    train_branch = np.array(train_data['branch_inputs'][:])  # Convert to numpy array explicitly
+    train_trunk = np.array(train_data['trunk_inputs'][:])
+    train_outputs = np.array(train_data['outputs'][:])
+    
+    val_branch = np.array(val_data['branch_inputs'][:])
+    val_trunk = np.array(val_data['trunk_inputs'][:])
+    val_outputs = np.array(val_data['outputs'][:])
+
+    # Debug: Check data after reading
+    print("Train branch first column mean after reading:", np.mean(train_branch[:, 0]))
+    print("Val branch first column mean after reading:", np.mean(val_branch[:, 0]))
+
+    #combine the train and validation data
+    train_val_data_branch_inputs = np.concatenate((train_branch, val_branch), axis=0)
+    train_val_data_trunk_inputs = np.concatenate((train_trunk, val_trunk), axis=0)
+    train_val_data_outputs = np.concatenate((train_outputs, val_outputs), axis=0)
+
+    # After concatenation
+    print("Combined data first column mean:", np.mean(train_val_data_branch_inputs[:, 0]))
+    print("Combined data first column shape:", train_val_data_branch_inputs[:, 0].shape)
+    print("First few values of first column:", train_val_data_branch_inputs[:5, 0])
+    print("Last few values of first column:", train_val_data_branch_inputs[-5:, 0])
+
+    # Check if the data is being modified during concatenation
+    print("Train branch shape:", train_branch.shape)
+    print("Val branch shape:", val_branch.shape)
+    print("Combined shape:", train_val_data_branch_inputs.shape)
+
+    #get the total number of train and validation data points
+    n_train_val_data_points = train_val_data_branch_inputs.shape[0]
+
+    print("n_train_val_data_points = ", n_train_val_data_points)
+
+    #split the train and validation data into training and validation sets based on training_fraction and validation_fraction only
+    # Calculate the new training fraction (relative to train+val)
+    training_fraction_new = training_fraction/(training_fraction + validation_fraction)
+
+    # Get total number of samples
+    n_samples = n_train_val_data_points
+
+    # Calculate split point
+    n_train = int(n_samples * training_fraction_new)
+
+    # Split into train and val
+    train_indices = np.random.choice(n_samples, size=n_train, replace=False)
+    val_indices = np.setdiff1d(np.arange(n_samples), train_indices)
+
+    print("Split sizes:")
+    print(f"Train: {len(train_indices)}")
+    print(f"Val: {len(val_indices)}")
+
+    #save the train data to the train HDF5 file
+    train_data = h5py.File('data/train/data.h5', 'w')
+    train_data['branch_inputs'] = train_val_data_branch_inputs[train_indices]
+    train_data['trunk_inputs'] = train_val_data_trunk_inputs[train_indices]
+    train_data['outputs'] = train_val_data_outputs[train_indices]
+
+    #save the validation data to the validation HDF5 file
+    val_data = h5py.File('data/val/data.h5', 'w')
+    val_data['branch_inputs'] = train_val_data_branch_inputs[val_indices]
+    val_data['trunk_inputs'] = train_val_data_trunk_inputs[val_indices]
+    val_data['outputs'] = train_val_data_outputs[val_indices]
+
+    #close the train and validation HDF5 files
+    train_data.close()
+    val_data.close()
+
+    #verify the data by reading the data from the HDF5 files
+    train_data = h5py.File('data/train/data.h5', 'r')
+    val_data = h5py.File('data/val/data.h5', 'r')
+
+    train_data_all = np.array(train_data['branch_inputs'][:]).astype(np.float64)
+
+    # Debug prints
+    print("Data type:", train_data_all.dtype)
+    print("Shape:", train_data_all.shape)
+    print("First column data type:", train_data_all[:, 0].dtype)
+    print("First column shape:", train_data_all[:, 0].shape)
+    print("First column min/max:", np.min(train_data_all[:, 0]), np.max(train_data_all[:, 0]))
+    print("First column mean from axis=0:", np.mean(train_data_all, axis=0)[0])
+    print("First column mean directly:", np.mean(train_data_all[:, 0]))
+
+    print("Val data branch inputs column mean:", np.mean(val_data['branch_inputs'], axis=0))
+
     print("Data postprocessing completed successfully!")
 
 
@@ -782,12 +1037,22 @@ if __name__ == "__main__":
     #load the sampled parameters from the file (the first row is the header)
     sampled_parameters = np.loadtxt(sampled_parameters_file, skiprows=1)
 
+    #compute the mean and standard deviation of the sampled parameters
+    sampled_parameters_mean = np.mean(sampled_parameters, axis=0)
+    sampled_parameters_std = np.std(sampled_parameters, axis=0)
+
+    print("sampled_parameters_mean = ", sampled_parameters_mean)
+    print("sampled_parameters_std = ", sampled_parameters_std)
+    
+
     #read the number of cells from the postprocessing specifications
     nCells = postprocessing_specs['nCells']
 
     #postprocess the results according to the postprocessing specifications
     print("Postprocessing the results ...")
+    nSamples = 100 #for testing
     postprocess_results(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction)
+    #postprocess_results_shuffle(nSamples, sampled_parameters, nCells, flow_variables, output_unit, training_fraction, validation_fraction, test_fraction)
 
     #plot some results for visual checking
     print("Plotting the results ...")

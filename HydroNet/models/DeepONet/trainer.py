@@ -330,8 +330,8 @@ class DeepONetTrainer:
         val_dir = self.config.get('data.val_data_path', './data/val')
         
         # Create datasets
-        train_dataset = HydraulicDataset(data_dir, normalize=True)
-        val_dataset = HydraulicDataset(val_dir, normalize=True)
+        train_dataset = HydraulicDataset(data_dir, normalize=False)
+        val_dataset = HydraulicDataset(val_dir, normalize=False)
         
         # Create data loaders
         train_loader = get_hydraulic_dataloader(
