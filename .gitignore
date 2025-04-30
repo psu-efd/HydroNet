@@ -10,6 +10,8 @@ examples/data_case_preparation/SacromentoRiver/errorFile1
 examples/data_case_preparation/SacromentoRiver/outputFile1
 examples/data_case_preparation/SacromentoRiver/parallel_run_SRH_2D_outputs_*.json
 examples/DeepONet/SacramentoRiver_steady/data/postprocessed_sampling_results.json
+examples/DeepONet/SacramentoRiver_steady/errorFile1
+examples/DeepONet/SacramentoRiver_steady/outputFile1
 examples/data_case_preparation/SacromentoRiver/data/postprocessed_sampling_results.json
 test_mpi.py 
 history_*.json
