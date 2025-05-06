@@ -1044,7 +1044,6 @@ if __name__ == "__main__":
     print("sampled_parameters_mean = ", sampled_parameters_mean)
     print("sampled_parameters_std = ", sampled_parameters_std)
     
-
     #read the number of cells from the postprocessing specifications
     nCells = postprocessing_specs['nCells']
 
