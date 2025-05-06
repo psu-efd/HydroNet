@@ -167,7 +167,6 @@ def get_hydraulic_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4
     )
 
 
-class StreamingHydraulicDataset(Dataset):
     """
     A dataset class that streams data from HDF5 files in chunks to handle large datasets.
     """

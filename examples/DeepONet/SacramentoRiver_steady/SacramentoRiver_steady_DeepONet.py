@@ -15,6 +15,8 @@ import time  # Add back time import for the main timer
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader
 import yaml  # Add yaml import
+import vtk
+from vtk.util.numpy_support import numpy_to_vtk
 
 # Set the random seed before generating any random numbers
 np.random.seed(123456)  # You can use any integer as the seed
@@ -41,8 +43,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, HydraulicDataset, Config, get_hydraulic_dataloader
-from HydroNet.data import StreamingHydraulicDataset
+from HydroNet import DeepONetModel, DeepONetTrainer, HydraulicDataset, Config
 
 def check_data_normalization(train_dataset, val_dataset):
     """
@@ -182,64 +183,6 @@ def load_config(config_path):
     except yaml.YAMLError as e:
         raise ValueError(f"Error parsing YAML file: {e}")
 
-def deeponet_train_with_data_streaming():
-    """Example of using DeepONet for learning the operator of shallow water equations."""
-
-    print("\n=== DeepONet: 1D channel steady state ===")
-    
-    # Create a configuration or load from file
-    config_file = './deeponet_config.yaml'
-    
-    # Create model
-    model = DeepONetModel(config_file=config_file)        
-    
-    # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file)
-    print(f"Model device: {next(model.parameters()).device}")
-    
-    # Create streaming datasets
-    train_dataset = StreamingHydraulicDataset(
-        data_dir='./data/train',
-        chunk_size=100000,  # Adjust based on your memory constraints
-        normalize=True,
-        shuffle=True
-    )
-    
-    val_dataset = StreamingHydraulicDataset(
-        data_dir='./data/val',
-        chunk_size=100000,  # Adjust based on your memory constraints
-        normalize=True,
-        shuffle=True
-    )
-    
-    # Create data loaders with num_workers=0 to avoid multiprocessing issues
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=trainer.batch_size,
-        shuffle=True,
-        num_workers=4,  # Disable multiprocessing
-        pin_memory=True
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=trainer.batch_size,
-        shuffle=False,
-        num_workers=4,  # Disable multiprocessing
-        pin_memory=True
-    )
-    
-    # Train model
-    print("\nStarting training...")
-    history = trainer.train(train_loader=train_loader, val_loader=val_loader)
-
-    # Save the history to a JSON file whose name has the current date and time
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(f'history_{timestamp}.json', 'w') as f:
-        json.dump(history, f, indent=4)
-    
-    print("DeepONet training completed.")
-
 def deeponet_train_with_full_data():
     """
     Train DeepONet using the full dataset loaded into memory.
@@ -368,7 +311,7 @@ def deeponet_train_with_full_data():
             torch.cuda.empty_cache()
             print_gpu_memory("Final GPU memory")
 
-def deeponet_test(best_model_path):
+def deeponet_test(best_model_path, dataset_mean_std_path):
     """
     Using the trained DeepONet model for testing on the test dataset.
 
@@ -381,7 +324,6 @@ def deeponet_test(best_model_path):
     # Configuration and paths
     config_file = './deeponet_config.yaml'
     checkpoint_path = best_model_path 
-    test_data_dir = "./data/test"  # Path to test dataset
     config = Config(config_file)
 
     # Get the number of cells in the SRH-2D cases from the config file
@@ -393,7 +335,10 @@ def deeponet_test(best_model_path):
     # First, peek at the test dataset to get input dimensions
     print("Determining input dimensions from test data...")
     try:
-        test_dataset = HydraulicDataset(test_data_dir, normalize=True)            
+        test_dataset = HydraulicDataset(
+            data_dir=config.get('data.test_data_path'),
+            normalize=not config.get('data.bNormalized'),   #if bNormalized is true, the data is already normalized, thus no need to normalize it again
+            transform=None)            
 
         # Get a sample to determine dimensions
         sample_branch, sample_trunk, sample_output = test_dataset[0]
@@ -407,12 +352,12 @@ def deeponet_test(best_model_path):
         exit()
     
     # Create model with default configuration and check the compatibility of the model with the test data
-    print("Creating model...")
-    model = DeepONetModel(config_file=config_file)
+    print("Creating the trained model...")
+    model = DeepONetModel(config_file=config_file, config=config)
     model.check_model_input_output_dimensions(branch_dim, trunk_dim, output_dim)
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file)
+    trainer = DeepONetTrainer(model, config_file=config_file, config=config)
     
     # Load the trained model checkpoint
     try:
@@ -424,16 +369,18 @@ def deeponet_test(best_model_path):
     
     # Load test dataset
     print("Loading test dataset...")
-    test_loader = get_hydraulic_dataloader(
-        test_dataset, 
-        batch_size=trainer.batch_size, 
-        shuffle=False,           # Do not shuffle the test dataset because the order of the samples is important (the first nCells samples are from the first case, the next nCells samples are from the second case, etc.)
-        num_workers=4
-    )
+    test_loader = DataLoader(
+            test_dataset,
+            batch_size=config.get('training.batch_size'),
+            shuffle=False, # Do not shuffle the test dataset because the order of the samples is important (the first nCells samples are from the first case, the next nCells samples are from the second case, etc.)
+            num_workers=1,
+            pin_memory=True
+        )
 
-    # Store the normalization parameters for later denormalization
-    output_mean = test_dataset.output_mean
-    output_std = test_dataset.output_std
+    # read the mean and std of the dataset from file dataset_mean_std.json
+    dataset_mean_std = json.load(open(dataset_mean_std_path))
+    output_mean = dataset_mean_std['mean_outputs']
+    output_std = dataset_mean_std['std_outputs']
     
     # Evaluate model on test dataset
     model.eval()  # Set model to evaluation mode
@@ -527,7 +474,7 @@ def deeponet_test(best_model_path):
 
 
 def plot_test_results():
-    """Plot the test results from the test results json file."""
+    """Plot the test results and save them as vtk files."""
 
     # Configuration and paths
     config_file = './deeponet_config.yaml'    
@@ -539,18 +486,13 @@ def plot_test_results():
         print("Warning: data.nCells not found in config, exiting...")
         exit()
 
-    # Load the postprocessed sampling results (truth) from file ./data/postprocessed_sampling_results.npz
-    postprocessed_sampling_results = np.load('./data/postprocessed_sampling_results.npz') 
-    results_array = postprocessed_sampling_results["results_array"]
-    cell_centers = postprocessed_sampling_results["cell_centers"]
-    successful_samples = postprocessed_sampling_results["successful_samples"]
-
-    print("successful_samples.shape: ", successful_samples.shape)
-
-    # Load the test results from file ./data/test_results.npz
+    # Load predictions and targets from file ./data/test_results.npz
     test_results = np.load('./data/test_results.npz')
     denorm_predictions = test_results["denorm_predictions"]
     denorm_targets = test_results["denorm_targets"]
+
+    print("denorm_predictions.shape: ", denorm_predictions.shape)
+    print("denorm_targets.shape: ", denorm_targets.shape)
 
     # Load the split indices (1-based) from file ./data/split_indices.json
     split_indices = json.load(open('./data/split_indices.json')) 
@@ -559,7 +501,7 @@ def plot_test_results():
     nCases_in_test_dataset = len(test_indices)
     num_samples_to_plot = min(4, nCases_in_test_dataset)
 
-    #randomly select 4 samples from the test indices (1-based)
+    #randomly select some samples from the test indices (1-based)
     #random_indices = np.random.choice(test_indices, size=num_samples_to_plot, replace=False)
     random_indices = [522, 738, 741, 661]
 
@@ -576,34 +518,75 @@ def plot_test_results():
     
     print("corresponding indices: ", corresponding_indices)
 
-    #create four different colors for the plots
-    colors = ['black', 'red', 'blue', 'green']
-    
-    plt.figure(figsize=(10, 8))
-
     for i in range(num_samples_to_plot):
         #get the corresponding parameter value (Q)
-        Q = successful_samples[random_indices[i]-1, 0]
+        #Q = successful_samples[random_indices[i]-1, 0]
 
-        print(f"Sample {random_indices[i]}, Q={Q:.3f} m$^3$/s")
+        #get the current case's results: h, u, v
+        h_pred = denorm_predictions[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,0]
+        u_pred = denorm_predictions[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,1]
+        v_pred = denorm_predictions[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,2]
 
-        plt.plot(cell_centers[:, 0], denorm_targets[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,2] + cell_centers[:, 2], color=colors[i], label=f'Sample {random_indices[i]}, Q={Q:.3f} m$^3$/s')
-        plt.plot(cell_centers[:, 0], denorm_predictions[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,2] + cell_centers[:, 2], color=colors[i], linestyle='--')
+        h_target = denorm_targets[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,0]
+        u_target = denorm_targets[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,1]
+        v_target = denorm_targets[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,2]
+
+        #read the empty vtk file which only has the mesh information, then add the results to the vtk file and save it
+        # Read the VTK file
+        reader = vtk.vtkUnstructuredGridReader()
+        reader.SetFileName("data/case_mesh.vtk")
+        reader.Update()
+        mesh = reader.GetOutput()
+
+        # Create cell data arrays for the predicted results
+        h_pred_array = numpy_to_vtk(h_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        h_pred_array.SetName("Water_Depth_Pred")
         
-    #plot the bed elevation
-    plt.plot(cell_centers[:, 0], cell_centers[:, 2], color='k', label='Bed Elevation')
-    
-    plt.legend()
+        u_pred_array = numpy_to_vtk(u_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        u_pred_array.SetName("X_Velocity_Pred")
+        
+        v_pred_array = numpy_to_vtk(v_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        v_pred_array.SetName("Y_Velocity_Pred")
 
-    #add axis labels
-    plt.xlabel('x (m)', fontsize=14)
-    plt.ylabel('Elevation (m)', fontsize=14)        
-    
-    plt.tight_layout()
-    plt.savefig('./test_prediction_samples.png')
-    plt.show()
+        # Create cell data arrays for the target results
+        h_target_array = numpy_to_vtk(h_target, deep=True, array_type=vtk.VTK_FLOAT)
+        h_target_array.SetName("Water_Depth_Target")
+        
+        u_target_array = numpy_to_vtk(u_target, deep=True, array_type=vtk.VTK_FLOAT)
+        u_target_array.SetName("X_Velocity_Target")
+        
+        v_target_array = numpy_to_vtk(v_target, deep=True, array_type=vtk.VTK_FLOAT)
+        v_target_array.SetName("Y_Velocity_Target")
 
-    print(f"Saved prediction samples plot to './test_prediction_samples.png'")
+        # Create velocity vectors for predicted values
+        velocity_pred = np.column_stack((u_pred, v_pred, np.zeros_like(u_pred)))  # Add z-component as 0
+        velocity_pred_array = numpy_to_vtk(velocity_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        velocity_pred_array.SetNumberOfComponents(3)
+        velocity_pred_array.SetName("Velocity_Pred")
+
+        # Create velocity vectors for target values
+        velocity_target = np.column_stack((u_target, v_target, np.zeros_like(u_target)))  # Add z-component as 0
+        velocity_target_array = numpy_to_vtk(velocity_target, deep=True, array_type=vtk.VTK_FLOAT)
+        velocity_target_array.SetNumberOfComponents(3)
+        velocity_target_array.SetName("Velocity_Target")
+
+        # Add the arrays to the mesh as cell data
+        mesh.GetCellData().AddArray(h_pred_array)
+        mesh.GetCellData().AddArray(u_pred_array)
+        mesh.GetCellData().AddArray(v_pred_array)
+        mesh.GetCellData().AddArray(h_target_array)
+        mesh.GetCellData().AddArray(u_target_array)
+        mesh.GetCellData().AddArray(v_target_array)
+        mesh.GetCellData().AddArray(velocity_pred_array)
+        mesh.GetCellData().AddArray(velocity_target_array)
+
+        # Create a writer
+        writer = vtk.vtkUnstructuredGridWriter()
+        writer.SetFileName(f"data/case_{random_indices[i]}_results.vtk")
+        writer.SetInputData(mesh)
+        writer.Write()
+
+        print(f"Saved results for case {random_indices[i]} to data/case_{random_indices[i]}_results.vtk")
 
 def plot_training_history(history_file_name):
     """Plot the training history from the history json file."""
@@ -654,16 +637,16 @@ if __name__ == "__main__":
     mp.set_start_method('spawn', force=True)
     
     # Train the model
-    deeponet_train_with_full_data()
+    #deeponet_train_with_full_data()
 
     # Plot training history
     #plot_training_history('./history_20250314_154327.json')
 
-    # Test the model
-    #deeponet_test(best_model_path='./checkpoints/deeponet_epoch_78.pt')
+    # Test the model with the best model
+    #deeponet_test(best_model_path='./checkpoints/deeponet_epoch_99.pt', dataset_mean_std_path='./data/dataset_mean_std.json')
 
-    # Plot test results
-    #plot_test_results()
+    # Plot test results (convert the test predictions to vtk files)
+    plot_test_results()
 
     # Calculate and print the total execution time
     main_execution_time = time.time() - main_start_time
