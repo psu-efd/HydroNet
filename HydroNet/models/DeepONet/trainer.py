@@ -11,7 +11,7 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import HydraulicDataset, get_hydraulic_dataloader
+from ...data import DeepONetDataset, get_deeponet_dataloader
 from .model import BranchNet
 
 
@@ -330,18 +330,18 @@ class DeepONetTrainer:
         val_dir = self.config.get('data.val_data_path', './data/val')
         
         # Create datasets
-        train_dataset = HydraulicDataset(data_dir, normalize=False)
-        val_dataset = HydraulicDataset(val_dir, normalize=False)
+        train_dataset = DeepONetDataset(data_dir, normalize=False)
+        val_dataset = DeepONetDataset(val_dir, normalize=False)
         
         # Create data loaders
-        train_loader = get_hydraulic_dataloader(
+        train_loader = get_deeponet_dataloader(
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=4
         )
         
-        val_loader = get_hydraulic_dataloader(
+        val_loader = get_deeponet_dataloader(
             val_dataset,
             batch_size=self.batch_size,
             shuffle=False,

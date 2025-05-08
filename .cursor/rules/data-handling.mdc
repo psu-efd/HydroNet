@@ -1,0 +1,69 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Data Handling Guide
+
+## Dataset Structure
+The PINN dataset is managed through the [PINNDataset](mdc:HydroNet/data/pinn_dataset.py) class, which handles:
+1. Domain points (PDE collocation points)
+2. Initial condition points
+3. Boundary condition points
+4. Observation data points (if available)
+
+## Data Types
+
+### Domain Points
+- Used for computing PDE residuals
+- Sampled uniformly or using Latin Hypercube Sampling
+- Shape: [N, 3] for (x, y, t) coordinates
+
+### Initial Condition Points
+- Used for initial condition loss
+- Sampled at t=0
+- Shape: [N, 3] for (x, y, t) coordinates
+- Includes initial values for state variables
+
+### Boundary Points
+- Used for boundary condition loss
+- Sampled along domain boundaries
+- Includes:
+  - Point coordinates
+  - Boundary IDs
+  - Normal vectors
+  - Boundary lengths
+
+### Observation Data
+- Optional observational data
+- Used for data loss term
+- Shape: [N, 3] for (x, y, t) coordinates
+- Includes observed values and data flags
+
+## Data Preprocessing
+1. Normalize input coordinates to [0, 1] range
+2. Scale state variables appropriately
+3. Handle missing or invalid data
+4. Ensure proper device placement (CPU/GPU)
+
+## Best Practices
+1. Use appropriate sampling strategies for each point type
+2. Implement proper data validation
+3. Handle edge cases and boundary conditions carefully
+4. Use efficient data loading and preprocessing
+5. Implement proper data augmentation if needed
+
+## Data Loading
+Data can be loaded from:
+1. CSV files
+2. NumPy arrays
+3. Custom data sources
+4. Synthetic data generation
+
+## Data Validation
+1. Check coordinate ranges
+2. Validate boundary conditions
+3. Verify data consistency
+4. Handle missing values
+5. Check data types and shapes
+

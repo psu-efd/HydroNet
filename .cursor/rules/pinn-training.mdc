@@ -1,0 +1,65 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# PINN Training Guide
+
+## Training Configuration
+The PINN training process is configured through a YAML configuration file. Key configuration sections include:
+
+### Optimizer Settings
+```yaml
+training:
+  optimizers: ['adam', 'lbfgs']  # List of optimizers to use sequentially
+  learning_rates: [0.001, 0.0001]  # Learning rates for each optimizer
+  epochs: [1000, 500]  # Number of epochs for each optimizer
+  weight_decay: 1e-5  # L2 regularization
+```
+
+### Scheduler Settings
+```yaml
+training:
+  scheduler:
+    type: 'step'  # or 'cosine'
+    step_size: 1000
+    gamma: 0.5
+```
+
+### Early Stopping
+```yaml
+training:
+  early_stopping:
+    use_early_stopping: true
+    patience: 500
+    min_delta: 1e-5
+```
+
+## Training Process
+1. The training process uses full batch training (no mini-batches)
+2. Multiple optimizers can be used sequentially
+3. Learning rate scheduling is supported
+4. Early stopping is implemented to prevent overfitting
+5. Checkpoints are saved periodically
+
+## Loss Components
+The total loss is composed of:
+1. PDE loss (physics equations)
+2. Initial condition loss
+3. Boundary condition loss
+4. Data loss (if observational data is available)
+
+## Best Practices
+1. Start with Adam optimizer for initial training
+2. Switch to L-BFGS for fine-tuning
+3. Monitor individual loss components
+4. Use appropriate learning rates for each optimizer
+5. Implement gradient clipping to prevent exploding gradients
+
+## Monitoring
+Training progress can be monitored through:
+1. TensorBoard logs
+2. Regular console output
+3. Saved checkpoints
+4. Loss component history
+

@@ -2,8 +2,9 @@
 Example usage of the HydroNet framework.
 
 This script demonstrates how to use the PINN component of HydroNet for solving 
-shallow water equations with physics-informed constraints.
+shallow water equations with physics and data-driven constraints.
 """
+
 import os
 import sys
 import numpy as np

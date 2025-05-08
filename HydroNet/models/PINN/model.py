@@ -288,6 +288,12 @@ class SWE_PINN(nn.Module):
         
         # Add small epsilon to prevent complete zero
         eps = torch.tensor(1e-8, device=self.device)
+
+        pde_loss_components = {
+            'continuity_loss': continuity_loss.item(),
+            'momentum_x_loss': momentum_x_loss.item(),
+            'momentum_y_loss': momentum_y_loss.item()
+        }
         
         pde_loss = (
             self.loss_weights['continuity'] * (continuity_loss + eps) +
@@ -295,7 +301,7 @@ class SWE_PINN(nn.Module):
             self.loss_weights['momentum_y'] * (momentum_y_loss + eps)
         )
         
-        return pde_loss, h, u, v
+        return pde_loss, pde_loss_components, h, u, v
         
     def compute_initial_loss(self, initial_points, initial_values):
         """
@@ -467,30 +473,35 @@ class SWE_PINN(nn.Module):
         
         return boundary_loss, boundary_loss_components, h, u, v
         
-    def compute_data_loss(self, data_points, data_values):
+    def compute_data_loss(self, data_points, data_values, data_flags):
         """
         Compute the loss for data points.
         
         Args:
             data_points (torch.Tensor): Data points.
             data_values (torch.Tensor): True values at data points.
+            data_flags (torch.Tensor): Flags indicating which variables are available (h, u, v).
             
         Returns:
             torch.Tensor: Total data loss.
+            h_pred, u_pred, v_pred: Predicted values at data points.
         """
         # Input validation
-        if data_points is None or data_values is None:
-            raise ValueError("data_points and data_values cannot be None")
-        if not isinstance(data_points, torch.Tensor) or not isinstance(data_values, torch.Tensor):
-            raise TypeError("data_points and data_values must be torch.Tensors")
+        if data_points is None or data_values is None or data_flags is None:
+            raise ValueError("data_points, data_values, and data_flags cannot be None")
+        if not isinstance(data_points, torch.Tensor) or not isinstance(data_values, torch.Tensor) or not isinstance(data_flags, torch.Tensor):
+            raise TypeError("data_points, data_values, and data_flags must be torch.Tensors")
         
         # Check shapes
         if data_values.shape[1] != self.output_dim:
             raise ValueError(f"data_values must have shape [batch_size, {self.output_dim}], got {data_values.shape}")
+        if data_flags.shape[1] != self.output_dim:
+            raise ValueError(f"data_flags must have shape [batch_size, {self.output_dim}], got {data_flags.shape}")
         
         # Ensure tensors are on the same device
         data_points = data_points.to(self.device)
         data_values = data_values.to(self.device)
+        data_flags = data_flags.to(self.device)
         
         # Get model predictions at data points
         predictions = self.forward(data_points)
@@ -498,12 +509,15 @@ class SWE_PINN(nn.Module):
         # Split predictions and values into components
         h_pred, u_pred, v_pred = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
         h_true, u_true, v_true = data_values[:, 0:1], data_values[:, 1:2], data_values[:, 2:3]
+        h_flag, u_flag, v_flag = data_flags[:, 0:1], data_flags[:, 1:2], data_flags[:, 2:3]
         
         # Compute component-wise losses with numerical stability
         eps = torch.tensor(1e-8, device=self.device)
-        h_loss = torch.mean((h_pred - h_true)**2) + eps
-        u_loss = torch.mean((u_pred - u_true)**2) + eps
-        v_loss = torch.mean((v_pred - v_true)**2) + eps
+        
+        # Only compute loss for points where the variable is available (flag = 1)
+        h_loss = torch.mean(h_flag * (h_pred - h_true)**2) + eps
+        u_loss = torch.mean(u_flag * (u_pred - u_true)**2) + eps
+        v_loss = torch.mean(v_flag * (v_pred - v_true)**2) + eps
         
         # Combine losses with weights
         data_loss = (
@@ -519,27 +533,21 @@ class SWE_PINN(nn.Module):
             'data_v_loss': v_loss.item(),
             'total_data_loss': data_loss.item()
         }
-        
-        #print(f"loss_components: {loss_components}")
 
         return data_loss, loss_components, h_pred, u_pred, v_pred
         
-    def compute_total_loss(self, pde_points, initial_points, initial_values, boundary_info, data_points, data_values):
+    def compute_total_loss(self, pde_points, initial_points, initial_values, boundary_info, data_points, data_values, data_flags):
         """
         Compute the total loss for the PINN model.
-
-        - PDE loss is computed in compute_pde_loss.
-        - Initial condition loss is computed in compute_initial_loss.
-        - Boundary condition mismatch is computed in compute_boundary_loss.
-        - Data loss is computed in compute_data_loss.
         
         Args:
-            pde_points (torch.Tensor): Points inside the domain.
-            initial_points (torch.Tensor): Points at initial time.
+            pde_points (torch.Tensor): Points for enforcing PDE residuals.
+            initial_points (torch.Tensor): Points for enforcing initial conditions.
             initial_values (torch.Tensor): True values at initial points.
-            boundary_info (tuple): Tuple of (boundary_points, boundary_ids, boundary_normals, boundary_lengths).
-            data_points (torch.Tensor): Data points.
+            boundary_info (tuple): Tuple containing boundary points, identifiers, normals, and lengths.
+            data_points (torch.Tensor): Points for data loss.
             data_values (torch.Tensor): True values at data points.
+            data_flags (torch.Tensor): Flags indicating which variables are available at data points.
             
         Returns:
             tuple: (total_loss, loss_components, predictions_and_true_values)
@@ -549,104 +557,91 @@ class SWE_PINN(nn.Module):
         initial_loss = torch.tensor(0.0, device=self.device)
         boundary_loss = torch.tensor(0.0, device=self.device)
         data_loss = torch.tensor(0.0, device=self.device)
-
-        #loss components
+        
+        # Initialize loss components
+        pde_loss_components = {}
+        initial_loss_components = {}
         boundary_loss_components = {}
         data_loss_components = {}
-
-        #predictions at pde points
-        h_pred_pde_points = None
-        u_pred_pde_points = None
-        v_pred_pde_points = None
-
-        #predictions at initial points
-        h_pred_initial_points = None
-        u_pred_initial_points = None
-        v_pred_initial_points = None
-
-        #predictions at boundary points
-        h_pred_boundary_points = None
-        u_pred_boundary_points = None
-        v_pred_boundary_points = None
-
-        #predictions at data points
-        h_pred_data_points = None
-        u_pred_data_points = None
-        v_pred_data_points = None
         
-        # Compute PDE loss if provided
+        # Initialize predictions and true values
+        predictions_and_true_values = {
+            "bPDE_loss": self.bPDE_loss,
+            "bInitial_loss": self.bInitial_loss,
+            "bBoundary_loss": self.bBoundary_loss,
+            "bData_loss": self.bData_loss
+        }
+        
+        # Compute PDE loss
         if self.bPDE_loss:
-            pde_loss, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points)
+            if pde_points is not None:
+                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points)
+                predictions_and_true_values.update({
+                    'pde_points': pde_points,
+                    'h_pred_pde_points': h_pred_pde_points,
+                    'u_pred_pde_points': u_pred_pde_points,
+                    'v_pred_pde_points': v_pred_pde_points
+                })
         
-        # Compute initial condition loss if it is a transient problem
-        if self.bInitial_loss:            
+        # Compute initial loss
+        if self.bInitial_loss:
             if initial_points is not None and initial_values is not None:
-                initial_loss, h_pred_initial_points, u_pred_initial_points, v_pred_initial_points = self.compute_initial_loss(initial_points, initial_values)
-            
-        # Compute boundary condition loss if provided
-        if self.bBoundary_loss:            
+                initial_loss, initial_loss_components, h_pred_initial_points, u_pred_initial_points, v_pred_initial_points = self.compute_initial_loss(initial_points, initial_values)
+                predictions_and_true_values.update({
+                    'initial_points': initial_points,
+                    'h_pred_initial_points': h_pred_initial_points,
+                    'u_pred_initial_points': u_pred_initial_points,
+                    'v_pred_initial_points': v_pred_initial_points,
+                    'h_true_initial_points': initial_values[:, 0:1],
+                    'u_true_initial_points': initial_values[:, 1:2],
+                    'v_true_initial_points': initial_values[:, 2:3]
+                })
+        
+        # Compute boundary loss
+        if self.bBoundary_loss:
             if boundary_info is not None:
                 boundary_loss, boundary_loss_components, h_pred_boundary_points, u_pred_boundary_points, v_pred_boundary_points = self.compute_boundary_loss(boundary_info)
-            
-        # Compute data loss if data is used
-        if self.bData_loss:            
-            if data_points is not None and data_values is not None:
-                data_loss, data_loss_components, h_pred_data_points, u_pred_data_points, v_pred_data_points = self.compute_data_loss(data_points, data_values)
-            
+                predictions_and_true_values.update({
+                    'boundary_points': boundary_info[0],
+                    'h_pred_boundary_points': h_pred_boundary_points,
+                    'u_pred_boundary_points': u_pred_boundary_points,
+                    'v_pred_boundary_points': v_pred_boundary_points
+                })
+        
+        # Compute data loss
+        if self.bData_loss:
+            if data_points is not None and data_values is not None and data_flags is not None:
+                data_loss, data_loss_components, h_pred_data_points, u_pred_data_points, v_pred_data_points = self.compute_data_loss(data_points, data_values, data_flags)
+                predictions_and_true_values.update({
+                    'data_points': data_points,
+                    'h_pred_data_points': h_pred_data_points,
+                    'u_pred_data_points': u_pred_data_points,
+                    'v_pred_data_points': v_pred_data_points,
+                    'h_true_data_points': data_values[:, 0:1],
+                    'u_true_data_points': data_values[:, 1:2],
+                    'v_true_data_points': data_values[:, 2:3],
+                    'data_flags': data_flags
+                })
+        
         # Compute total loss
         total_loss = (
-            pde_loss +
-            self.loss_weights['initial'] * initial_loss +
-            self.loss_weights['boundary'] * boundary_loss +
-            self.loss_weights['data'] * data_loss
+            self.loss_weights.get('pde', 1.0) * pde_loss +
+            self.loss_weights.get('initial', 1.0) * initial_loss +
+            self.loss_weights.get('boundary', 1.0) * boundary_loss +
+            self.loss_weights.get('data', 1.0) * data_loss
         )
         
         # Return total loss and individual components
         loss_components = {
             'pde_loss': pde_loss.item(),
+            'pde_loss_components': pde_loss_components,
             'initial_loss': initial_loss.item(),
+            'initial_loss_components': initial_loss_components,
             'boundary_loss': boundary_loss.item(),
             'boundary_loss_components': boundary_loss_components,
             'data_loss': data_loss.item(),
             'data_loss_components': data_loss_components,
             'total_loss': total_loss.item()
         }
-
-        #store predictions and true values
-        predictions_and_true_values = {"bPDE_loss": self.bPDE_loss, "bInitial_loss": self.bInitial_loss, "bBoundary_loss": self.bBoundary_loss, "bData_loss": self.bData_loss}
-
-        #pde points
-        if self.bPDE_loss:
-            predictions_and_true_values['pde_points'] = pde_points
-            predictions_and_true_values['h_pred_pde_points'] = h_pred_pde_points
-            predictions_and_true_values['u_pred_pde_points'] = u_pred_pde_points
-            predictions_and_true_values['v_pred_pde_points'] = v_pred_pde_points
-
-        #initial points
-        if self.bInitial_loss:
-            predictions_and_true_values['initial_points'] = initial_points
-            predictions_and_true_values['h_pred_initial_points'] = h_pred_initial_points
-            predictions_and_true_values['u_pred_initial_points'] = u_pred_initial_points
-            predictions_and_true_values['v_pred_initial_points'] = v_pred_initial_points
-            predictions_and_true_values['h_true_initial_points'] = initial_values[:, 0:1]
-            predictions_and_true_values['u_true_initial_points'] = initial_values[:, 1:2]
-            predictions_and_true_values['v_true_initial_points'] = initial_values[:, 2:3]
-            
-        #boundary points
-        if self.bBoundary_loss:
-            predictions_and_true_values['boundary_points'] = boundary_info[0]
-            predictions_and_true_values['h_pred_boundary_points'] = h_pred_boundary_points
-            predictions_and_true_values['u_pred_boundary_points'] = u_pred_boundary_points
-            predictions_and_true_values['v_pred_boundary_points'] = v_pred_boundary_points
-            
-        #data points
-        if self.bData_loss:
-            predictions_and_true_values['data_points'] = data_points
-            predictions_and_true_values['h_pred_data_points'] = h_pred_data_points
-            predictions_and_true_values['u_pred_data_points'] = u_pred_data_points
-            predictions_and_true_values['v_pred_data_points'] = v_pred_data_points
-            predictions_and_true_values['h_true_data_points'] = data_values[:, 0:1]
-            predictions_and_true_values['u_true_data_points'] = data_values[:, 1:2]
-            predictions_and_true_values['v_true_data_points'] = data_values[:, 2:3]
         
         return total_loss, loss_components, predictions_and_true_values

@@ -4,7 +4,7 @@ This set of tools accomplish this task: convert a Gmsh 2D mesh to points needed 
     - Save format: JSON
 
 
-Note: currently only 2D mesh is tested. To solve 3D PDEs, some modifications are needed.
+Note: currently only 2D mesh is tested. To solve 3D PDEs, modifications are needed.
 
 """
 
@@ -28,6 +28,7 @@ def generate_random01_exclude_boundaries_with_center(centers, size=1):
     numpy.ndarray
         Array of shape (size, len(centers)) containing random numbers
     """
+
     # Small number to nudge the random point away from boundary
     epsilon = 0.05
 
@@ -73,11 +74,12 @@ def point_on_triangle(pt1, pt2, pt3, s, t):
     Returns
     -------
     tuple
-        (x, y) coordinates of the point
+        (x, y, z) coordinates of the point
     """
     s, t = sorted([s, t])  # Ensure s <= t
     return (s * pt1[0] + (t - s) * pt2[0] + (1 - t) * pt3[0],
-            s * pt1[1] + (t - s) * pt2[1] + (1 - t) * pt3[1])
+            s * pt1[1] + (t - s) * pt2[1] + (1 - t) * pt3[1],
+            s * pt1[2] + (t - s) * pt2[2] + (1 - t) * pt3[2])
 
 def point_on_line(pt1, pt2, s):
     """Calculate a point on a line segment using linear interpolation.
@@ -92,13 +94,16 @@ def point_on_line(pt1, pt2, s):
     Returns
     -------
     tuple
-        (x, y) coordinates of the point
+        (x, y, z) coordinates of the point
     """
     return (s * pt1[0] + (1 - s) * pt2[0],
-            s * pt1[1] + (1 - s) * pt2[1])
+            s * pt1[1] + (1 - s) * pt2[1],
+            s * pt1[2] + (1 - s) * pt2[2])
 
 def gmsh2D_to_points(mshFileName, refinement=1):
-    """Convert Gmsh 2D mesh to points for PINN training.
+    """Convert Gmsh 2D mesh to points for PINN training. The saved "mesh_points.json" file can be used for PINN training. The file contains "equation_points" and "boundary_points".
+
+    The saved points only have spatial information. The time information is not included.
 
     Parameters
     ----------
@@ -110,7 +115,8 @@ def gmsh2D_to_points(mshFileName, refinement=1):
     Returns
     -------
     None
-        Saves points to points.json
+        Saves points to mesh_points.json
+        Saves domain and boundary meshes to domain_{filename}.xdmf and boundaries_{filename}.xdmf
     """
     # Validate refinement parameter
     if not isinstance(refinement, int) or refinement < 1:
@@ -126,12 +132,12 @@ def gmsh2D_to_points(mshFileName, refinement=1):
         raise RuntimeError(f"Failed to read Gmsh file: {e}")
 
     # Process domain (interior) points
-    cell_mesh, cell_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["triangle", "quad"], prune_z=True)
+    cell_mesh, cell_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["triangle", "quad"], prune_z=False)
     meshio.write(f"domain_{filename}.xdmf", cell_mesh)
     equation_points_dict = process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement)
 
     # Process boundary points
-    boundary_mesh, boundary_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["line"], prune_z=True)
+    boundary_mesh, boundary_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["line"], prune_z=False)
     meshio.write(f"boundaries_{filename}.xdmf", boundary_mesh)
     boundary_points_dict = process_boundary_mesh(boundary_mesh, boundary_physical_ID_to_name, refinement)
 
@@ -144,7 +150,7 @@ def gmsh2D_to_points(mshFileName, refinement=1):
     }
 
     # Save to JSON
-    with open("points.json", 'w') as f:
+    with open("mesh_points.json", 'w') as f:
         json.dump(all_points, f, indent=4, sort_keys=False)
 
 def extract_mesh_parts(mesh, desired_cell_types, prune_z=False):
@@ -285,6 +291,8 @@ def process_boundary_mesh(boundary_mesh, boundary_physical_ID_to_name, refinemen
 def process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement):
     """Process domain mesh to generate interior points.
 
+    Note: currently only support quad and triangle cells.
+
     Parameters
     ----------
     cell_mesh : meshio.Mesh
@@ -324,13 +332,12 @@ def process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement):
 
             for st in st_all:
                 point = point_on_triangle(p0, p1, p2, st[0], st[1])
-                equation_points[pointID] = [point[0], point[1], 0.0]
+                equation_points[pointID] = [point[0], point[1], point[2]]
                 
                 equation_points_dict[str(pointID)] = {
                     "x": point[0],
                     "y": point[1],
-                    "z": 0.0,
-                    "t": 0.0,
+                    "z": point[2],
                     "spatial_dimensionality": 2
                 }
                 pointID += 1
@@ -353,13 +360,12 @@ def process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement):
                 top_edge = (1-s)*p3 + s*p2
                 point = (1-t)*bottom_edge + t*top_edge
                 
-                equation_points[pointID] = [point[0], point[1], 0.0]
+                equation_points[pointID] = [point[0], point[1], point[2]]
                 
                 equation_points_dict[str(pointID)] = {
                     "x": point[0],
                     "y": point[1],
-                    "z": 0.0,
-                    "t": 0.0,
+                    "z": point[2],
                     "spatial_dimensionality": 2
                 }
                 pointID += 1

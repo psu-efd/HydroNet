@@ -41,7 +41,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, HydraulicDataset, Config, get_hydraulic_dataloader
+from HydroNet import DeepONetModel, DeepONetTrainer, DeepONetDataset, Config, get_deeponet_dataloader
 
 def check_data_normalization(train_dataset, val_dataset, test_dataset=None):
     """

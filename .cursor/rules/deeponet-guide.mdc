@@ -1,0 +1,124 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# DeepONet and Physics-Informed DeepONet Guide
+
+## Overview
+The framework implements two operator learning approaches:
+1. DeepONet: Pure data-driven operator learning
+2. Physics-Informed DeepONet: Physics-constrained operator learning
+
+## Model Architectures
+
+### DeepONet
+The DeepONet architecture consists of:
+1. Branch Network: Processes input functions
+2. Trunk Network: Processes evaluation points
+3. Operator: Combines branch and trunk outputs
+
+Key components in [HydroNet/models/DeepONet/](mdc:HydroNet/models/DeepONet):
+- [model.py](mdc:HydroNet/models/DeepONet/model.py): Base DeepONet implementation
+- [trainer.py](mdc:HydroNet/models/DeepONet/trainer.py): Training pipeline
+
+### Physics-Informed DeepONet
+Extends DeepONet with physics constraints:
+1. Inherits DeepONet architecture
+2. Adds physics-informed loss terms
+3. Enforces PDE constraints
+
+Key components in [HydroNet/models/PI_DeepONet/](mdc:HydroNet/models/PI_DeepONet):
+- [model.py](mdc:HydroNet/models/PI_DeepONet/model.py): PI-DeepONet implementation
+- [trainer.py](mdc:HydroNet/models/PI_DeepONet/trainer.py): Physics-informed training
+
+## Data Structure
+
+### Input Functions
+- Represented as discretized functions
+- Shape: [batch_size, num_points, input_dim]
+- Can be:
+  - Initial conditions
+  - Boundary conditions
+  - Source terms
+  - Parameters
+
+### Evaluation Points
+- Points where operator is evaluated
+- Shape: [batch_size, num_points, point_dim]
+- Can be:
+  - Spatial coordinates
+  - Temporal coordinates
+  - Parameter values
+
+### Output Functions
+- Operator outputs at evaluation points
+- Shape: [batch_size, num_points, output_dim]
+- Can be:
+  - Solution fields
+  - Derived quantities
+  - System responses
+
+## Training Process
+
+### DeepONet Training
+1. Data-driven training
+2. MSE loss on operator outputs
+3. Optional regularization
+4. Batch training support
+
+### PI-DeepONet Training
+1. Combined loss function:
+   - Data loss (MSE)
+   - Physics loss (PDE residuals)
+   - Optional boundary/initial condition losses
+2. Physics-informed constraints
+3. Adaptive loss weighting
+
+## Best Practices
+1. Proper function discretization
+2. Appropriate network architectures
+3. Careful physics constraint implementation
+4. Efficient training strategies
+5. Proper validation procedures
+
+## Configuration
+Example configuration for DeepONet:
+```yaml
+model:
+  type: 'deeponet'
+  branch_net:
+    hidden_layers: [100, 100, 100]
+    activation: 'tanh'
+  trunk_net:
+    hidden_layers: [100, 100, 100]
+    activation: 'tanh'
+  operator:
+    type: 'vanilla'  # or 'modified'
+```
+
+Example configuration for PI-DeepONet:
+```yaml
+model:
+  type: 'pi_deeponet'
+  branch_net:
+    hidden_layers: [100, 100, 100]
+    activation: 'tanh'
+  trunk_net:
+    hidden_layers: [100, 100, 100]
+    activation: 'tanh'
+  operator:
+    type: 'vanilla'
+  physics:
+    pde_weight: 1.0
+    boundary_weight: 1.0
+    initial_weight: 1.0
+```
+
+## Applications
+1. Solution operator learning
+2. Parameter-to-solution mapping
+3. Inverse problems
+4. Uncertainty quantification
+5. Real-time predictions
+

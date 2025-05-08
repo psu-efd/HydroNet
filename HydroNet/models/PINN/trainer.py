@@ -216,14 +216,16 @@ class PINNTrainer:
 
         # Get data points if it is included in loss and available
         if self.bData_loss:
-            data_points, data_values = self.dataset.get_data_points()
+            data_points, data_values, data_flags = self.dataset.get_data_points()
 
             if data_points is not None:
                 data_points = data_points.to(self.device)
                 data_values = data_values.to(self.device)
+                data_flags = data_flags.to(self.device)
             else:
                 data_points = None
                 data_values = None
+                data_flags = None
         else:
             data_points = None
             data_values = None
@@ -292,7 +294,8 @@ class PINNTrainer:
                     initial_values=initial_values,
                     boundary_info=(boundary_points, boundary_ids, boundary_normals, boundary_lengths),
                     data_points=data_points,
-                    data_values=data_values
+                    data_values=data_values,
+                    data_flags=data_flags
                 )
                 
                 # Backward pass

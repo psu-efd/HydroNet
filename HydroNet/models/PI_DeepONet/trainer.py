@@ -11,7 +11,7 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import HydraulicDataset, PINNDataset, get_pinn_dataloader
+from ...data import DeepONetDataset, PINNDataset
 
 
 class PI_DeepONetTrainer:
@@ -362,18 +362,18 @@ class PI_DeepONetTrainer:
         val_dir = self.config.get('data.val_data_path', '../data/val')
         
         # Create datasets
-        train_dataset = HydraulicDataset(data_dir, split='train', normalize=True)
-        val_dataset = HydraulicDataset(val_dir, split='val', normalize=True)
+        train_dataset = DeepONetDataset(data_dir, split='train', normalize=True)
+        val_dataset = DeepONetDataset(val_dir, split='val', normalize=True)
         
         # Create data loaders
-        train_loader = get_pinn_dataloader(
+        train_loader = get_deeponet_dataloader(
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=4
         )
         
-        val_loader = get_pinn_dataloader(
+        val_loader = get_deeponet_dataloader(
             val_dataset,
             batch_size=self.batch_size,
             shuffle=False,

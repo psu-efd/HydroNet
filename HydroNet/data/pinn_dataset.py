@@ -1,12 +1,13 @@
 """
-Data loading utilities for physics-informed neural networks (PINNs).
+Data loading utilities for physics-informed neural networks (PINNs). 
+PINNDataset is a subclass of torch.utils.data.Dataset: this ensures compatibility with PyTorch's data loading ecosystem and allows you to use the dataset with PyTorch's DataLoader
 """
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import os
 
-class PINNDataset:
+class PINNDataset(Dataset):
     """Dataset for physics-informed neural networks using full batch training."""
     
     def __init__(self, config, model):
@@ -53,6 +54,7 @@ class PINNDataset:
         - All .npy files contain numpy arrays
         - Coordinates are in columns: x, y, t for unsteady problems and x, y for steady problems
         - Boundary info contains identifiers, normal vectors, and represented lengths
+        - Data flags indicate which variables (h, u, v) are available for each point
         """
         
         data_dir = self.config.get('data.points_dir')
@@ -102,14 +104,17 @@ class PINNDataset:
         if self.bData_loss:
             data_points_file = os.path.join(data_dir, 'data_points.npy')      #data points: x, y, t for unsteady problems and x, y for steady problems
             data_values_file = os.path.join(data_dir, 'data_values.npy')      #data values: h, u, v
-            if os.path.exists(data_points_file) and os.path.exists(data_values_file):
+            data_flags_file = os.path.join(data_dir, 'data_flags.npy')        #data flags: h_flag, u_flag, v_flag
+            if os.path.exists(data_points_file) and os.path.exists(data_values_file) and os.path.exists(data_flags_file):
                 self.data_points = np.load(data_points_file)
-                self.data_values = np.load(data_values_file)                
+                self.data_values = np.load(data_values_file)
+                self.data_flags = np.load(data_flags_file)
             else:
-                raise FileNotFoundError(f"Data points or values file not found: {data_points_file} or {data_values_file}")
+                raise FileNotFoundError(f"Data points, values, or flags file not found: {data_points_file}, {data_values_file}, or {data_flags_file}")
         else:
             self.data_points = None
             self.data_values = None
+            self.data_flags = None
 
         # Convert to PyTorch tensors and move to device
         if self.bPDE_loss and self.interior_points is not None:
@@ -136,6 +141,7 @@ class PINNDataset:
         if self.bData_loss and self.data_points is not None:
             self.data_points = torch.tensor(self.data_points, dtype=torch.float32, device=self.device)
             self.data_values = torch.tensor(self.data_values, dtype=torch.float32, device=self.device)
+            self.data_flags = torch.tensor(self.data_flags, dtype=torch.float32, device=self.device)
 
     def __len__(self):
         """Return the total number of collocation points."""
@@ -220,15 +226,16 @@ class PINNDataset:
     def get_data_points(self):
         """Get all points for data points."""
         if self.bData_loss:
-            return self.data_points, self.data_values
+            return self.data_points, self.data_values, self.data_flags
         else:
             print("No data points for this problem")
             return None
 
 
-
 def get_pinn_dataloader(dataset, batch_size, shuffle, num_workers):
     """
+    (Currently not used. Not sure if it's needed. For PINN, we pass the entire dataset to the model.)
+
     Create a DataLoader for a PINN dataset.
     
     Args:

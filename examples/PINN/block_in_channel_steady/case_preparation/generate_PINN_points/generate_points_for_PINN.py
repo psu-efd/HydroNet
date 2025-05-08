@@ -14,17 +14,21 @@ import gmsh
 from vtk import vtkUnstructuredGridReader, vtkCellCenters
 from vtk.util import numpy_support
 
-# Get the project root directory (assumes this script is in examples/DeepONet directory)
+# Get the project root directory (assumes this script is in examples/PINN/block_in_channel_steady/case_preparation/generate_PINN_points directory)
 script_path = os.path.abspath(__file__)
-examples_dir = os.path.dirname(os.path.dirname(os.path.dirname(script_path)))
-project_root = os.path.dirname(examples_dir)
+script_dir = os.path.dirname(script_path)  # generate_PINN_points directory
+case_prep_dir = os.path.dirname(script_dir)  # case_preparation directory
+steady_dir = os.path.dirname(case_prep_dir)  # block_in_channel_steady directory
+pinn_dir = os.path.dirname(steady_dir)  # PINN directory
+examples_dir = os.path.dirname(pinn_dir)  # examples directory
+project_root = os.path.dirname(examples_dir)  # project root directory
 
 # Add the project root to the Python path if it's not already there
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import gmsh2D_to_points
+from HydroNet.utils import gmsh2D_to_points
 
 
 plt.rc('text', usetex=False)  #allow the use of Latex for math expressions and equations
@@ -122,7 +126,7 @@ def load_and_plot_points():
 
 def convert_gmsh2d_points_for_pinn(boundary_id_map):
     """
-    Convert points in a json file (derived from Gmsh mesh file) to PINNDataset format.
+    Convert mesh points in a json file (derived from Gmsh mesh file) to PINNDataset format.
     
     Parameters
     ----------
@@ -135,7 +139,7 @@ def convert_gmsh2d_points_for_pinn(boundary_id_map):
         Dictionary containing shapes of generated arrays
     """
 
-    json_file = "points.json"
+    json_file = "mesh_points.json"
     output_dir = "pinn_points"
 
     # Create output directory if it doesn't exist
@@ -155,7 +159,7 @@ def convert_gmsh2d_points_for_pinn(boundary_id_map):
     
     training_points = points_data['training_points']
     
-    # Process PDE points (equation points)
+    # Process PDE points (equation points, i.e., points where the PDE is enforced. These points should be within the domain of the problem.)
     if 'equation_points' not in training_points:
         raise ValueError("Training points must contain 'equation_points' key")
     
@@ -263,12 +267,13 @@ def convert_gmsh2d_points_for_pinn(boundary_id_map):
         'boundary_info': boundary_info.shape
     }
 
-def create_SRH2D_data_files(vtk_file_name, units):
+def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
     """
     Create data file from SRH-2D simulation results in a vtk file. 
 
     The data in vtk is at cell centers. We need to extract the data at the cell centers and save it to a numpy file. 
     Specifically, we need to save data_points (x, y) and data_values (h, u, v) in numpy files in the "pinn_points" directory.
+    We also save data_flags (h_flag, u_flag, v_flag) to indicate which variables are available for each point.
 
     Parameters
     ----------
@@ -323,18 +328,31 @@ def create_SRH2D_data_files(vtk_file_name, units):
     # Combine h, u, v into data_values
     data_values = np.column_stack((water_depth, u, v))
 
+    # Create flags for each variable (1 if value is not NaN, 0 if NaN)
+    h_flag = ~np.isnan(water_depth)
+    u_flag = ~np.isnan(u)
+    v_flag = ~np.isnan(v)
+
+    # Combine flags into a single array
+    data_flags = np.column_stack((h_flag, u_flag, v_flag))
+
     #print the first 10 data points
     print(f"First 10 data points: {data_points[:10]}")
     print(f"First 10 data values: {data_values[:10]}")
+    print(f"First 10 data flags: {data_flags[:10]}")
     
     # Save data points (x, y coordinates)
     np.save(os.path.join(output_dir, 'data_points.npy'), data_points)
     
-    # Save data values (u, v, h)
+    # Save data values (h, u, v)
     np.save(os.path.join(output_dir, 'data_values.npy'), data_values)
+
+    # Save data flags (h_flag, u_flag, v_flag)
+    np.save(os.path.join(output_dir, 'data_flags.npy'), data_flags)
 
     print(f"Saved data points shape: {data_points.shape}")
     print(f"Saved data values shape: {data_values.shape}")
+    print(f"Saved data flags shape: {data_flags.shape}")
     print(f"Files saved in: {output_dir}")
 
 if __name__ == '__main__':
@@ -347,9 +365,11 @@ if __name__ == '__main__':
     # Convert Gmsh mesh to points (save to points.json file)
     gmsh2D_to_points(gmsh2d_fileName, refinement=1)
 
+    exit()
+
     #load_and_plot_points()
 
-    # Define boundary ID map
+    # Define boundary ID map (this should match the boundary IDs in the SRH-2D case)
     boundary_id_map = {
         'inlet': 1,
         'outlet': 2,
@@ -364,7 +384,7 @@ if __name__ == '__main__':
     # Create data files for SRH-2D simulation results
     vtk_file_name = "SRH2D_block_in_channel_C_0005.vtk"
     units = "SI"
-    create_SRH2D_data_files(vtk_file_name, units)
+    create_data_files_from_SRH2D_vtk(vtk_file_name, units)
 
     print("All done!")
 

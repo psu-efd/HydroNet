@@ -1,0 +1,69 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# HydroNet Project Structure Guide
+
+## Overview
+HydroNet is a comprehensive deep learning framework for solving hydrodynamic problems, featuring three main approaches:
+1. Physics-Informed Neural Networks (PINN)
+2. DeepONet
+3. Physics-Informed DeepONet
+
+## Core Components
+
+### Models
+The framework includes three main model types:
+
+#### PINN Models
+Located in [HydroNet/models/PINN/](mdc:HydroNet/models/PINN):
+- [trainer.py](mdc:HydroNet/models/PINN/trainer.py): PINN training implementation
+- [model.py](mdc:HydroNet/models/PINN/model.py): Base PINN model
+
+#### DeepONet Models
+Located in [HydroNet/models/DeepONet/](mdc:HydroNet/models/DeepONet):
+- [trainer.py](mdc:HydroNet/models/DeepONet/trainer.py): DeepONet training implementation
+- [model.py](mdc:HydroNet/models/DeepONet/model.py): Base DeepONet model
+
+#### Physics-Informed DeepONet Models
+Located in [HydroNet/models/PI_DeepONet/](mdc:HydroNet/models/PI_DeepONet):
+- [trainer.py](mdc:HydroNet/models/PI_DeepONet/trainer.py): PI-DeepONet training implementation
+- [model.py](mdc:HydroNet/models/PI_DeepONet/model.py): Base PI-DeepONet model
+
+### Data Management
+Data handling is managed in [HydroNet/data/](mdc:HydroNet/data):
+- [dataset.py](mdc:HydroNet/data/dataset.py): Base dataset class
+- [pinn_dataset.py](mdc:HydroNet/data/pinn_dataset.py): PINN-specific dataset
+- [deeponet_dataset.py](mdc:HydroNet/data/deeponet_dataset.py): DeepONet-specific dataset
+- [pi_deeponet_dataset.py](mdc:HydroNet/data/pi_deeponet_dataset.py): PI-DeepONet dataset
+
+### Configuration
+Configuration management is handled in [HydroNet/config/](mdc:HydroNet/config):
+- [config.py](mdc:HydroNet/config/config.py): Configuration loading and management
+
+### Utilities
+Utility functions are in [HydroNet/utils/](mdc:HydroNet/utils):
+- [metrics.py](mdc:HydroNet/utils/metrics.py): Evaluation metrics
+- [visualization.py](mdc:HydroNet/utils/visualization.py): Plotting utilities
+
+## Key Features
+1. Multiple deep learning approaches:
+   - Physics-Informed Neural Networks (PINN)
+   - DeepONet for operator learning
+   - Physics-Informed DeepONet
+2. Support for 2D shallow water equations
+3. Flexible configuration system
+4. Comprehensive training pipelines
+5. Built-in visualization tools
+
+## Development Guidelines
+1. Follow PEP 8 style guidelines
+2. Use type hints for function arguments and return values
+3. Document all classes and methods with docstrings
+4. Implement proper error handling
+5. Use PyTorch best practices for model development
+6. Maintain consistent interfaces across different model types
+7. Ensure proper physics constraints in PINN and PI-DeepONet models
+
+

@@ -2,7 +2,7 @@
 Data loading and processing utilities for the HydroNet project.
 """
 
-from .hydraulic_dataset import *
-from .pinn_dataset import *
+from .DeepONet_dataset import *
+from .PINN_dataset import *
 
-__all__ = ["HydraulicDataset", "PINNDataset", "get_hydraulic_dataloader", "get_pinn_dataloader"]
+__all__ = ["DeepONetDataset", "PINNDataset", "get_deeponet_dataloader", "get_pinn_dataloader"]

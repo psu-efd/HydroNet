@@ -38,15 +38,15 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, HydraulicDataset, Config, get_hydraulic_dataloader
+from HydroNet import DeepONetModel, DeepONetTrainer, DeepONetDataset, Config, get_deeponet_dataloader
 
 def check_data_normalization(train_dataset, val_dataset):
     """
     Check normalization consistency between training and validation datasets.
     
     Args:
-        train_dataset: HydraulicDataset for training data
-        val_dataset: HydraulicDataset for validation data
+        train_dataset: DeepONetDataset for training data
+        val_dataset: DeepONetDataset for validation data
     
     Returns:
         dict: Dictionary containing statistics for both datasets
@@ -211,7 +211,7 @@ def deeponet_test(best_model_path):
     # First, peek at the test dataset to get input dimensions
     print("Determining input dimensions from test data...")
     try:
-        test_dataset = HydraulicDataset(test_data_dir, normalize=True)            
+        test_dataset = DeepONetDataset(test_data_dir, normalize=True)            
 
         # Get a sample to determine dimensions
         sample_branch, sample_trunk, sample_output = test_dataset[0]

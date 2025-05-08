@@ -11,7 +11,7 @@ model:
   bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
   bBoundary_loss: true   #whether to use boundary conditions in the loss function
   bSteady: true          #whether the problem is steady or transient. It is equal to bInitial_loss (internal variable), i.e., whether to include initial conditions mismatch in the loss function. For unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function.
-  bData_loss: false       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
+  bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
   hidden_layers: [32, 64, 64, 64, 64, 32]  # Network architecture
   activation: "tanh"  # tanh is often better for PINNs
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
