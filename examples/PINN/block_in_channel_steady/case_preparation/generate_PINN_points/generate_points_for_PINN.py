@@ -28,110 +28,19 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet.utils import gmsh2D_to_points
+from pyHMT2D.Misc.SRH_to_PINN_points import srh_to_pinn_points
 
 
 plt.rc('text', usetex=False)  #allow the use of Latex for math expressions and equations
 plt.rc('font', family='serif') #specify the default font family to be "serif"
 
-def generate_meshes(mshFineName):
-    """ Generate meshes using pygmsh
 
-    A rectangular hole in a channel.
-
-    pygmsh can also add circle, or any other irregular shape as a hole.
-
-    Returns
-    -------
-
+def convert_mesh_points_for_pinn():
     """
-
-    print("Generate mesh with pygmsh")
-
-    scale = 10.0
-
-    # Characteristic length (resolution)
-    resolution = 3e-2*scale
-
-    # Coordinates of lower-left and upper-right vertices of the channel domain
-    xmin = 0.0
-    xmax = 1.5*scale
-    ymin = 0.0
-    ymax = 0.5*scale
-
-    #center of the rectangular hole
-    hole_center_x = 0.5 * scale
-    hole_center_y = 0.21 * scale
-
-    #side length of the rectangular hole
-    hole_lx = 0.15 * scale
-    hole_ly = 0.12 * scale
-
-    # Initialize empty geometry using the builtin kernel in GMSH
-    geometry = pygmsh.geo.Geometry()
-
-    # Fetch model we would like to add data to
-    model = geometry.__enter__()
-
-    # Add the rectangular hole (elevation z = 0)
-    rectanle = model.add_rectangle(hole_center_x - hole_lx / 2, hole_center_x + hole_lx / 2,
-                                   hole_center_y - hole_ly / 2, hole_center_y + hole_ly / 2,
-                                   z=0.0,
-                                   mesh_size=resolution)
-
-    # Add points for the channel
-    points = [model.add_point((xmin, ymin, 0), mesh_size=resolution),
-              model.add_point((xmax, ymin, 0), mesh_size=resolution),
-              model.add_point((xmax, ymax, 0), mesh_size=resolution),
-              model.add_point((xmin, ymax, 0), mesh_size=resolution)]
-
-    # Add lines between all points creating the rectangle channel
-    channel_lines = [model.add_line(points[i], points[i + 1]) for i in range(-1, len(points) - 1)]
-
-    # Create a line loop and plane surface for meshing
-    channel_loop = model.add_curve_loop(channel_lines)
-    plane_surface = model.add_plane_surface(channel_loop, holes=[rectanle.curve_loop])
-
-    # Call gmsh kernel before add physical entities
-    model.synchronize()
-
-    # Add physcial boundaries
-    # For SRH-2D, if we want to explicitly specify boundary conditions for wall,
-    # we can not combine disconnected lines to one boundary. They have to be separated.
-    model.add_physical([plane_surface], "channel")
-    model.add_physical([channel_lines[0]], "inlet")
-    model.add_physical([channel_lines[1],channel_lines[3]], "walls")
-    model.add_physical([channel_lines[2]], "outlet")
-    model.add_physical(rectanle.curve_loop.curves, "obstacle")
-
-    # Generate the mesh using the pygmsh
-    geometry.generate_mesh(dim=2)
-
-    # Specify the mesh version as 2 (no need for latest version)
-    gmsh.option.setNumber("Mesh.MshFileVersion", 2)
-
-    #write the Gmsh MSH file
-    gmsh.write(mshFineName)
-
-    #clean up and exit
-    gmsh.clear()
-    geometry.__exit__()
-
-
-def load_and_plot_points():
-
-    all_points = points("points.json", "training_points")
-
-    all_points.plot_all_points()
-
-def convert_gmsh2d_points_for_pinn(boundary_id_map):
-    """
-    Convert mesh points in a json file (derived from Gmsh mesh file) to PINNDataset format.
+    Convert mesh points in a json file (derived from SRH-2D mesh file) to PINNDataset format.
     
     Parameters
     ----------
-    boundary_id_map : dict
-        Dictionary mapping boundary names to their IDs
     
     Returns
     -------
@@ -194,7 +103,14 @@ def convert_gmsh2d_points_for_pinn(boundary_id_map):
     # Loop over all boundaries and collect spatial points, normals and IDs
     for boundary_name, boundary_data in training_points['boundary_points'].items():
         print(f"Processing boundary: {boundary_name}")
-        boundary_id = boundary_id_map.get(boundary_name, 0)
+
+        # boundary_name should be something like "boundary_1", "boundary_2", etc.
+        # extract the number from the boundary_name
+        boundary_name_parts = boundary_name.split('_')
+        if len(boundary_name_parts) != 2 or boundary_name_parts[0] != 'boundary':
+            raise ValueError(f"Invalid boundary name: {boundary_name}. It should be something like 'boundary_1', 'boundary_2', etc.")
+        
+        boundary_id = int(boundary_name_parts[-1])
 
         print(f"boundary_id: {boundary_id}")
         
@@ -240,7 +156,7 @@ def convert_gmsh2d_points_for_pinn(boundary_id_map):
     for boundary_name in training_points['boundary_points'].keys():
         n_points = len(training_points['boundary_points'][boundary_name])
         print(f"{boundary_name}: {n_points} spatial points "
-              f"(ID: {boundary_id_map.get(boundary_name, 0)})")
+              f"(ID: {boundary_name})")
         
     #print the first 5 boundary points
     print(f"First 5 boundary points: {boundary_points[:5]}")
@@ -328,7 +244,8 @@ def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
     # Combine h, u, v into data_values
     data_values = np.column_stack((water_depth, u, v))
 
-    # Create flags for each variable (1 if value is not NaN, 0 if NaN)
+    # Create flags for each variable: should be customized based on what you really need. For example, if you don't want to use h or h is not available, you can set h_flag to 0.
+    # (1 if value is not NaN, 0 if NaN)
     h_flag = ~np.isnan(water_depth)
     u_flag = ~np.isnan(u)
     v_flag = ~np.isnan(v)
@@ -357,29 +274,34 @@ def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
 
 if __name__ == '__main__':
 
-    #generate mesh using pygmsh
-    gmsh2d_fileName = "block_in_channel.msh"
-
-    #generate_meshes(gmsh2d_fileName)
-
-    # Convert Gmsh mesh to points (save to points.json file)
-    gmsh2D_to_points(gmsh2d_fileName, refinement=1)
-
-    exit()
-
-    #load_and_plot_points()
-
-    # Define boundary ID map (this should match the boundary IDs in the SRH-2D case)
-    boundary_id_map = {
-        'inlet': 1,
-        'outlet': 2,
-        'top': 3,
-        'bottom': 4,
-        'obstacle': 5
-    }
+    # Convert SRH-2D mesh to points (save to mesh_points.json file)
+    # Get the current directory
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     
+    # Define the SRH-2D case file
+    # You can use either .srhhydro or _SIF.dat file
+    srhcontrol_file = os.path.join(current_dir, "block_in_channel.srhhydro")   #block_in_channel.srhhydro is the SRH-2D case file for the block_in_channel example
+    
+    # Check if the file exists
+    if not os.path.exists(srhcontrol_file):
+        print(f"Error: File {srhcontrol_file} does not exist.")
+        print("Please make sure you have the SRH-2D case file in the correct location.")
+        exit()
+    
+    print(f"Processing SRH-2D case: {srhcontrol_file}")
+    
+    # Convert SRH-2D mesh to PINN points
+    # refinement=2 means generate 2 points per cell/edge
+    srh_to_pinn_points(srhcontrol_file, refinement=2)
+        
+    print("\nConversion completed successfully!")
+    print("Generated files:")
+    print("1. mesh_points.json - Contains all points for PINN training")
+    print("2. equation_points.vtk - Visualization of interior points")
+    print("3. boundary_points.vtk - Visualization of boundary points with normal vectors")
+
     # Convert the points to npy files in "pinn_points" directory (to be loaded by PINNDataset)
-    convert_gmsh2d_points_for_pinn(boundary_id_map)
+    convert_mesh_points_for_pinn()
 
     # Create data files for SRH-2D simulation results
     vtk_file_name = "SRH2D_block_in_channel_C_0005.vtk"

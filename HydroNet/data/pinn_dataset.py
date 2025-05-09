@@ -1,7 +1,10 @@
 """
 Data loading utilities for physics-informed neural networks (PINNs). 
-PINNDataset is a subclass of torch.utils.data.Dataset: this ensures compatibility with PyTorch's data loading ecosystem and allows you to use the dataset with PyTorch's DataLoader
+
+PINNDataset is a subclass of torch.utils.data.Dataset: this ensures compatibility with PyTorch's data loading ecosystem
+and allows you to use the dataset with PyTorch's DataLoader
 """
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader

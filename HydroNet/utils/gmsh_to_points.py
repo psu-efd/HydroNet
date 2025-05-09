@@ -12,93 +12,7 @@ import meshio
 import os
 import numpy as np
 import json
-
-def generate_random01_exclude_boundaries_with_center(centers, size=1):
-    """Generate random numbers in (0, 1) which exclude the boundaries 0 and 1 and include the center (0.5)
-
-    Parameters
-    ----------
-    centers : numpy.ndarray
-        Array of center points to include in the output
-    size : int
-        Number of random number sets to generate
-
-    Returns
-    -------
-    numpy.ndarray
-        Array of shape (size, len(centers)) containing random numbers
-    """
-
-    # Small number to nudge the random point away from boundary
-    epsilon = 0.05
-
-    results = np.zeros((size, len(centers)), dtype=np.float32)
-    results[0, :] = centers  # First set is the centers
-
-    # Generate remaining sets
-    for i in range(1, size):
-        while True:
-            current_set = np.random.random(len(centers))
-            
-            # Check if points are too close to boundaries or centers
-            if len(centers) == 1:
-                if (min(abs(current_set)) < epsilon or 
-                    min(abs(current_set - centers)) < epsilon or 
-                    min(abs(current_set - 1.0)) < epsilon):
-                    continue
-            elif len(centers) == 2:
-                if (min(abs(current_set)) < epsilon or 
-                    min(abs(current_set - centers)) < epsilon or 
-                    min(abs(current_set - 1.0)) < epsilon or 
-                    abs(current_set[0] - current_set[1]) < epsilon):
-                    continue
-            else:
-                raise ValueError(f"Unsupported number of random numbers in a set: {len(centers)}")
-            
-            results[i, :] = current_set
-            break
-
-    return results
-
-
-def point_on_triangle(pt1, pt2, pt3, s, t):
-    """Calculate a point on a triangle using barycentric coordinates.
-
-    Parameters
-    ----------
-    pt1, pt2, pt3 : numpy.ndarray
-        Triangle vertices
-    s, t : float
-        Barycentric coordinates
-
-    Returns
-    -------
-    tuple
-        (x, y, z) coordinates of the point
-    """
-    s, t = sorted([s, t])  # Ensure s <= t
-    return (s * pt1[0] + (t - s) * pt2[0] + (1 - t) * pt3[0],
-            s * pt1[1] + (t - s) * pt2[1] + (1 - t) * pt3[1],
-            s * pt1[2] + (t - s) * pt2[2] + (1 - t) * pt3[2])
-
-def point_on_line(pt1, pt2, s):
-    """Calculate a point on a line segment using linear interpolation.
-
-    Parameters
-    ----------
-    pt1, pt2 : numpy.ndarray
-        Line segment endpoints
-    s : float
-        Interpolation parameter in [0,1]
-
-    Returns
-    -------
-    tuple
-        (x, y, z) coordinates of the point
-    """
-    return (s * pt1[0] + (1 - s) * pt2[0],
-            s * pt1[1] + (1 - s) * pt2[1],
-            s * pt1[2] + (1 - s) * pt2[2])
+from misc_tools import generate_random01_exclude_boundaries_with_center, point_on_triangle, point_on_line
 
 def gmsh2D_to_points(mshFileName, refinement=1):
     """Convert Gmsh 2D mesh to points for PINN training. The saved "mesh_points.json" file can be used for PINN training. The file contains "equation_points" and "boundary_points".
@@ -117,6 +31,7 @@ def gmsh2D_to_points(mshFileName, refinement=1):
     None
         Saves points to mesh_points.json
         Saves domain and boundary meshes to domain_{filename}.xdmf and boundaries_{filename}.xdmf
+        Saves equation and boundary points to equation_points.vtk and boundary_points.vtk (for visualization and inspection)
     """
     # Validate refinement parameter
     if not isinstance(refinement, int) or refinement < 1:
@@ -132,14 +47,14 @@ def gmsh2D_to_points(mshFileName, refinement=1):
         raise RuntimeError(f"Failed to read Gmsh file: {e}")
 
     # Process domain (interior) points
-    cell_mesh, cell_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["triangle", "quad"], prune_z=False)
+    cell_mesh, cell_physical_ID_to_name = extract_gmsh_parts(mesh_from_file, ["triangle", "quad"], prune_z=False)
     meshio.write(f"domain_{filename}.xdmf", cell_mesh)
-    equation_points_dict = process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement)
+    equation_points_dict = process_domain_gmsh(cell_mesh, cell_physical_ID_to_name, refinement)
 
     # Process boundary points
-    boundary_mesh, boundary_physical_ID_to_name = extract_mesh_parts(mesh_from_file, ["line"], prune_z=False)
+    boundary_mesh, boundary_physical_ID_to_name = extract_gmsh_parts(mesh_from_file, ["line"], prune_z=False)
     meshio.write(f"boundaries_{filename}.xdmf", boundary_mesh)
-    boundary_points_dict = process_boundary_mesh(boundary_mesh, boundary_physical_ID_to_name, refinement)
+    boundary_points_dict = process_boundary_gmsh(boundary_mesh, boundary_physical_ID_to_name, refinement)
 
     # Assemble all points
     all_points = {
@@ -153,7 +68,7 @@ def gmsh2D_to_points(mshFileName, refinement=1):
     with open("mesh_points.json", 'w') as f:
         json.dump(all_points, f, indent=4, sort_keys=False)
 
-def extract_mesh_parts(mesh, desired_cell_types, prune_z=False):
+def extract_gmsh_parts(mesh, desired_cell_types, prune_z=False):
     """Extract specified cell types from mesh.
 
     Parameters
@@ -201,7 +116,7 @@ def extract_mesh_parts(mesh, desired_cell_types, prune_z=False):
 
     return out_mesh, cell_physical_ID_to_name
 
-def process_boundary_mesh(boundary_mesh, boundary_physical_ID_to_name, refinement):
+def process_boundary_gmsh(boundary_mesh, boundary_physical_ID_to_name, refinement):
     """Process boundary mesh to generate boundary points.
 
     Parameters
@@ -288,7 +203,7 @@ def process_boundary_mesh(boundary_mesh, boundary_physical_ID_to_name, refinemen
 
     return boundary_points_dict
 
-def process_domain_mesh(cell_mesh, cell_physical_ID_to_name, refinement):
+def process_domain_gmsh(cell_mesh, cell_physical_ID_to_name, refinement):
     """Process domain mesh to generate interior points.
 
     Note: currently only support quad and triangle cells.

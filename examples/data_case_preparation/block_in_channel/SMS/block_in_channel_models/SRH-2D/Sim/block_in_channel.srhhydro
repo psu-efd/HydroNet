@@ -1,0 +1,24 @@
+SRHHYDRO 30
+Case "Case"
+Description "Description"
+RunType FLOW
+ModelTemp OFF
+UnsteadyOutput UNSTEADY
+SimTime 0.0 0.1 0.1
+TurbulenceModel PARABOLIC
+ParabolicTurbulence 0.7
+InitCondOption DRY
+Grid "block_in_channel.srhgeom"
+HydroMat "block_in_channel.srhmat"
+OutputFormat XMDFC SI
+OutputOption 1
+OutputInterval 0.002777777777777778
+ManningsN 0 0.02
+ManningsN 1 0.03
+BC 1 INLET-Q
+BC 2 EXIT-H
+BC 3 WALL
+BC 4 WALL
+BC 5 WALL
+IQParams 1 0.2 SI CONVEYANCE
+EWSParamsC 2 0.5 SI C
