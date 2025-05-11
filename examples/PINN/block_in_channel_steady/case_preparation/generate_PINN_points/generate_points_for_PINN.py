@@ -37,7 +37,7 @@ plt.rc('font', family='serif') #specify the default font family to be "serif"
 
 def convert_mesh_points_for_pinn():
     """
-    Convert mesh points in a json file (derived from SRH-2D mesh file) to PINNDataset format.
+    Convert mesh points in a json file (mesh_points.json, derived from SRH-2D mesh file) to PINNDataset format.
     
     Parameters
     ----------
@@ -73,23 +73,61 @@ def convert_mesh_points_for_pinn():
         raise ValueError("Training points must contain 'equation_points' key")
     
     equation_points = training_points['equation_points']
-    spatial_points = []  # temporary storage for spatial coordinates
+    spatial_points = []  # temporary storage for spatial x and y coordinates
+    zb_points = []  # temporary storage for zb points
+    Sx_points = []  # temporary storage for Sx points
+    Sy_points = []  # temporary storage for Sy points
+    ManningN_points = []  # temporary storage for ManningN points
     
+
     # Convert equation points dictionary to array (spatial coordinates only)
     for point_id, point_data in equation_points.items():
         spatial_points.append([
             point_data['x'],
             point_data['y']
         ])
+        zb_points.append(point_data['z'])
+        Sx_points.append(point_data['Sx'])
+        Sy_points.append(point_data['Sy'])
+        ManningN_points.append(point_data['ManningN'])
+
     spatial_points = np.array(spatial_points, dtype=np.float32)
-    
+    zb_points = np.array(zb_points, dtype=np.float32)
+    Sx_points = np.array(Sx_points, dtype=np.float32)
+    Sy_points = np.array(Sy_points, dtype=np.float32)
+    ManningN_points = np.array(ManningN_points, dtype=np.float32)
+
     # assemble the pde points
     n_spatial_points = len(spatial_points)
     pde_points = np.zeros((n_spatial_points, 2), dtype=np.float32)   #rows of (x, y), no time for steady case
+    pde_data = np.zeros((n_spatial_points, 4), dtype=np.float32)   #rows of (zb, Sx, Sy, ManningN)
     
     # Fill in the expanded points
     pde_points[:, :2] = spatial_points  # Copy x, y coordinates
+    pde_data[:, 0] = zb_points
+    pde_data[:, 1] = Sx_points
+    pde_data[:, 2] = Sy_points
+    pde_data[:, 3] = ManningN_points
+
+    #we only want the statistics of the zb points, bed slope and ManningN at pde points
+    zb_min = np.min(zb_points)
+    zb_max = np.max(zb_points)
+    zb_mean = np.mean(zb_points)
+    zb_std = np.std(zb_points)
+    Sx_min = np.min(Sx_points)
+    Sx_max = np.max(Sx_points)
+    Sx_mean = np.mean(Sx_points)
+    Sx_std = np.std(Sx_points)
+    Sy_min = np.min(Sy_points)
+    Sy_max = np.max(Sy_points)
+    Sy_mean = np.mean(Sy_points)
+    Sy_std = np.std(Sy_points)
+    ManningN_min = np.min(ManningN_points)
+    ManningN_max = np.max(ManningN_points)
+    ManningN_mean = np.mean(ManningN_points)
+    ManningN_std = np.std(ManningN_points)
     
+
     # Process boundary points
     if 'boundary_points' not in training_points:
         raise ValueError("Training points must contain 'boundary_points' key")
@@ -99,6 +137,7 @@ def convert_mesh_points_for_pinn():
     all_boundary_normals = []
     all_boundary_represented_lengths = []
     all_boundary_ids = []
+    all_boundary_ManningN = []
 
     # Loop over all boundaries and collect spatial points, normals and IDs
     for boundary_name, boundary_data in training_points['boundary_points'].items():
@@ -126,19 +165,22 @@ def convert_mesh_points_for_pinn():
             ])
             all_boundary_represented_lengths.append(point_data['represented_length'])
             all_boundary_ids.append(boundary_id)
+            all_boundary_ManningN.append(point_data['ManningN'])
+
 
     # Convert to numpy arrays
     all_boundary_spatial_points = np.array(all_boundary_spatial_points, dtype=np.float32)
     all_boundary_normals = np.array(all_boundary_normals, dtype=np.float32)
     all_boundary_represented_lengths = np.array(all_boundary_represented_lengths, dtype=np.float32)
     all_boundary_ids = np.array(all_boundary_ids, dtype=np.float32)   #ID is integer, but we need to convert to float32 for compatibility
+    all_boundary_ManningN = np.array(all_boundary_ManningN, dtype=np.float32)
 
     # Get total number of boundary points
     n_boundary_spatial = len(all_boundary_spatial_points)
 
     # Create arrays for all boundary points and info
     boundary_points = np.zeros((n_boundary_spatial, 2), dtype=np.float32)   #rows of (x, y)
-    boundary_info = np.zeros((n_boundary_spatial, 4), dtype=np.float32)   #rows of (ID, nx, ny, represented_length)
+    boundary_info = np.zeros((n_boundary_spatial, 5), dtype=np.float32)   #rows of (ID, nx, ny, represented_length, ManningN)
 
     # Copy spatial coordinates
     boundary_points[:, :2] = all_boundary_spatial_points
@@ -147,7 +189,31 @@ def convert_mesh_points_for_pinn():
     boundary_info[:, 0] = all_boundary_ids
     boundary_info[:, 1:3] = all_boundary_normals
     boundary_info[:, 3] = all_boundary_represented_lengths
+    boundary_info[:, 4] = all_boundary_ManningN
 
+    #compute the statistics of all the points (pde_points and boundary_points)
+    #min, max, mean, std, median, etc.
+    #combine all points together and compute the statistics
+    all_points = np.concatenate((pde_points, boundary_points), axis=0)
+    print(f"All points shape: {all_points.shape}")
+    print(f"All points: {all_points}")
+    x_min = np.min(all_points[:, 0])
+    x_max = np.max(all_points[:, 0])
+    x_mean = np.mean(all_points[:, 0])
+    x_std = np.std(all_points[:, 0])
+    y_min = np.min(all_points[:, 1])
+    y_max = np.max(all_points[:, 1])
+    y_mean = np.mean(all_points[:, 1])
+    y_std = np.std(all_points[:, 1])
+    
+    #this case is for steady case, thus time t is not relevant. But for completeness, we save it in all_points_stats
+    t_min = 0.0
+    t_max = 0.0
+    t_mean = 0.0
+    t_std = 0.0
+
+    all_points_stats = np.array([x_min, x_max, x_mean, x_std, y_min, y_max, y_mean, y_std, t_min, t_max, t_mean, t_std, zb_min, zb_max, zb_mean, zb_std, Sx_min, Sx_max, Sx_mean, Sx_std, Sy_min, Sy_max, Sy_mean, Sy_std, ManningN_min, ManningN_max, ManningN_mean, ManningN_std])
+    
     # Print summary
     print("\nPoints Summary:")
     print(f"Number of spatial points: {n_spatial_points}")
@@ -158,6 +224,13 @@ def convert_mesh_points_for_pinn():
         print(f"{boundary_name}: {n_points} spatial points "
               f"(ID: {boundary_name})")
         
+    print(f"x_min: {x_min}, x_max: {x_max}, x_std: {x_std}")
+    print(f"y_min: {y_min}, y_max: {y_max}, y_std: {y_std}")
+    print(f"t_min: {t_min}, t_max: {t_max}, t_std: {t_std}")
+    print(f"zb_min: {zb_min}, zb_max: {zb_max}, zb_std: {zb_std}")
+    print(f"Sx_min: {Sx_min}, Sx_max: {Sx_max}, Sx_std: {Sx_std}")
+    print(f"Sy_min: {Sy_min}, Sy_max: {Sy_max}, Sy_std: {Sy_std}")
+
     #print the first 5 boundary points
     print(f"First 5 boundary points: {boundary_points[:5]}")
     print(f"First 5 boundary info: {boundary_info[:5]}")
@@ -170,8 +243,11 @@ def convert_mesh_points_for_pinn():
     
     try:
         np.save(os.path.join(output_dir, 'pde_points.npy'), pde_points)
+        np.save(os.path.join(output_dir, 'pde_data.npy'), pde_data)
         np.save(os.path.join(output_dir, 'boundary_points.npy'), boundary_points)
         np.save(os.path.join(output_dir, 'boundary_info.npy'), boundary_info)
+        #save the statistics of all the points
+        np.save(os.path.join(output_dir, 'all_mesh_points_stats.npy'), all_points_stats)   #these can be used for normalization
     except Exception as e:
         raise RuntimeError(f"Failed to save numpy files: {e}")
     
@@ -240,6 +316,7 @@ def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
     # Extract u, v components from velocity vector
     u = velocity_data[:, 0]
     v = velocity_data[:, 1]
+    Umag = np.sqrt(u**2 + v**2)
 
     # Combine h, u, v into data_values
     data_values = np.column_stack((water_depth, u, v))
@@ -257,6 +334,47 @@ def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
     print(f"First 10 data points: {data_points[:10]}")
     print(f"First 10 data values: {data_values[:10]}")
     print(f"First 10 data flags: {data_flags[:10]}")
+
+    #compute the statistics of the data points
+    #min, max, mean, std, median, etc.
+    x_min = np.min(data_points[:, 0])  #stats of x, y, and t are computed here, but not used in training. The normalization should use the statistics of the pde/boundary points from mesh_points.json.
+    x_max = np.max(data_points[:, 0])
+    x_mean = np.mean(data_points[:, 0])
+    x_std = np.std(data_points[:, 0])
+    y_min = np.min(data_points[:, 1])
+    y_max = np.max(data_points[:, 1])
+    y_mean = np.mean(data_points[:, 1])
+    y_std = np.std(data_points[:, 1])
+    t_min = 0.0
+    t_max = 0.0
+    t_mean = 0.0
+    t_std = 0.0
+    h_min = np.min(data_values[:, 0])
+    h_max = np.max(data_values[:, 0])
+    h_mean = np.mean(data_values[:, 0])
+    h_std = np.std(data_values[:, 0])
+    u_min = np.min(data_values[:, 1])
+    u_max = np.max(data_values[:, 1])
+    u_mean = np.mean(data_values[:, 1])
+    u_std = np.std(data_values[:, 1])
+    v_min = np.min(data_values[:, 2])
+    v_max = np.max(data_values[:, 2])
+    v_mean = np.mean(data_values[:, 2])
+    v_std = np.std(data_values[:, 2])
+    Umag_min = np.min(Umag)
+    Umag_max = np.max(Umag)
+    Umag_mean = np.mean(Umag)
+    Umag_std = np.std(Umag)
+
+    all_data_points_stats = np.array([x_min, x_max, x_mean, x_std, y_min, y_max, y_mean, y_std, t_min, t_max, t_mean, t_std, h_min, h_max, h_mean, h_std, u_min, u_max, u_mean, u_std, v_min, v_max, v_mean, v_std, Umag_min, Umag_max, Umag_mean, Umag_std])
+    print(f"x_min: {x_min}, x_max: {x_max}, x_mean: {x_mean}, x_std: {x_std}")
+    print(f"y_min: {y_min}, y_max: {y_max}, y_mean: {y_mean}, y_std: {y_std}")
+    print(f"t_min: {t_min}, t_max: {t_max}, t_mean: {t_mean}, t_std: {t_std}")
+    print(f"h_min: {h_min}, h_max: {h_max}, h_mean: {h_mean}, h_std: {h_std}")
+    print(f"u_min: {u_min}, u_max: {u_max}, u_mean: {u_mean}, u_std: {u_std}")
+    print(f"v_min: {v_min}, v_max: {v_max}, v_mean: {v_mean}, v_std: {v_std}")
+    print(f"Umag_min: {Umag_min}, Umag_max: {Umag_max}, Umag_mean: {Umag_mean}, Umag_std: {Umag_std}")
+    
     
     # Save data points (x, y coordinates)
     np.save(os.path.join(output_dir, 'data_points.npy'), data_points)
@@ -266,6 +384,9 @@ def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
 
     # Save data flags (h_flag, u_flag, v_flag)
     np.save(os.path.join(output_dir, 'data_flags.npy'), data_flags)
+
+    #save the statistics of the data points
+    np.save(os.path.join(output_dir, 'all_data_points_stats.npy'), all_data_points_stats)   #these can be used for normalization
 
     print(f"Saved data points shape: {data_points.shape}")
     print(f"Saved data values shape: {data_values.shape}")
@@ -290,7 +411,7 @@ if __name__ == '__main__':
     
     print(f"Processing SRH-2D case: {srhcontrol_file}")
     
-    # Convert SRH-2D mesh to PINN points
+    # Convert SRH-2D mesh to points in mesh_points.json file
     # refinement=2 means generate 2 points per cell/edge
     srh_to_pinn_points(srhcontrol_file, refinement=2)
         
@@ -300,7 +421,7 @@ if __name__ == '__main__':
     print("2. equation_points.vtk - Visualization of interior points")
     print("3. boundary_points.vtk - Visualization of boundary points with normal vectors")
 
-    # Convert the points to npy files in "pinn_points" directory (to be loaded by PINNDataset)
+    # Convert the points in mesh_points.json to npy files in "pinn_points" directory (to be loaded by PINNDataset)
     convert_mesh_points_for_pinn()
 
     # Create data files for SRH-2D simulation results

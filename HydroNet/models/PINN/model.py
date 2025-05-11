@@ -12,18 +12,18 @@ class SWE_PINN(nn.Module):
     Physics-Informed Neural Network for 2D Shallow Water Equations.
     
     This model solves the 2D shallow water equations using a physics-informed approach,
-    enforcing the governing equations, boundary conditions, initial conditions, and data points (from simulation or measurement).
+    enforcing the governing equations, boundary conditions, initial conditions (if unsteady), and data points (from simulation or measurement).
 
     The model supports both steady and unsteady problems (bSteady = True or False in the config file).
 
     Boundary conditions are specified in the config file and the boundary points are loaded from the data file. Currently, supported boundary conditions are:
-    - "inlet-q": Inlet discharge. The summation of h*u_normal is the specified discharge.
+    - "inlet-q": Inlet discharge. The summation of h*u_normal*length is the specified discharge.
     - "exit-h": Outlet water surface elevation. The specified water surface elevation is the specified value. Water depth is computed from the water surface elevation and bed elevation. For velocities, it is zero gradient along the normal direction (zero Neumann BC).
     - "wall": Wall boundary. The velocity (u,v) is set to zero. For the water depth h, it is zero gradient along the normal direction (zero Neumann BC).
 
-    Data points are specified in the config file and the data points are loaded from the data file. The data points are typically from:
-    - physics-based simulation: Data points from physics-based simulation.
-    - measurement: Data points from measurement.
+    Data points are loaded from the data files (by class PINN_dataset). The data points are typically from:
+    - physics-based simulation: Data points from physics-based simulation (e.g., SRH-2D, HEC-RAS, etc).
+    - measurement: Data points from measurement (e.g., field measurements, laboratory experiments, etc).
 
     The model is trained by minimizing the total loss, which is the sum of the PDE loss, initial condition loss (if unsteady), boundary condition loss, and/or data loss.
     """
@@ -53,40 +53,45 @@ class SWE_PINN(nn.Module):
             self.device = torch.device('cpu')
             
         # Get model parameters from config
+        self.model_name = self.config.get('model.name', 'SWE_PINN')
+        self.bNormalize = self.config.get('model.bNormalize', True)
+        self.normalization_method = self.config.get('model.normalization_method', 'z-score')            
+
         try:
-            self.bPDE_loss = bool(self.config.get('model.bPDE_loss'))
+            self.bPDE_loss = bool(self.config.get('model.loss_flags.bPDE_loss'))
             if self.bPDE_loss is None:
-                raise ValueError("model.bPDE_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bPDE_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.bPDE_loss must be a boolean value in config file")
+            raise ValueError("model.loss_flags.bPDE_loss must be a boolean value in config file")
             
         try:
-            self.bBoundary_loss = bool(self.config.get('model.bBoundary_loss'))
+            self.bBoundary_loss = bool(self.config.get('model.loss_flags.bBoundary_loss'))
             if self.bBoundary_loss is None:
-                raise ValueError("model.bBoundary_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bBoundary_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.bBoundary_loss must be a boolean value in config file")
+            raise ValueError("model.loss_flags.bBoundary_loss must be a boolean value in config file")
             
         try:
-            self.bSteady = bool(self.config.get('model.bSteady'))
+            self.bSteady = bool(self.config.get('physics.bSteady'))
             #print(f"bSteady: {self.bSteady}")
             self.bInitial_loss = not self.bSteady    #for unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function
             #print(f"bInitial_loss: {self.bInitial_loss}")
             if self.bSteady is None:
-                raise ValueError("model.bSteady must be specified in config file")
+                raise ValueError("physics.bSteady must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.bSteady must be a boolean value in config file")
+            raise ValueError("physics.bSteady must be a boolean value in config file")
             
         try:
-            self.bData_loss = bool(self.config.get('model.bData_loss'))
+            self.bData_loss = bool(self.config.get('model.loss_flags.bData_loss'))
             if self.bData_loss is None:
-                raise ValueError("model.bData_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bData_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.bData_loss must be a boolean value in config file")
+            raise ValueError("model.loss_flags.bData_loss must be a boolean value in config file")
 
         hidden_layers = self.config.get('model.hidden_layers', [64, 128, 128, 64])
         activation = self.config.get('model.activation', 'tanh')
         self.output_dim = self.config.get('model.output_dim', 3)  # h, u, v
+        self.initialization = self.config.get('model.initialization', 'xavier_normal')
         
         # Physics parameters
         self.g = self.config.get('physics.gravity', 9.81)  # Gravitational acceleration
@@ -143,23 +148,51 @@ class SWE_PINN(nn.Module):
         # Initialize weights
         self._initialize_weights()
 
+        # Read physics-related parameters
+        self.g = self.config.get('physics.gravity', 9.81)  # Gravitational acceleration
+
+        # Read scaling parameters (used for PDEs)
+        self.length_scale = self.config.get('physics.length_scale', 1.0)
+        self.velocity_scale = self.config.get('physics.velocity_scale', 1.0)
+
+        # Read loss weights
+        self.loss_weights = {
+            'continuity': self.config.get('physics.loss_weights.continuity_eq', 1.0),
+            'momentum_x': self.config.get('physics.loss_weights.momentum_x_eq', 1.0),
+            'momentum_y': self.config.get('physics.loss_weights.momentum_y_eq', 1.0),
+            'initial': self.config.get('physics.loss_weights.initial_condition', 1.0),
+            'boundary': self.config.get('physics.loss_weights.boundary_condition', 1.0),
+            'data': self.config.get('physics.loss_weights.data_points', 1.0)
+        }
+
+        # Read boundary conditions
+        self.BCs_from_config = self.config.get('boundary_conditions')
+        if self.BCs_from_config is None:
+            raise ValueError("boundary_conditions must be specified in config file")
+        if not isinstance(self.BCs_from_config, dict):
+            raise ValueError("boundary_conditions must be a dictionary in config file")
+        if not self.BCs_from_config:
+            raise ValueError("boundary_conditions dictionary cannot be empty")
+        
         # Move the model to the device
         self.to(self.device)
         
     def _initialize_weights(self):
         """Initialize the weights of the network."""
-        initialization = self.config.get('model.initialization', 'xavier_normal')
+        
         
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
-                if initialization == 'xavier_normal':
+                if self.initialization == 'xavier_normal':
                     nn.init.xavier_normal_(m.weight)
-                elif initialization == 'xavier_uniform':
+                elif self.initialization == 'xavier_uniform':
                     nn.init.xavier_uniform_(m.weight)
-                elif initialization == 'kaiming_normal':
+                elif self.initialization == 'kaiming_normal':
                     nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-                elif initialization == 'kaiming_uniform':
+                elif self.initialization == 'kaiming_uniform':
                     nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+                else:
+                    raise ValueError(f"Unsupported initialization method: {self.initialization}")
                     
                 nn.init.zeros_(m.bias)
                 
@@ -187,22 +220,61 @@ class SWE_PINN(nn.Module):
         
         return self.bPDE_loss, self.bInitial_loss, self.bBoundary_loss, self.bData_loss
     
+    def get_bSteady(self):
+        """
+        Get the steady flag.
+        """
+        return self.bSteady
+    
+    def get_bNormalize(self):
+        """
+        Get the normalize flag.
+        """
+        return self.bNormalize
+    
+    def get_normalization_method(self):
+        """
+        Get the normalization method.
+        """
+        return self.normalization_method
+    
     def get_device(self):
         """
         Get the device.
         """
         return self.device
         
-    def compute_pde_residuals(self, x):
+    def compute_pde_residuals(self, x, pde_data, mesh_stats, data_stats):
         """
         Compute PDE residuals for the shallow water equations.
+
+        "x" might be normalized or not normalized. If normalized, the output of PINN is also normalized. 
+
+        The residuals are computed in the unnormalized space.
         
         Args:
             x (torch.Tensor): Input tensor of shape [batch_size, 2/3] containing coordinates (x, y, t) for transient problems and (x, y) for steady problems. 
-                            
+            pde_data (torch.Tensor): Data for enforcing PDE residuals (zb, nx, ny, ManningN). It is not normalized.
+            mesh_stats (dict): Statistics of the mesh points.                            
+
         Returns:
             tuple: (mass_residual, momentum_x_residual, momentum_y_residual)
         """
+
+        # Get the stats
+        mu_x = mesh_stats['x_mean']
+        sigma_x = mesh_stats['x_std']
+        mu_y = mesh_stats['y_mean']
+        sigma_y = mesh_stats['y_std']
+        mu_t = mesh_stats['t_mean']
+        sigma_t = mesh_stats['t_std']
+
+        mu_h = data_stats['h_mean']
+        sigma_h = data_stats['h_std']
+        mu_u = data_stats['u_mean']
+        sigma_u = data_stats['u_std']
+        mu_v = data_stats['v_mean']
+        sigma_v = data_stats['v_std']
 
         # Extract coordinates
         x_coord = x[:, 0:1]  # Keep dimension
@@ -213,11 +285,29 @@ class SWE_PINN(nn.Module):
         # Compute derivatives
         x.requires_grad_(True)
         predictions = self.forward(x)
-        h, u, v = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
+        h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
+
+        # If the input and output are normalized, we need to convert outputs to the unnormalized space
+        if self.bNormalize: 
+            if self.normalization_method == 'minmax':
+                NotImplementedError("Min-max normalization is not implemented yet") 
+            elif self.normalization_method == 'z-score':
+                h = h_hat * sigma_h + mu_h
+                u = u_hat * sigma_u + mu_u
+                v = v_hat * sigma_v + mu_v
+            else:
+                raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
+            
+            #clip h to be positive (clipping should only be done in the unnormalized space)
+            h = torch.clip(h, min=1e-3)
+        else:
+            h = h_hat
+            u = u_hat
+            v = v_hat   
         
-        #clip h to be positive
-        h = torch.clip(h, min=1e-3)
-        
+        # Compute velocity magnitude
+        u_mag = torch.sqrt(u*u + v*v)
+
         # Compute all gradients at once
         h_grad = torch.autograd.grad(h, x, grad_outputs=torch.ones_like(h),
                                    create_graph=True)[0]
@@ -237,49 +327,75 @@ class SWE_PINN(nn.Module):
         if not self.bSteady:
             dh_dt = h_grad[:, 2:3]
             du_dt = u_grad[:, 2:3]
-            dv_dt = v_grad[:, 2:3]
-        
-        # Compute velocity magnitude
-        u_mag = torch.sqrt(u*u + v*v)
-
-        # Make sure h is positive (clipping)
-        h = torch.clip(h, min=1e-3)
+            dv_dt = v_grad[:, 2:3]        
         
         # Mass conservation equation
-        if self.bSteady:            
+        # First compute the steady part of the mass conservation equation
+        mass_residual = torch.tensor(0.0, device=self.device)
+        if not self.bNormalize:   #if the input and output are not normalized, the residuals are computed in the unnormalized space
             mass_residual = h*du_dx + u*dh_dx + h*dv_dy + v*dh_dy
         else:
-            mass_residual = dh_dt + h*du_dx + u*dh_dx + h*dv_dy + v*dh_dy
+            #if the input and output are normalized, the residual computation needs to consider that.            
+
+            if self.normalization_method == 'minmax':
+                NotImplementedError("Min-max normalization is not implemented yet") 
+            elif self.normalization_method == 'z-score':
+                mass_residual = h*du_dx/sigma_x + u*dh_dx/sigma_x + h*dv_dy/sigma_y + v*dh_dy/sigma_y
+            else:
+                raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
+                
+        if not self.bSteady:  #For unsteady problems, we need to add the time derivative term
+            mass_residual = dh_dt/sigma_t + mass_residual
         
         # Momentum conservation equations
-        if self.bSteady:
+        momentum_x_residual = torch.tensor(0.0, device=self.device)
+        momentum_y_residual = torch.tensor(0.0, device=self.device)
+
+        #steady part of the momentum conservation equations
+
+        if not self.bNormalize:   #if the input and output are not normalized, the residuals are computed in the unnormalized space
             momentum_x_residual = (u*du_dx + v*du_dy + 
                                  self.g * dh_dx + 
                                  self.g * self.n**2 * u * u_mag / (h**(4/3)))
             momentum_y_residual = (u*dv_dx + v*dv_dy + 
                                  self.g * dh_dy + 
                                  self.g * self.n**2 * v * u_mag / (h**(4/3)))
+            
         else:
-            momentum_x_residual = (du_dt + u*du_dx + v*du_dy + 
-                                 self.g * dh_dx + 
+            #if the input and output are normalized, the residual computation needs to consider that.
+
+            if self.normalization_method == 'minmax':
+                NotImplementedError("Min-max normalization is not implemented yet") 
+            elif self.normalization_method == 'z-score':
+                momentum_x_residual = (u*du_dx/sigma_x + v*du_dy/sigma_y + 
+                                 self.g * dh_dx/sigma_x + 
                                  self.g * self.n**2 * u * u_mag / (h**(4/3)))
-            momentum_y_residual = (dv_dt + u*dv_dx + v*dv_dy + 
-                                 self.g * dh_dy + 
+                momentum_y_residual = (u*dv_dx/sigma_x + v*dv_dy/sigma_y + 
+                                 self.g * dh_dy/sigma_y + 
                                  self.g * self.n**2 * v * u_mag / (h**(4/3)))
+            else:
+                raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
+
+        #unsteady part of the momentum conservation equations
+        if not self.bSteady:
+            momentum_x_residual = (du_dt/sigma_t + momentum_x_residual)
+            momentum_y_residual = (dv_dt/sigma_t + momentum_y_residual)
         
         return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
         
-    def compute_pde_loss(self, pde_points):
+    def compute_pde_loss(self, pde_points, pde_data, mesh_stats):
         """
         Compute the PDE loss for the shallow water equations.
         
         Args:
-            pde_points (torch.Tensor): Points inside the domain.
-            
+            pde_points (torch.Tensor): Points inside the domain (x, y, t for unsteady problems and x, y for steady problems). Normalized if bNormalize is True.
+            pde_data (torch.Tensor): Data for enforcing PDE residuals (zb, nx, ny, ManningN). It is not normalized.
+            mesh_stats (dict): Statistics of the mesh points.
+
         Returns:
             torch.Tensor: PDE loss.
         """
-        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(pde_points)
+        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(pde_points, pde_data, mesh_stats)
         
         # Compute the loss for each equation with stability
         continuity_loss = torch.mean(continuity_residual**2)
@@ -536,19 +652,22 @@ class SWE_PINN(nn.Module):
 
         return data_loss, loss_components, h_pred, u_pred, v_pred
         
-    def compute_total_loss(self, pde_points, initial_points, initial_values, boundary_info, data_points, data_values, data_flags):
+    def compute_total_loss(self, pde_points, pde_data, initial_points, initial_values, boundary_info, data_points, data_values, data_flags, mesh_stats, data_stats):
         """
         Compute the total loss for the PINN model.
         
         Args:
-            pde_points (torch.Tensor): Points for enforcing PDE residuals.
-            initial_points (torch.Tensor): Points for enforcing initial conditions.
-            initial_values (torch.Tensor): True values at initial points.
-            boundary_info (tuple): Tuple containing boundary points, identifiers, normals, and lengths.
-            data_points (torch.Tensor): Points for data loss.
-            data_values (torch.Tensor): True values at data points.
-            data_flags (torch.Tensor): Flags indicating which variables are available at data points.
-            
+            pde_points (torch.Tensor): Points for enforcing PDE residuals (x, y, t for unsteady problems and x, y for steady problems). Normalized if bNormalize is True.
+            pde_data (torch.Tensor): Data for enforcing PDE residuals (zb, nx, ny, ManningN). It is not normalized.
+            initial_points (torch.Tensor): Points for enforcing initial conditions (x, y, t for unsteady problems and x, y for steady problems). Normalized if bNormalize is True.
+            initial_values (torch.Tensor): True values at initial points (h, u, v).
+            boundary_info (tuple): Tuple containing boundary ID, normals, lengths, ManningN.
+            data_points (torch.Tensor): Points for data loss (x, y, t for unsteady problems and x, y for steady problems). Normalized if bNormalize is True.
+            data_values (torch.Tensor): True values at data points (h, u, v). Normalized if bNormalize is True. 
+            data_flags (torch.Tensor): Flags indicating which variables are available at data points (h, u, v).
+            mesh_stats (dict): Statistics of the mesh points.
+            data_stats (dict): Statistics of the data points.                
+
         Returns:
             tuple: (total_loss, loss_components, predictions_and_true_values)
         """
@@ -574,8 +693,8 @@ class SWE_PINN(nn.Module):
         
         # Compute PDE loss
         if self.bPDE_loss:
-            if pde_points is not None:
-                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points)
+            if pde_points is not None and pde_data is not None:
+                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points, pde_data, mesh_stats)
                 predictions_and_true_values.update({
                     'pde_points': pde_points,
                     'h_pred_pde_points': h_pred_pde_points,

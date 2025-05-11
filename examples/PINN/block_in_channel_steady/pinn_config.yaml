@@ -8,10 +8,12 @@ device:
 # Architecture
 model:
   name: "SWE_PINN"
-  bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
-  bBoundary_loss: true   #whether to use boundary conditions in the loss function
-  bSteady: true          #whether the problem is steady or transient. It is equal to bInitial_loss (internal variable), i.e., whether to include initial conditions mismatch in the loss function. For unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function.
-  bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
+  bNormalize: false         #whether to normalize the training data (x,y,t,h,u,v,zb,Sx,Sy,ManningN, etc) and the PDEs
+  normalization_method: "z-score" #"min-max" or "z-score"
+  loss_flags:    
+    bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
+    bBoundary_loss: true   #whether to use boundary conditions in the loss function    
+    bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
   hidden_layers: [32, 64, 64, 64, 64, 32]  # Network architecture
   activation: "tanh"  # tanh is often better for PINNs
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
@@ -19,8 +21,13 @@ model:
 
 # Physics parameters
 physics:
-  gravity: 9.81  # Gravitational acceleration (m/s^2)
-  manning_coefficient: 0.03  # Manning's roughness coefficient
+  bSteady: true           #whether the problem is steady or transient. It is equal to bInitial_loss (internal variable), i.e., whether to include initial conditions mismatch in the loss function. For unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function.
+  gravity: 9.81  # Gravitational acceleration (m/s^2)  
+
+  scales:        #physical scales for normalizing the PDEs
+    length: 1.0  # Length scale
+    velocity: 1.0  # Velocity scale    
+    
   # Loss weights for different terms
   loss_weights:
     continuity_eq: 1.0
@@ -50,14 +57,7 @@ training:
   print_freq: 100  # Print progress every N epochs
 
 # Sampling parameters
-sampling:
-  domain:
-    x_min: 0.0
-    x_max: 15.0  # Based on your mesh 
-    y_min: 0.0
-    y_max: 5.0   # Based on your mesh 
-    t_min: 0.0
-    t_max: 10.0  # Match your time settings (not used for steady problems)  
+sampling: 
   num_pde_points: 1326      # # Number of space points (these should match your converted points)
   num_boundary_points: 118  # Points per boundary, will be multiplied by time steps
 
@@ -84,5 +84,5 @@ boundary_conditions:
 # Data paths
 data:
   points_dir: "pinn_points"  # Directory containing the numpy point files
-  checkpoint_dir: "checkpoints"
-  plot_dir: "plots"
+  checkpoint_dir: "checkpoints"  # Directory to save model checkpoints
+  plot_dir: "plots"  # Directory to save plots
