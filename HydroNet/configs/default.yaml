@@ -1,0 +1,36 @@
+model:
+  # ... existing model settings ...
+  
+  # Loss settings
+  loss:
+    pde: true
+    initial: true
+    boundary: true
+    data: true
+    
+  # Initial loss weights
+  loss_weights:
+    pde: 1.0
+    initial: 1.0
+    boundary: 1.0
+    data: 1.0
+    
+  # Loss weight scheduler settings
+  loss_weight_scheduler:
+    type: constant  # Options: constant, manual, gradnorm, softadapt
+    
+    # Settings for manual scheduler
+    schedule:
+      - epoch: 100
+        pde: 0.5
+        data: 2.0
+      - epoch: 200
+        pde: 1.0
+        data: 1.0
+        
+    # Settings for GradNorm scheduler
+    alpha: 1.5  # Balancing factor
+    learning_rate: 0.01  # Learning rate for weight updates
+    
+    # Settings for SoftAdapt scheduler
+    beta: 0.9  # Smoothing factor for exponential moving average 

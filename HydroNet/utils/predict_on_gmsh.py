@@ -14,7 +14,10 @@ import sys
 import meshio
 import torch
 
-def predict_on_gmsh2d_mesh(model, gmsh2d_fileName, prediction_variable_names_list, vtkFileName, bNodal, time_pred=None, device=None):
+def predict_on_gmsh2d_mesh(model, gmsh2d_fileName, prediction_variable_names_list, vtkFileName, bNodal, 
+                           bNormalize=None, normalization_method=None,
+                           mesh_stats=None, data_stats=None,
+                           time_pred=None, device=None):
     """Make prediction on a 2D Gmsh mesh.
 
     It generates a vtk file which contains the result.
@@ -31,6 +34,14 @@ def predict_on_gmsh2d_mesh(model, gmsh2d_fileName, prediction_variable_names_lis
         File name for the output VTK file
     bNodal : bool
         Whether to predict at nodes (True) or cell centers (False)
+    bNormalize : bool, optional
+        Whether the model takes normalized data as input
+    normalization_method : str, optional
+        Normalization method (e.g., 'min-max', 'z-score')
+    mesh_stats : dict, optional
+        Mesh statistics (x_mean, x_std, y_mean, y_std, t_mean, t_std, etc.)
+    data_stats : dict, optional
+        Data statistics (h_mean, h_std, u_mean, u_std, v_mean, v_std, etc.)
     time_pred : float, optional
         Time value for unsteady predictions. If None, assumes steady state
     device : torch.device, optional

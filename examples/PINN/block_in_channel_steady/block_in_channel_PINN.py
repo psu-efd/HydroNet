@@ -35,7 +35,7 @@ if project_root not in sys.path:
     print(f"Added {project_root} to Python path")
 
 from HydroNet import SWE_PINN, PINNTrainer, PINNDataset, Config
-from HydroNet.utils.predict_on_gmsh import predict_on_gmsh2d_mesh
+from HydroNet.utils.predict_on_vtk import predict_on_vtk2d_mesh
 
 def save_predictions_and_true_values_to_vtk(predictions_and_true_values_file, output_dir='plots'):
     """
@@ -216,7 +216,7 @@ def plot_training_history(history_file):
     plt.savefig('plots/component_losses.png')
     plt.close()
 
-def predict_solution(config, model, gmsh2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions'):    
+def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions'):    
     """
     Plot the PINN solution.
     
@@ -244,6 +244,10 @@ def predict_solution(config, model, gmsh2d_fileName, prediction_variable_names_l
 
     # Create time steps
     #time_points = np.linspace(t_start, t_end, num_time_steps, dtype=np.float32)
+
+    # Get normalization parameters
+    bNormalize = model.get_bNormalize()
+    normalization_method = model.get_normalization_method()
     
     with torch.no_grad():
         # Loop over time steps
@@ -254,7 +258,10 @@ def predict_solution(config, model, gmsh2d_fileName, prediction_variable_names_l
         else:
             vtkFileSaveName = f'{output_dir}/solution_cell_centered.vtk'
 
-        predict_on_gmsh2d_mesh(model, gmsh2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal, device=device)
+        predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal, 
+                              bNormalize=bNormalize, normalization_method=normalization_method,
+                              mesh_stats=mesh_stats, data_stats=data_stats,
+                              device=device)
               
         
 
@@ -274,6 +281,10 @@ if __name__ == "__main__":
     # Load dataset
     print("\nLoading dataset...")    
     dataset = PINNDataset(config, model)
+
+    dataset.print_stats()
+
+    #exit()
 
     # Create trainer
     trainer = PINNTrainer(model, dataset, config)    
@@ -297,14 +308,19 @@ if __name__ == "__main__":
         model.load_state_dict(checkpoint['model_state_dict'])
         model = model.to(model.get_device())  # Move model to device
 
-        gmsh2d_fileName = "case_preparation/generate_PINN_points/block_in_channel.msh"
+        # Get stats
+        mesh_stats = dataset.get_mesh_stats()
+        data_stats = dataset.get_data_stats()
+
+        # Predict on the vtk file (only the points in the vtk file are used for prediction)
+        vtk2d_fileName = "SRH2D_block_in_channel_C_0005.vtk"  
         prediction_variable_names_list = ["h", "u", "v"]
 
         bNodal = True
-        predict_solution(config, model, gmsh2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
+        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
 
         bNodal = False
-        predict_solution(config, model, gmsh2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
+        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
 
         # Save predictions and true values to VTK files
         save_predictions_and_true_values_to_vtk("plots/predictions_and_true_values.json", output_dir='plots')

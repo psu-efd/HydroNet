@@ -134,6 +134,7 @@ def convert_mesh_points_for_pinn():
 
     # First collect all boundary spatial points and their info
     all_boundary_spatial_points = []
+    all_boundary_points_z = []
     all_boundary_normals = []
     all_boundary_represented_lengths = []
     all_boundary_ids = []
@@ -159,6 +160,7 @@ def convert_mesh_points_for_pinn():
                 point_data['x'],
                 point_data['y']
             ])
+            all_boundary_points_z.append(point_data['z'])
             all_boundary_normals.append([
                 point_data['normal_x'],
                 point_data['normal_y']
@@ -170,6 +172,7 @@ def convert_mesh_points_for_pinn():
 
     # Convert to numpy arrays
     all_boundary_spatial_points = np.array(all_boundary_spatial_points, dtype=np.float32)
+    all_boundary_points_z = np.array(all_boundary_points_z, dtype=np.float32)
     all_boundary_normals = np.array(all_boundary_normals, dtype=np.float32)
     all_boundary_represented_lengths = np.array(all_boundary_represented_lengths, dtype=np.float32)
     all_boundary_ids = np.array(all_boundary_ids, dtype=np.float32)   #ID is integer, but we need to convert to float32 for compatibility
@@ -180,16 +183,17 @@ def convert_mesh_points_for_pinn():
 
     # Create arrays for all boundary points and info
     boundary_points = np.zeros((n_boundary_spatial, 2), dtype=np.float32)   #rows of (x, y)
-    boundary_info = np.zeros((n_boundary_spatial, 5), dtype=np.float32)   #rows of (ID, nx, ny, represented_length, ManningN)
+    boundary_info = np.zeros((n_boundary_spatial, 6), dtype=np.float32)   #rows of (ID, z, nx, ny, represented_length, ManningN)
 
     # Copy spatial coordinates
     boundary_points[:, :2] = all_boundary_spatial_points
         
     # Copy boundary info (ID and normals)
     boundary_info[:, 0] = all_boundary_ids
-    boundary_info[:, 1:3] = all_boundary_normals
-    boundary_info[:, 3] = all_boundary_represented_lengths
-    boundary_info[:, 4] = all_boundary_ManningN
+    boundary_info[:, 1] = all_boundary_points_z
+    boundary_info[:, 2:4] = all_boundary_normals
+    boundary_info[:, 4] = all_boundary_represented_lengths
+    boundary_info[:, 5] = all_boundary_ManningN
 
     #compute the statistics of all the points (pde_points and boundary_points)
     #min, max, mean, std, median, etc.
@@ -413,7 +417,7 @@ if __name__ == '__main__':
     
     # Convert SRH-2D mesh to points in mesh_points.json file
     # refinement=2 means generate 2 points per cell/edge
-    srh_to_pinn_points(srhcontrol_file, refinement=2)
+    srh_to_pinn_points(srhcontrol_file, refinement_pde=2, refinement_bc=4)
         
     print("\nConversion completed successfully!")
     print("Generated files:")

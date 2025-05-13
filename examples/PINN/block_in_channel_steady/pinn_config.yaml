@@ -8,14 +8,14 @@ device:
 # Architecture
 model:
   name: "SWE_PINN"
-  bNormalize: false         #whether to normalize the training data (x,y,t,h,u,v,zb,Sx,Sy,ManningN, etc) and the PDEs
+  bNormalize: true         #whether to normalize the training data (x,y,t,h,u,v,zb,Sx,Sy,ManningN, etc) and the PDEs
   normalization_method: "z-score" #"min-max" or "z-score"
   loss_flags:    
     bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
     bBoundary_loss: true   #whether to use boundary conditions in the loss function    
     bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
   hidden_layers: [32, 64, 64, 64, 64, 32]  # Network architecture
-  activation: "tanh"  # tanh is often better for PINNs
+  activation: "relu"  # tanh, relu, leaky_relu
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
   initialization: "xavier_normal"
 
@@ -25,23 +25,36 @@ physics:
   gravity: 9.81  # Gravitational acceleration (m/s^2)  
 
   scales:        #physical scales for normalizing the PDEs
-    length: 1.0  # Length scale
-    velocity: 1.0  # Velocity scale    
+    length: 0.4  # Length scale (e.g., averaged water depth)
+    velocity: 0.25  # Velocity scale (e.g., averaged velocity)
     
-  # Loss weights for different terms
-  loss_weights:
-    continuity_eq: 1.0
-    momentum_x_eq: 1.0
-    momentum_y_eq: 1.0
+  # Loss weights for different terms (initial values; will be adjusted by the loss weight scheduler)
+  loss_weights:    
+    pde: 1.0
     initial_condition: 1.0
     boundary_condition: 1.0
-    data_points: 1.0  # If you have measurement data
+    data_points: 10.0  # If you have measurement data
+    
+  # Loss weight scheduler settings
+  loss_weight_scheduler:
+    type: manual  # Options: constant, manual, gradnorm, softadapt
+    schedule:
+      - epoch: 1000       #epochs to start the scheduler
+        pde: 10.0
+        initial_condition: 1.0
+        boundary_condition: 10.0
+        data_points: 1.0
+      - epoch: 8000       #epochs to start the scheduler
+        pde: 1.0
+        initial_condition: 1.0
+        boundary_condition: 1.0
+        data_points: 1.0
 
 # Training parameters
 training:
   optimizers: ["Adam"] #["Adam", "LBFGS"]
-  epochs: [6000]  # PINNs often need more epochs
-  learning_rates: [0.001]
+  epochs: [20000]  # PINNs often need more epochs
+  learning_rates: [0.0001]
   weight_decay: 1.0e-5
   scheduler:
     use_scheduler: true
@@ -63,22 +76,17 @@ sampling:
 
 # Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)
 boundary_conditions:
-  inlet:
-    id: 1
+  1:   #BC ID
     type: "inlet-q"
     q_value: 0.38  # m^3/s
-  outlet:
-    id: 2
+  2:
     type: "exit-h"
     wse_value: 0.4  # m
-  top:
-    id: 3
+  3:
     type: "wall"
-  bottom:
-    id: 4
+  4:
     type: "wall"
-  obstacle:
-    id: 5
+  5:
     type: "wall"
 
 # Data paths

@@ -12,7 +12,7 @@ import meshio
 import os
 import numpy as np
 import json
-from misc_tools import generate_random01_exclude_boundaries_with_center, point_on_triangle, point_on_line
+from .misc_tools import generate_random01_exclude_boundaries_with_center, point_on_triangle, point_on_line
 
 def gmsh2D_to_points(mshFileName, refinement=1):
     """Convert Gmsh 2D mesh to points for PINN training. The saved "mesh_points.json" file can be used for PINN training. The file contains "equation_points" and "boundary_points".

@@ -5,6 +5,15 @@ import torch
 import torch.nn as nn
 import numpy as np
 from ...utils.config import Config
+from typing import Dict, Tuple, Optional, Union
+
+from .loss_weight_scheduler import (
+    LossWeightScheduler,
+    ConstantWeightScheduler,
+    ManualWeightScheduler,
+    GradNormScheduler,
+    SoftAdaptScheduler
+)
 
 
 class SWE_PINN(nn.Module):
@@ -92,20 +101,38 @@ class SWE_PINN(nn.Module):
         activation = self.config.get('model.activation', 'tanh')
         self.output_dim = self.config.get('model.output_dim', 3)  # h, u, v
         self.initialization = self.config.get('model.initialization', 'xavier_normal')
-        
-        # Physics parameters
-        self.g = self.config.get('physics.gravity', 9.81)  # Gravitational acceleration
-        self.n = self.config.get('physics.manning_coefficient', 0.03)  # Manning's coefficient (needs to be specified in a file for non-uniform roughness)
-        
+                
         # Loss weights
         self.loss_weights = {
-            'continuity': self.config.get('physics.loss_weights.continuity_eq', 1.0),
-            'momentum_x': self.config.get('physics.loss_weights.momentum_x_eq', 1.0),
-            'momentum_y': self.config.get('physics.loss_weights.momentum_y_eq', 1.0),
-            'initial': self.config.get('physics.loss_weights.initial_condition', 1.0),
-            'boundary': self.config.get('physics.loss_weights.boundary_condition', 1.0),
-            'data': self.config.get('physics.loss_weights.data_points', 1.0)
+            'pde': torch.tensor(self.config.get('physics.loss_weights.pde', 1.0), dtype=torch.float32, device=self.device),
+            'initial': torch.tensor(self.config.get('physics.loss_weights.initial_condition', 1.0), dtype=torch.float32, device=self.device),
+            'boundary': torch.tensor(self.config.get('physics.loss_weights.boundary_condition', 1.0), dtype=torch.float32, device=self.device),
+            'data': torch.tensor(self.config.get('physics.loss_weights.data_points', 1.0), dtype=torch.float32, device=self.device)
         }
+
+        # Initialize loss weight scheduler
+        scheduler_type = self.config.get('physics.loss_weight_scheduler.type', 'constant')
+        initial_weights = {
+            'pde': self.loss_weights['pde'].item(),
+            'initial': self.loss_weights['initial'].item(),
+            'boundary': self.loss_weights['boundary'].item(),
+            'data': self.loss_weights['data'].item()
+        }
+
+        if scheduler_type == 'constant':
+            self.loss_weight_scheduler = ConstantWeightScheduler(initial_weights)
+        elif scheduler_type == 'manual':
+            schedule = self.config.get('physics.loss_weight_scheduler.schedule', [])
+            self.loss_weight_scheduler = ManualWeightScheduler(initial_weights, schedule)
+        elif scheduler_type == 'gradnorm':
+            alpha = self.config.get('physics.loss_weight_scheduler.alpha', 1.5)
+            learning_rate = self.config.get('physics.loss_weight_scheduler.learning_rate', 0.01)
+            self.loss_weight_scheduler = GradNormScheduler(initial_weights, alpha, learning_rate)
+        elif scheduler_type == 'softadapt':
+            beta = self.config.get('physics.loss_weight_scheduler.beta', 0.9)
+            self.loss_weight_scheduler = SoftAdaptScheduler(initial_weights, beta)
+        else:
+            raise ValueError(f"Unsupported loss weight scheduler type: {scheduler_type}")
 
         # Read in the boundary conditions
         try:
@@ -151,19 +178,24 @@ class SWE_PINN(nn.Module):
         # Read physics-related parameters
         self.g = self.config.get('physics.gravity', 9.81)  # Gravitational acceleration
 
-        # Read scaling parameters (used for PDEs)
-        self.length_scale = self.config.get('physics.length_scale', 1.0)
-        self.velocity_scale = self.config.get('physics.velocity_scale', 1.0)
+        # Get physics scales
+        try:
+            self.length = self.config.get('physics.scales.length')
+            if self.length is None:
+                raise ValueError("physics.scales.length must be specified in config file")
+            # Convert to tensor and move to device
+            self.length = torch.tensor(self.length, dtype=torch.float32, device=self.device)
+        except KeyError:
+            raise ValueError("physics.scales.length must be specified in config file")
 
-        # Read loss weights
-        self.loss_weights = {
-            'continuity': self.config.get('physics.loss_weights.continuity_eq', 1.0),
-            'momentum_x': self.config.get('physics.loss_weights.momentum_x_eq', 1.0),
-            'momentum_y': self.config.get('physics.loss_weights.momentum_y_eq', 1.0),
-            'initial': self.config.get('physics.loss_weights.initial_condition', 1.0),
-            'boundary': self.config.get('physics.loss_weights.boundary_condition', 1.0),
-            'data': self.config.get('physics.loss_weights.data_points', 1.0)
-        }
+        try:
+            self.velocity = self.config.get('physics.scales.velocity')
+            if self.velocity is None:
+                raise ValueError("physics.scales.velocity must be specified in config file")
+            # Convert to tensor and move to device
+            self.velocity = torch.tensor(self.velocity, dtype=torch.float32, device=self.device)
+        except KeyError:
+            raise ValueError("physics.scales.velocity must be specified in config file")
 
         # Read boundary conditions
         self.BCs_from_config = self.config.get('boundary_conditions')
@@ -276,6 +308,12 @@ class SWE_PINN(nn.Module):
         mu_v = data_stats['v_mean']
         sigma_v = data_stats['v_std']
 
+        # Extract PDE data (zb, Sx, Sy, ManningN on PDE points)
+        zb = pde_data[:, 0:1]
+        Sx = pde_data[:, 1:2]
+        Sy = pde_data[:, 2:3]
+        ManningN = pde_data[:, 3:4]
+
         # Extract coordinates
         x_coord = x[:, 0:1]  # Keep dimension
         y_coord = x[:, 1:2]  # Keep dimension
@@ -345,7 +383,15 @@ class SWE_PINN(nn.Module):
                 raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
                 
         if not self.bSteady:  #For unsteady problems, we need to add the time derivative term
-            mass_residual = dh_dt/sigma_t + mass_residual
+            if not self.bNormalize:
+                mass_residual = dh_dt + mass_residual
+            else:   
+                if self.normalization_method == 'minmax':
+                    NotImplementedError("Min-max normalization is not implemented yet") 
+                elif self.normalization_method == 'z-score':
+                    mass_residual = dh_dt/sigma_t + mass_residual
+                else:
+                    raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
         
         # Momentum conservation equations
         momentum_x_residual = torch.tensor(0.0, device=self.device)
@@ -355,11 +401,11 @@ class SWE_PINN(nn.Module):
 
         if not self.bNormalize:   #if the input and output are not normalized, the residuals are computed in the unnormalized space
             momentum_x_residual = (u*du_dx + v*du_dy + 
-                                 self.g * dh_dx + 
-                                 self.g * self.n**2 * u * u_mag / (h**(4/3)))
+                                 self.g * dh_dx - self.g * Sx + 
+                                 self.g * ManningN**2 * u * u_mag / (h**(4/3)))
             momentum_y_residual = (u*dv_dx + v*dv_dy + 
-                                 self.g * dh_dy + 
-                                 self.g * self.n**2 * v * u_mag / (h**(4/3)))
+                                 self.g * dh_dy - self.g * Sy + 
+                                 self.g * ManningN**2 * v * u_mag / (h**(4/3)))
             
         else:
             #if the input and output are normalized, the residual computation needs to consider that.
@@ -368,11 +414,11 @@ class SWE_PINN(nn.Module):
                 NotImplementedError("Min-max normalization is not implemented yet") 
             elif self.normalization_method == 'z-score':
                 momentum_x_residual = (u*du_dx/sigma_x + v*du_dy/sigma_y + 
-                                 self.g * dh_dx/sigma_x + 
-                                 self.g * self.n**2 * u * u_mag / (h**(4/3)))
+                                 self.g * dh_dx/sigma_x - self.g * Sx + 
+                                 self.g * ManningN**2 * u * u_mag / (h**(4/3)))
                 momentum_y_residual = (u*dv_dx/sigma_x + v*dv_dy/sigma_y + 
-                                 self.g * dh_dy/sigma_y + 
-                                 self.g * self.n**2 * v * u_mag / (h**(4/3)))
+                                 self.g * dh_dy/sigma_y - self.g * Sy + 
+                                 self.g * ManningN**2 * v * u_mag / (h**(4/3)))
             else:
                 raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
 
@@ -380,10 +426,15 @@ class SWE_PINN(nn.Module):
         if not self.bSteady:
             momentum_x_residual = (du_dt/sigma_t + momentum_x_residual)
             momentum_y_residual = (dv_dt/sigma_t + momentum_y_residual)
+
+        #scale the residuals (in unnormalized space) based on the length and velocity scales of the problem
+        mass_residual = mass_residual / self.velocity**2
+        momentum_x_residual = momentum_x_residual / self.velocity**2 * self.length
+        momentum_y_residual = momentum_y_residual / self.velocity**2 * self.length
         
         return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
         
-    def compute_pde_loss(self, pde_points, pde_data, mesh_stats):
+    def compute_pde_loss(self, pde_points, pde_data, mesh_stats, data_stats):
         """
         Compute the PDE loss for the shallow water equations.
         
@@ -395,7 +446,7 @@ class SWE_PINN(nn.Module):
         Returns:
             torch.Tensor: PDE loss.
         """
-        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(pde_points, pde_data, mesh_stats)
+        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(pde_points, pde_data, mesh_stats, data_stats)
         
         # Compute the loss for each equation with stability
         continuity_loss = torch.mean(continuity_residual**2)
@@ -411,11 +462,7 @@ class SWE_PINN(nn.Module):
             'momentum_y_loss': momentum_y_loss.item()
         }
         
-        pde_loss = (
-            self.loss_weights['continuity'] * (continuity_loss + eps) +
-            self.loss_weights['momentum_x'] * (momentum_x_loss + eps) +
-            self.loss_weights['momentum_y'] * (momentum_y_loss + eps)
-        )
+        pde_loss = (continuity_loss + momentum_x_loss + momentum_y_loss + eps)
         
         return pde_loss, pde_loss_components, h, u, v
         
@@ -443,7 +490,7 @@ class SWE_PINN(nn.Module):
         
         return initial_loss, h, u, v
         
-    def compute_boundary_loss(self, boundary_info):
+    def compute_boundary_loss(self, boundary_info, mesh_stats, data_stats):
         """
         Compute the loss for boundary conditions. 
 
@@ -455,19 +502,52 @@ class SWE_PINN(nn.Module):
         
         Args:
             boundary_info (tuple): Tuple of (boundary_points, boundary_ids, boundary_normals, boundary_lengths).
-            
+            mesh_stats (dict): Statistics of the mesh points.
+            data_stats (dict): Statistics of the data points.                
+
         Returns:
             torch.Tensor: Combined boundary condition loss.
         """
-        boundary_points, boundary_ids, boundary_normals, boundary_lengths = boundary_info
+
+        # Get the stats
+        mu_x = mesh_stats['x_mean']
+        sigma_x = mesh_stats['x_std']
+        mu_y = mesh_stats['y_mean']
+        sigma_y = mesh_stats['y_std']
+        mu_t = mesh_stats['t_mean']
+        sigma_t = mesh_stats['t_std']
+
+        mu_h = data_stats['h_mean']
+        sigma_h = data_stats['h_std']
+        mu_u = data_stats['u_mean']
+        sigma_u = data_stats['u_std']
+        mu_v = data_stats['v_mean']
+        sigma_v = data_stats['v_std']
+
+        boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN = boundary_info
         device = boundary_points.device
         
         # Get model predictions
         predictions = self.forward(boundary_points)
-        h, u, v = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
+        h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
 
-        # Make sure h is positive (clipping)
-        h = torch.clip(h, min=1e-3)
+        # If the input and output are normalized, we need to convert outputs to the unnormalized space
+        if self.bNormalize: 
+            if self.normalization_method == 'minmax':
+                NotImplementedError("Min-max normalization is not implemented yet") 
+            elif self.normalization_method == 'z-score':
+                h = h_hat * sigma_h + mu_h
+                u = u_hat * sigma_u + mu_u
+                v = v_hat * sigma_v + mu_v
+            else:
+                raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
+            
+            #clip h to be positive (clipping should only be done in the unnormalized space)
+            h = torch.clip(h, min=1e-3)
+        else:
+            h = h_hat
+            u = u_hat
+            v = v_hat   
         
         # Initialize losses
         boundary_loss = torch.tensor(0.0, device=device)
@@ -499,9 +579,19 @@ class SWE_PINN(nn.Module):
         )[0]
         
         # Project gradients onto normal direction
-        dh_dn = h_grad[:, 0:1] * boundary_normals[:, 0:1] + h_grad[:, 1:2] * boundary_normals[:, 1:2]
-        du_dn = u_grad[:, 0:1] * boundary_normals[:, 0:1] + u_grad[:, 1:2] * boundary_normals[:, 1:2]
-        dv_dn = v_grad[:, 0:1] * boundary_normals[:, 0:1] + v_grad[:, 1:2] * boundary_normals[:, 1:2]
+        if not self.bNormalize:
+            dh_dn = h_grad[:, 0:1] * boundary_normals[:, 0:1] + h_grad[:, 1:2] * boundary_normals[:, 1:2]
+            du_dn = u_grad[:, 0:1] * boundary_normals[:, 0:1] + u_grad[:, 1:2] * boundary_normals[:, 1:2]
+            dv_dn = v_grad[:, 0:1] * boundary_normals[:, 0:1] + v_grad[:, 1:2] * boundary_normals[:, 1:2]
+        else:
+            if self.normalization_method == 'minmax':
+                NotImplementedError("Min-max normalization is not implemented yet") 
+            elif self.normalization_method == 'z-score':
+                dh_dn = h_grad[:, 0:1]/sigma_x * boundary_normals[:, 0:1] + h_grad[:, 1:2]/sigma_y * boundary_normals[:, 1:2]
+                du_dn = u_grad[:, 0:1]/sigma_x * boundary_normals[:, 0:1] + u_grad[:, 1:2]/sigma_y * boundary_normals[:, 1:2]
+                dv_dn = v_grad[:, 0:1]/sigma_x * boundary_normals[:, 0:1] + v_grad[:, 1:2]/sigma_y * boundary_normals[:, 1:2]
+            else:
+                raise ValueError(f"Unsupported normalization method: {self.normalization_method}")  
         
         # Compute normal velocity for inlet discharge
         u_normal = u * boundary_normals[:, 0:1] + v * boundary_normals[:, 1:2]
@@ -510,8 +600,7 @@ class SWE_PINN(nn.Module):
         boundary_loss_components = {}
         
         # Loop over all boundaries specified in config.boundary_conditions
-        for bc_name, bc_config in self.BCs_from_config.items():
-            bc_id = bc_config['id']
+        for bc_id, bc_config in self.BCs_from_config.items():
             bc_type = bc_config['type']
             
             # Get mask for current boundary
@@ -549,11 +638,11 @@ class SWE_PINN(nn.Module):
             elif bc_type == "exit-h":
                 # Get specified water surface elevation from config
                 wse_specified = bc_config['wse_value']
-                # Get bed elevation (assuming it's 0 for now)
-                bed_elevation = 0.0
+                # Get bed elevation 
+                bed_elevation = boundary_z[bc_mask]
                 # Convert to tensors and compute water depth from WSE and bed elevation
                 wse_tensor = torch.tensor(wse_specified, device=device)
-                bed_tensor = torch.tensor(bed_elevation, device=device)
+                bed_tensor = bed_elevation.clone().detach().to(device)
                 h_specified = torch.clip(wse_tensor - bed_tensor, min=1e-3)
                 # Loss is the difference between computed and specified water depth
                 h_loss = torch.mean((h[bc_mask] - h_specified)**2 + eps)
@@ -589,7 +678,7 @@ class SWE_PINN(nn.Module):
         
         return boundary_loss, boundary_loss_components, h, u, v
         
-    def compute_data_loss(self, data_points, data_values, data_flags):
+    def compute_data_loss(self, data_points, data_values, data_flags, mesh_stats, data_stats):
         """
         Compute the loss for data points.
         
@@ -597,7 +686,9 @@ class SWE_PINN(nn.Module):
             data_points (torch.Tensor): Data points.
             data_values (torch.Tensor): True values at data points.
             data_flags (torch.Tensor): Flags indicating which variables are available (h, u, v).
-            
+            mesh_stats (dict): Statistics of the mesh points.
+            data_stats (dict): Statistics of the data points.
+
         Returns:
             torch.Tensor: Total data loss.
             h_pred, u_pred, v_pred: Predicted values at data points.
@@ -636,11 +727,7 @@ class SWE_PINN(nn.Module):
         v_loss = torch.mean(v_flag * (v_pred - v_true)**2) + eps
         
         # Combine losses with weights
-        data_loss = (
-            self.loss_weights.get('data_h', 1.0) * h_loss +
-            self.loss_weights.get('data_u', 1.0) * u_loss +
-            self.loss_weights.get('data_v', 1.0) * v_loss
-        )
+        data_loss = h_loss + u_loss + v_loss
 
         # store loss components
         loss_components = {
@@ -652,7 +739,7 @@ class SWE_PINN(nn.Module):
 
         return data_loss, loss_components, h_pred, u_pred, v_pred
         
-    def compute_total_loss(self, pde_points, pde_data, initial_points, initial_values, boundary_info, data_points, data_values, data_flags, mesh_stats, data_stats):
+    def compute_total_loss(self, pde_points, pde_data, initial_points, initial_values, boundary_info, data_points, data_values, data_flags, mesh_stats, data_stats, epoch: Optional[int] = None):
         """
         Compute the total loss for the PINN model.
         
@@ -666,8 +753,9 @@ class SWE_PINN(nn.Module):
             data_values (torch.Tensor): True values at data points (h, u, v). Normalized if bNormalize is True. 
             data_flags (torch.Tensor): Flags indicating which variables are available at data points (h, u, v).
             mesh_stats (dict): Statistics of the mesh points.
-            data_stats (dict): Statistics of the data points.                
-
+            data_stats (dict): Statistics of the data points.
+            epoch (int, optional): Current training epoch for loss weight scheduling.
+            
         Returns:
             tuple: (total_loss, loss_components, predictions_and_true_values)
         """
@@ -694,7 +782,7 @@ class SWE_PINN(nn.Module):
         # Compute PDE loss
         if self.bPDE_loss:
             if pde_points is not None and pde_data is not None:
-                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points, pde_data, mesh_stats)
+                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points, pde_data, mesh_stats, data_stats)
                 predictions_and_true_values.update({
                     'pde_points': pde_points,
                     'h_pred_pde_points': h_pred_pde_points,
@@ -719,7 +807,7 @@ class SWE_PINN(nn.Module):
         # Compute boundary loss
         if self.bBoundary_loss:
             if boundary_info is not None:
-                boundary_loss, boundary_loss_components, h_pred_boundary_points, u_pred_boundary_points, v_pred_boundary_points = self.compute_boundary_loss(boundary_info)
+                boundary_loss, boundary_loss_components, h_pred_boundary_points, u_pred_boundary_points, v_pred_boundary_points = self.compute_boundary_loss(boundary_info, mesh_stats, data_stats)
                 predictions_and_true_values.update({
                     'boundary_points': boundary_info[0],
                     'h_pred_boundary_points': h_pred_boundary_points,
@@ -730,7 +818,7 @@ class SWE_PINN(nn.Module):
         # Compute data loss
         if self.bData_loss:
             if data_points is not None and data_values is not None and data_flags is not None:
-                data_loss, data_loss_components, h_pred_data_points, u_pred_data_points, v_pred_data_points = self.compute_data_loss(data_points, data_values, data_flags)
+                data_loss, data_loss_components, h_pred_data_points, u_pred_data_points, v_pred_data_points = self.compute_data_loss(data_points, data_values, data_flags, mesh_stats, data_stats)
                 predictions_and_true_values.update({
                     'data_points': data_points,
                     'h_pred_data_points': h_pred_data_points,
@@ -742,25 +830,57 @@ class SWE_PINN(nn.Module):
                     'data_flags': data_flags
                 })
         
-        # Compute total loss
-        total_loss = (
-            self.loss_weights.get('pde', 1.0) * pde_loss +
-            self.loss_weights.get('initial', 1.0) * initial_loss +
-            self.loss_weights.get('boundary', 1.0) * boundary_loss +
-            self.loss_weights.get('data', 1.0) * data_loss
-        )
-        
-        # Return total loss and individual components
+        # Collect loss components for weight scheduling
         loss_components = {
             'pde_loss': pde_loss.item(),
-            'pde_loss_components': pde_loss_components,
             'initial_loss': initial_loss.item(),
-            'initial_loss_components': initial_loss_components,
             'boundary_loss': boundary_loss.item(),
-            'boundary_loss_components': boundary_loss_components,
-            'data_loss': data_loss.item(),
-            'data_loss_components': data_loss_components,
-            'total_loss': total_loss.item()
+            'data_loss': data_loss.item()
         }
         
-        return total_loss, loss_components, predictions_and_true_values
+        # Update loss weights if epoch is provided
+        if epoch is not None:
+            self.update_loss_weights(epoch, loss_components)
+        
+        # Compute total loss with current weights
+        weighted_total_loss = (
+            self.loss_weights['pde'] * pde_loss +
+            self.loss_weights['initial'] * initial_loss +
+            self.loss_weights['boundary'] * boundary_loss +
+            self.loss_weights['data'] * data_loss
+        )
+        
+        # Compute unweighted total loss
+        unweighted_total_loss = pde_loss + initial_loss + boundary_loss + data_loss
+        
+        # Return total loss and individual components
+        loss_components.update({
+            'pde_loss_components': pde_loss_components,
+            'initial_loss_components': initial_loss_components,
+            'boundary_loss_components': boundary_loss_components,
+            'data_loss_components': data_loss_components,
+            'weighted_total_loss': weighted_total_loss.item(),
+            'unweighted_total_loss': unweighted_total_loss.item(),
+            'loss_weights': self.loss_weights.copy()
+        })
+        
+        return weighted_total_loss, loss_components, predictions_and_true_values
+
+    def update_loss_weights(self, epoch: int, loss_components: Dict[str, float]):
+        """
+        Update loss weights using the scheduler.
+        
+        Args:
+            epoch (int): Current training epoch.
+            loss_components (Dict[str, float]): Current loss component values.
+        """
+        # Get updated weights from scheduler
+        updated_weights = self.loss_weight_scheduler.step(epoch, loss_components)
+        
+        # Convert weights back to tensors and update
+        self.loss_weights = {
+            'pde': torch.tensor(updated_weights['pde'], dtype=torch.float32, device=self.device),
+            'initial': torch.tensor(updated_weights['initial'], dtype=torch.float32, device=self.device),
+            'boundary': torch.tensor(updated_weights['boundary'], dtype=torch.float32, device=self.device),
+            'data': torch.tensor(updated_weights['data'], dtype=torch.float32, device=self.device)
+        }

@@ -11,7 +11,7 @@ import time
 
 from ...utils.config import Config
 from ...data import PINNDataset
-
+from .model import SWE_PINN  # Direct import instead of relative import
 
 class PINNTrainer:
     """
@@ -26,6 +26,14 @@ class PINNTrainer:
             dataset (PINNDataset): Dataset containing all collocation points and data.
             config (Config): Configuration object.
         """
+
+        #check and ensure that the model is a SWE_PINN
+        if not isinstance(model, SWE_PINN):
+            raise ValueError("model must be a SWE_PINN")
+        
+        #check and ensure that the dataset is a PINNDataset
+        if not isinstance(dataset, PINNDataset):
+            raise ValueError("dataset must be a PINNDataset")
         
         self.model = model
         self.dataset = dataset
@@ -146,13 +154,15 @@ class PINNTrainer:
                 weight_decay=self.weight_decay
             )
         elif optimizer_name.lower() == 'lbfgs':
-            # L-BFGS doesn't support weight_decay directly
             return optim.LBFGS(
                 self.model.parameters(),
                 lr=float(learning_rate),
-                max_iter=20,
-                history_size=50,
-                line_search_fn='strong_wolfe'
+                max_iter=50,
+                history_size=100,
+                line_search_fn='strong_wolfe',
+                tolerance_grad=1e-7,
+                tolerance_change=1e-9,
+                max_eval=50
             )
         else:
             raise ValueError(f"Unsupported optimizer: {optimizer_name}")
@@ -161,16 +171,24 @@ class PINNTrainer:
         """
         Train the PINN model using full batch training with sequential optimizers.        
         """
+
+        # Get stats
+        mesh_stats = self.dataset.get_mesh_stats()
+        data_stats = self.dataset.get_data_stats()
+
         # Get all points at once - full batch training
         # Get pde points
         if self.bPDE_loss:
-            pde_points = self.dataset.get_pde_points()
-            if pde_points is not None:
+            pde_points, pde_data = self.dataset.get_pde_points()
+            if pde_points is not None and pde_data is not None:
                 pde_points = pde_points.to(self.device)
+                pde_data = pde_data.to(self.device)
             else:
                 pde_points = None
+                pde_data = None
         else:
             pde_points = None
+            pde_data = None
 
         # Get initial points if it is included in loss, available and for transient problems
         if self.bInitial_loss:
@@ -187,7 +205,7 @@ class PINNTrainer:
         
         # Get boundary points
         if self.bBoundary_loss:
-            boundary_points, boundary_ids, boundary_normals, boundary_lengths = self.dataset.get_boundary_points()
+            boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN = self.dataset.get_boundary_points()
 
             if boundary_points is not None:
                 boundary_points = boundary_points.to(self.device)
@@ -198,6 +216,11 @@ class PINNTrainer:
                 boundary_ids = boundary_ids.to(self.device)
             else:
                 boundary_ids = None
+
+            if boundary_z is not None:
+                boundary_z = boundary_z.to(self.device)
+            else:
+                boundary_z = None
             
             if boundary_normals is not None:
                 boundary_normals = boundary_normals.to(self.device)
@@ -208,11 +231,18 @@ class PINNTrainer:
                 boundary_lengths = boundary_lengths.to(self.device)
             else:
                 boundary_lengths = None
+
+            if boundary_ManningN is not None:
+                boundary_ManningN = boundary_ManningN.to(self.device)
+            else:
+                boundary_ManningN = None
         else:
             boundary_points = None
             boundary_ids = None
+            boundary_z = None
             boundary_normals = None
             boundary_lengths = None
+            boundary_ManningN = None
 
         # Get data points if it is included in loss and available
         if self.bData_loss:
@@ -229,6 +259,7 @@ class PINNTrainer:
         else:
             data_points = None
             data_values = None
+            data_flags = None
 
         print(f"\nStarting full batch training with {len(self.optimizer_names)} optimizers...")
 
@@ -286,45 +317,60 @@ class PINNTrainer:
             for epoch in range(n_epochs):
                 # Zero gradients
                 self.optimizer.zero_grad()
+
+                # Pack boundary info
+                boundary_info=(boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN)
                 
                 # Forward pass and compute loss using all points
                 total_loss, loss_components, predictions_and_true_values = self.model.compute_total_loss(
                     pde_points,
-                    initial_points=initial_points,
-                    initial_values=initial_values,
-                    boundary_info=(boundary_points, boundary_ids, boundary_normals, boundary_lengths),
-                    data_points=data_points,
-                    data_values=data_values,
-                    data_flags=data_flags
+                    pde_data,
+                    initial_points,
+                    initial_values,
+                    boundary_info,
+                    data_points,
+                    data_values,
+                    data_flags,
+                    mesh_stats,
+                    data_stats,
+                    epoch=total_epochs
                 )
                 
                 # Backward pass
                 total_loss.backward()
                 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                
                 # Update weights
                 if optimizer_name.lower() == 'lbfgs':
-                    # L-BFGS requires a closure
+                    # For L-BFGS, we don't clip gradients as it interferes with line search
                     def closure():
                         self.optimizer.zero_grad()
-                        loss, _ = self.model.compute_total_loss(
+                        loss, _, _ = self.model.compute_total_loss(
                             pde_points,
-                            initial_points=initial_points,
-                            initial_values=initial_values,
-                            boundary_info=(boundary_points, boundary_ids, boundary_normals, boundary_lengths),
-                            data_points=data_points,
-                            data_values=data_values
+                            pde_data,
+                            initial_points,
+                            initial_values,
+                            boundary_info,
+                            data_points,
+                            data_values,
+                            data_flags,
+                            mesh_stats,
+                            data_stats,
+                            epoch=total_epochs
                         )
                         loss.backward()
+                        if epoch % self.print_freq == 0:
+                            print(f"L-BFGS closure loss: {loss.item():.6f}")
                         return loss
                     self.optimizer.step(closure)
+                    if epoch % self.print_freq == 0:
+                        print(f"L-BFGS step completed. Current loss: {total_loss.item():.6f}")
                 else:
+                    # For other optimizers (like Adam), we use gradient clipping
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
                 
-                # Update scheduler if needed
-                if self.scheduler is not None:
+                # Update scheduler only for non-LBFGS optimizers
+                if self.scheduler is not None and optimizer_name.lower() != 'lbfgs':
                     if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                         self.scheduler.step(total_loss)
                     else:
@@ -348,7 +394,7 @@ class PINNTrainer:
                     return {
                         'loss_history': self.loss_history,
                         'component_loss_history': self.component_loss_history
-                    }
+                    }, predictions_and_true_values
                 
                 total_epochs += 1
 
@@ -361,38 +407,6 @@ class PINNTrainer:
             'loss_history': self.loss_history,
             'component_loss_history': self.component_loss_history            
         }, predictions_and_true_values
-        
-    def _create_dataset(self):
-        """
-        Create a PINN dataset for training.
-        
-        Returns:
-            PINNDataset: Dataset containing collocation points.
-        """
-        # Get domain parameters from config
-        domain_params = self.config.get('sampling.domain', {
-            'x_min': 0.0,
-            'x_max': 1.0,
-            'y_min': 0.0,
-            'y_max': 1.0,
-            't_min': 0.0,
-            't_max': 1.0
-        })
-        
-        # Get sampling parameters from config
-        num_domain_points = self.config.get('sampling.num_domain_points', 20000)
-        num_boundary_points = self.config.get('sampling.num_boundary_points', 5000)
-        num_initial_points = self.config.get('sampling.num_initial_points', 5000)
-        
-        # Create dataset
-        dataset = PINNDataset(
-            domain_params,
-            num_domain_points=num_domain_points,
-            num_boundary_points=num_boundary_points,
-            num_initial_points=num_initial_points
-        )
-        
-        return dataset
         
     def _save_checkpoint(self, epoch):
         """
@@ -415,7 +429,8 @@ class PINNTrainer:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
             
         torch.save(checkpoint, checkpoint_path)
-        print(f"Checkpoint saved to {checkpoint_path}")
+        if epoch!="best":
+            print(f"Checkpoint saved to {checkpoint_path}")
         
     def load_checkpoint(self, checkpoint_path):
         """
@@ -448,7 +463,7 @@ class PINNTrainer:
             x (torch.Tensor or numpy.ndarray): Input tensor of shape [batch_size, 3] containing (x, y, t) coordinates.
             
         Returns:
-            numpy.ndarray: Model predictions.
+            numpy.ndarray: Model predictions (it is normalized if bNormalize is True)
         """
         self.model.eval()
         
@@ -498,7 +513,8 @@ class PINNTrainer:
         # Print progress
         if (epoch + 1) % self.print_freq == 0:
             print(f"\nEpoch [{epoch+1}/{n_epochs_all_optimizers}] with {optimizer_name}")
-            print(f"Total Loss: {total_loss.item():.6f}")
+            print(f"Weighted Total Loss: {loss_components['weighted_total_loss']:.6f}")
+            print(f"Unweighted Total Loss: {loss_components['unweighted_total_loss']:.6f}")
             print("\nLoss components:")
             for key, value in loss_components.items():
                 if isinstance(value, dict):

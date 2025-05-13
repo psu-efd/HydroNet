@@ -89,14 +89,16 @@ class PINNDataset(Dataset):
                 self.boundary_points = np.load(boundary_file)
                 boundary_info = np.load(boundary_info_file)
                 self.boundary_identifiers = boundary_info[:, 0].astype(np.int32)  # First column: identifiers should be converted to int32
-                self.boundary_normals = boundary_info[:, 1:3]    # normal vectors
-                self.boundary_lengths = boundary_info[:, 3]      # represented lengths
-                self.boundary_ManningN = boundary_info[:, 4]    # ManningN
+                self.boundary_z = boundary_info[:, 1]
+                self.boundary_normals = boundary_info[:, 2:4]    # normal vectors
+                self.boundary_lengths = boundary_info[:, 4]      # represented lengths
+                self.boundary_ManningN = boundary_info[:, 5]    # ManningN
             else:
                 raise FileNotFoundError("Boundary points or info file not found")
         else:
             self.boundary_points = None
             self.boundary_identifiers = None
+            self.boundary_z = None
             self.boundary_normals = None
             self.boundary_lengths = None
             self.boundary_ManningN = None
@@ -165,6 +167,10 @@ class PINNDataset(Dataset):
         else:
             raise FileNotFoundError(f"All data points stats file not found: {all_data_points_stats_file}")
 
+        #if bNormalize is true, normalize the data
+        if self.bNormalize:
+            self.normalize_data()
+
         # Convert to PyTorch tensors and move to device
         if self.bPDE_loss and self.interior_points is not None:
             self.interior_points = torch.tensor(self.interior_points, dtype=torch.float32, device=self.device)
@@ -176,6 +182,7 @@ class PINNDataset(Dataset):
             self.boundary_points = torch.tensor(self.boundary_points, dtype=torch.float32, device=self.device)
             self.boundary_points.requires_grad_(True)
             self.boundary_identifiers = torch.tensor(self.boundary_identifiers, dtype=torch.int32, device=self.device)
+            self.boundary_z = torch.tensor(self.boundary_z, dtype=torch.float32, device=self.device)
             self.boundary_normals = torch.tensor(self.boundary_normals, dtype=torch.float32, device=self.device)
             self.boundary_lengths = torch.tensor(self.boundary_lengths, dtype=torch.float32, device=self.device)
             self.boundary_ManningN = torch.tensor(self.boundary_ManningN, dtype=torch.float32, device=self.device)
@@ -319,9 +326,7 @@ class PINNDataset(Dataset):
             'Umag_std': self.data_Umag_std
         }
             
-        #if bNormalize is true, normalize the data
-        if self.bNormalize:
-            self.normalize_data()
+       
         
 
     def __len__(self):
@@ -458,12 +463,22 @@ class PINNDataset(Dataset):
 
         print(f"Interior points: {self.interior_points}")
         print(f"Boundary points: {self.boundary_points}")
+        print(f"Boundary identifiers: {self.boundary_identifiers}")
+        print(f"Boundary z: {self.boundary_z}")
+        print(f"Boundary normals: {self.boundary_normals}")
+        print(f"Boundary lengths: {self.boundary_lengths}")
+        print(f"Boundary Manning N: {self.boundary_ManningN}")
         print(f"Initial points: {self.initial_points}")
         print(f"Data points: {self.data_points}")
         print(f"Data values: {self.data_values}")
         print(f"Data flags: {self.data_flags}")
 
         print("Mesh stats:")
+        print(self.mesh_stats)
+
+        print("Data stats:")
+        print(self.data_stats)
+
         #interior points
         if self.interior_points is not None:
             print("Interior points:")
@@ -546,7 +561,7 @@ class PINNDataset(Dataset):
 
     def get_boundary_points(self):
         """Get all points for enforcing boundary conditions."""
-        return self.boundary_points, self.boundary_identifiers, self.boundary_normals, self.boundary_lengths, self.boundary_ManningN
+        return self.boundary_points, self.boundary_identifiers, self.boundary_z, self.boundary_normals, self.boundary_lengths, self.boundary_ManningN
 
     def get_data_points(self):
         """Get all points for data points."""
@@ -555,6 +570,14 @@ class PINNDataset(Dataset):
         else:
             print("No data points for this problem")
             return None
+    
+    def get_mesh_stats(self):
+        """Get the statistics of the mesh."""
+        return self.mesh_stats
+
+    def get_data_stats(self):
+        """Get the statistics of the data."""
+        return self.data_stats
 
 
 def get_pinn_dataloader(dataset, batch_size, shuffle, num_workers):
