@@ -45,16 +45,19 @@ physics:
         boundary_condition: 10.0
         data_points: 1.0
       - epoch: 8000       #epochs to start the scheduler
-        pde: 1.0
+        pde: 2.0
         initial_condition: 1.0
-        boundary_condition: 1.0
+        boundary_condition: 2.0
         data_points: 1.0
+    # Settings for GradNorm scheduler
+    alpha: 1.0  # Balancing factor, e.g., 1.5 (the higher the alpha, the more weight is given to the components with higher gradients)
+    learning_rate: 0.001  # Learning rate for weight updates
 
 # Training parameters
 training:
   optimizers: ["Adam"] #["Adam", "LBFGS"]
-  epochs: [20000]  # PINNs often need more epochs
-  learning_rates: [0.0001]
+  epochs: [10000]  # PINNs often need more epochs
+  learning_rates: [0.001]
   weight_decay: 1.0e-5
   scheduler:
     use_scheduler: true
@@ -69,11 +72,6 @@ training:
   save_freq: 1  # Save checkpoint every N epochs
   print_freq: 100  # Print progress every N epochs
 
-# Sampling parameters
-sampling: 
-  num_pde_points: 1326      # # Number of space points (these should match your converted points)
-  num_boundary_points: 118  # Points per boundary, will be multiplied by time steps
-
 # Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)
 boundary_conditions:
   1:   #BC ID
@@ -81,7 +79,9 @@ boundary_conditions:
     q_value: 0.38  # m^3/s
   2:
     type: "exit-h"
+    exit_h_option: "constant"   #"constant" or "rating-curve". If "rating-curve", need to specify the rating curve file name.
     wse_value: 0.4  # m
+    rating_curve_file: "exit_rating_curve.xys"  # Rating curve file name
   3:
     type: "wall"
   4:

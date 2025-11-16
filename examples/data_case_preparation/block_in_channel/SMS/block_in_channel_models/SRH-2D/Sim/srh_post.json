@@ -1,1 +1,0 @@
-{"OUT_FILE":"Case_XMDFC.h5","SRH_POST_OUT_FILE":"Case_XMDF.h5","GEOM_FILE":"block_in_channel.srhgeom","ARC_IDS":[1,2],"GRID_UUID":"f04bf2c3-68b8-4948-8488-fadb9c161f7d","LENGTH_UNITS":"GridUnit \"FOOT\"","DATASET_NAMES":["B_Stress_N_p_m2","Froude","Vel_Mag_m_p_s","Velocity","Water_Depth_m","Water_Elev_m"]}

@@ -1,27 +1,27 @@
 """
-HydroNet: A deep learning framework for solving partial differential equations.
+HydroNet: Physics-informed (PI) machine learning for hydrodynamics and hydraulics modeling. DeepONet, PINN, and PI-DeepONet are supported.
 """
 
 # Version
 from .__about__ import __version__
 
 # Models
-from .models.DeepONet.model import DeepONetModel
+from .models.DeepONet.model import SWE_DeepONetModel
 from .models.PINN.model import SWE_PINN
 from .models.PI_DeepONet.model import PI_DeepONetModel
 
 # Trainers
-from .models.DeepONet.trainer import DeepONetTrainer
+from .models.DeepONet.trainer import SWE_DeepONetTrainer
 from .models.PINN.trainer import PINNTrainer
 from .models.PI_DeepONet.trainer import PI_DeepONetTrainer
 
 # Datasets
 from .data.PINN_dataset import PINNDataset
-from .data.DeepONet_dataset import DeepONetDataset
+from .data.DeepONet_dataset import SWE_DeepONetDataset
 
 # Data loaders
 from .data.PINN_dataset import get_pinn_dataloader
-from .data.DeepONet_dataset import get_deeponet_dataloader
+from .data.DeepONet_dataset import create_deeponet_dataloader
 
 # Utilities
 from .utils.config import Config
@@ -34,22 +34,22 @@ __all__ = [
     "__version__",
     
     # Models
-    "DeepONetModel",
+    "SWE_DeepONetModel",
     "SWE_PINN",
     "PI_DeepONetModel",
     
     # Trainers
-    "DeepONetTrainer",
+    "SWE_DeepONetTrainer",
     "PINNTrainer",
     "PI_DeepONetTrainer",
     
     # Datasets
     "PINNDataset",
-    "DeepONetDataset",
+    "SWE_DeepONetDataset",
     
     # Data loaders
     "get_pinn_dataloader",
-    "get_deeponet_dataloader",
+    "create_deeponet_dataloader",
     
     # Utilities
     "Config",

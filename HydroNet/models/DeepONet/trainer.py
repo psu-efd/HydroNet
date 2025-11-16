@@ -11,8 +11,8 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import DeepONetDataset, get_deeponet_dataloader
-from .model import BranchNet
+from ...data import SWE_DeepONetDataset, create_deeponet_dataloader
+from .model import BranchNet, SWE_DeepONetModel
 
 
 class EarlyStopping:
@@ -60,28 +60,30 @@ class EarlyStopping:
         return self.early_stop
 
 
-class DeepONetTrainer:
+class SWE_DeepONetTrainer:
     """
-    Trainer for DeepONet models.
+    Trainer for SWE_DeepONet models.
     """
-    def __init__(self, model, config_file=None, config=None):
+    def __init__(self, model, config):
         """
         Initialize the trainer.
         
         Args:
-            model (nn.Module): DeepONet model to train.
-            config_file (str, optional): Path to configuration file.
-            config (Config, optional): Configuration object.
+            model (nn.Module): SWE_DeepONet model to train.
+            config (Config): Configuration object.
         """
+
+        # Check if model is an instance of SWE_DeepONetModel
+        if not isinstance(model, SWE_DeepONetModel):
+            raise ValueError("model must be an instance of SWE_DeepONetModel")
+
         self.model = model
         
         # Load configuration
-        if config is not None:
-            self.config = config
-        elif config_file is not None:
-            self.config = Config(config_file)
-        else:
-            self.config = model.config
+        if not isinstance(config, Config):
+            raise ValueError("config must be an instance of Config")
+
+        self.config = config
             
         # Set device
         self.device = self.config.get_device()
@@ -153,7 +155,7 @@ class DeepONetTrainer:
         
     def train(self, train_loader=None, val_loader=None):
         """
-        Train the DeepONet model.
+        Train the SWE_DeepONet model.
         
         Args:
             train_loader (DataLoader, optional): Training data loader.
@@ -199,7 +201,7 @@ class DeepONetTrainer:
             early_stopping = self.early_stopping
             
         # TensorBoard logging
-        log_dir = 'logs/deeponet_' + time.strftime("%Y%m%d-%H%M%S")
+        log_dir = 'logs/swe_deeponet_' + time.strftime("%Y%m%d-%H%M%S")
         writer = SummaryWriter(log_dir)
         
         # Training loop
@@ -330,18 +332,18 @@ class DeepONetTrainer:
         val_dir = self.config.get('data.val_data_path', './data/val')
         
         # Create datasets
-        train_dataset = DeepONetDataset(data_dir, normalize=False)
-        val_dataset = DeepONetDataset(val_dir, normalize=False)
+        train_dataset = SWE_DeepONetDataset(data_dir, normalize=False)
+        val_dataset = SWE_DeepONetDataset(val_dir, normalize=False)
         
         # Create data loaders
-        train_loader = get_deeponet_dataloader(
+        train_loader = create_deeponet_dataloader(
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=4
         )
         
-        val_loader = get_deeponet_dataloader(
+        val_loader = create_deeponet_dataloader(
             val_dataset,
             batch_size=self.batch_size,
             shuffle=False,

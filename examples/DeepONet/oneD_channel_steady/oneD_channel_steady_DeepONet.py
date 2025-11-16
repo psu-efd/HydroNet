@@ -38,15 +38,15 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, DeepONetDataset, Config, get_deeponet_dataloader
+from HydroNet import SWE_DeepONetModel, SWE_DeepONetTrainer, SWE_DeepONetDataset, Config, create_deeponet_dataloader
 
 def check_data_normalization(train_dataset, val_dataset):
     """
     Check normalization consistency between training and validation datasets.
     
     Args:
-        train_dataset: DeepONetDataset for training data
-        val_dataset: DeepONetDataset for validation data
+        train_dataset: SWE_DeepONetDataset for training data
+        val_dataset: SWE_DeepONetDataset for validation data
     
     Returns:
         dict: Dictionary containing statistics for both datasets
@@ -168,10 +168,10 @@ def deeponet_train():
     config_file = './deeponet_config.yaml'
     
     # Create model
-    model = DeepONetModel(config_file=config_file)        
+    model = SWE_DeepONetModel(config_file=config_file)        
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file)
+    trainer = SWE_DeepONetTrainer(model, config_file=config_file)
     print(f"Model device: {next(model.parameters()).device}")
     
     # Train model
@@ -211,7 +211,7 @@ def deeponet_test(best_model_path):
     # First, peek at the test dataset to get input dimensions
     print("Determining input dimensions from test data...")
     try:
-        test_dataset = DeepONetDataset(test_data_dir, normalize=True)            
+        test_dataset = SWE_DeepONetDataset(test_data_dir, normalize=True)            
 
         # Get a sample to determine dimensions
         sample_branch, sample_trunk, sample_output = test_dataset[0]
@@ -226,11 +226,11 @@ def deeponet_test(best_model_path):
     
     # Create model with default configuration and check the compatibility of the model with the test data
     print("Creating model...")
-    model = DeepONetModel(config_file=config_file)
+    model = SWE_DeepONetModel(config_file=config_file)
     model.check_model_input_output_dimensions(branch_dim, trunk_dim, output_dim)
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file)
+    trainer = SWE_DeepONetTrainer(model, config_file=config_file)
     
     # Load the trained model checkpoint
     try:

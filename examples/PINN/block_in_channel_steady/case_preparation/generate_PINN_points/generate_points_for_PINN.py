@@ -30,6 +30,8 @@ if project_root not in sys.path:
 
 from pyHMT2D.Misc.SRH_to_PINN_points import srh_to_pinn_points
 
+import pyHMT2D 
+
 
 plt.rc('text', usetex=False)  #allow the use of Latex for math expressions and equations
 plt.rc('font', family='serif') #specify the default font family to be "serif"
@@ -263,139 +265,45 @@ def convert_mesh_points_for_pinn():
         'boundary_info': boundary_info.shape
     }
 
-def create_data_files_from_SRH2D_vtk(vtk_file_name, units):
+def create_data_files_from_SRH2D_results(srhcontrol_file, result_file, bBoundary):
     """
-    Create data file from SRH-2D simulation results in a vtk file. 
-
-    The data in vtk is at cell centers. We need to extract the data at the cell centers and save it to a numpy file. 
-    Specifically, we need to save data_points (x, y) and data_values (h, u, v) in numpy files in the "pinn_points" directory.
-    We also save data_flags (h_flag, u_flag, v_flag) to indicate which variables are available for each point.
-
+    Create data files from SRH-2D vtk file.
+    
     Parameters
     ----------
-    vtk_file_name : str
-        Name of the vtk file containing the simulation results
-    units : str
-        Units of the simulation results: SI or EN
+    srhcontrol_file : str
+        Name of the SRH-2D srhcontrol file   
+    result_file : str
+        Name of the SRH-2D result file (e.g., block_in_channel_XMDFC.h5)
+    bBoundary : bool
+        If True, the boundary points and their data will be exported too (currently only wall boundary is supported to enforce no-slip condition)
     """
 
-    output_dir = "pinn_points"
+    #check if the result file exists
+    if not os.path.exists(result_file):
+        print(f"Error: File {result_file} does not exist.")
+        print("Please make sure you have the SRH-2D result file in the correct location.")
+        exit()  
 
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
+    #check the validity of the result file (it has to be in XMDFC HDF5 format)
+    if not result_file.endswith('.h5') and not "XMDFC" in result_file:
+        print(f"Error: File {result_file} is not in XMDFC HDF5 format.")
+        print("Please make sure you have the SRH-2D result file in the correct location.")
+        exit()
 
-    # Define the solution variable names in the vtk file
-    # We only need the velocity and water depth. Also, the velocity is a vector field.
-    if units == "SI":
-        solution_variable_names = ["Velocity_m_p_s", "Water_Depth_m"]
-    elif units == "EN":
-        solution_variable_names = ["Velocity_ft_p_s", "Water_Depth_ft"]
-    else:
-        raise ValueError("Invalid units")
-    
-    # Read the VTK file
-    reader = vtkUnstructuredGridReader()
-    reader.SetFileName(vtk_file_name)
-    reader.ReadAllScalarsOn()
-    reader.ReadAllVectorsOn()
-    reader.Update()
-    grid = reader.GetOutput()
+    #create the SRH_2D_Data object
+    my_srh_2d_data = pyHMT2D.SRH_2D.SRH_2D_Data(srhcontrol_file)
 
-    # Get cell centers using vtkCellCenters filter
-    cell_centers_filter = vtkCellCenters()
-    cell_centers_filter.SetInputData(grid)
-    cell_centers_filter.Update()
-    cell_centers = cell_centers_filter.GetOutput()
+    #read SRH-2D result in XMDF format (*.h5)
+    #wether the XMDF result is nodal or cell center
+    bNodal = False
 
-    # Convert cell centers to numpy array
-    cell_centers_array = numpy_support.vtk_to_numpy(cell_centers.GetPoints().GetData())
-    
-    # Extract x, y coordinates
-    data_points = cell_centers_array[:, :2]  # Only take x, y coordinates
+    my_srh_2d_data.readSRHXMDFFile(result_file, bNodal)
 
-    # Get velocity and water depth data
-    velocity_data = numpy_support.vtk_to_numpy(grid.GetCellData().GetArray(solution_variable_names[0]))
-    water_depth = numpy_support.vtk_to_numpy(grid.GetCellData().GetArray(solution_variable_names[1]))
+    #export to VTK
+    my_srh_2d_data.outputXMDFDataToPINNData(bNodal, bBoundary=bBoundary)
 
-    # Extract u, v components from velocity vector
-    u = velocity_data[:, 0]
-    v = velocity_data[:, 1]
-    Umag = np.sqrt(u**2 + v**2)
 
-    # Combine h, u, v into data_values
-    data_values = np.column_stack((water_depth, u, v))
-
-    # Create flags for each variable: should be customized based on what you really need. For example, if you don't want to use h or h is not available, you can set h_flag to 0.
-    # (1 if value is not NaN, 0 if NaN)
-    h_flag = ~np.isnan(water_depth)
-    u_flag = ~np.isnan(u)
-    v_flag = ~np.isnan(v)
-
-    # Combine flags into a single array
-    data_flags = np.column_stack((h_flag, u_flag, v_flag))
-
-    #print the first 10 data points
-    print(f"First 10 data points: {data_points[:10]}")
-    print(f"First 10 data values: {data_values[:10]}")
-    print(f"First 10 data flags: {data_flags[:10]}")
-
-    #compute the statistics of the data points
-    #min, max, mean, std, median, etc.
-    x_min = np.min(data_points[:, 0])  #stats of x, y, and t are computed here, but not used in training. The normalization should use the statistics of the pde/boundary points from mesh_points.json.
-    x_max = np.max(data_points[:, 0])
-    x_mean = np.mean(data_points[:, 0])
-    x_std = np.std(data_points[:, 0])
-    y_min = np.min(data_points[:, 1])
-    y_max = np.max(data_points[:, 1])
-    y_mean = np.mean(data_points[:, 1])
-    y_std = np.std(data_points[:, 1])
-    t_min = 0.0
-    t_max = 0.0
-    t_mean = 0.0
-    t_std = 0.0
-    h_min = np.min(data_values[:, 0])
-    h_max = np.max(data_values[:, 0])
-    h_mean = np.mean(data_values[:, 0])
-    h_std = np.std(data_values[:, 0])
-    u_min = np.min(data_values[:, 1])
-    u_max = np.max(data_values[:, 1])
-    u_mean = np.mean(data_values[:, 1])
-    u_std = np.std(data_values[:, 1])
-    v_min = np.min(data_values[:, 2])
-    v_max = np.max(data_values[:, 2])
-    v_mean = np.mean(data_values[:, 2])
-    v_std = np.std(data_values[:, 2])
-    Umag_min = np.min(Umag)
-    Umag_max = np.max(Umag)
-    Umag_mean = np.mean(Umag)
-    Umag_std = np.std(Umag)
-
-    all_data_points_stats = np.array([x_min, x_max, x_mean, x_std, y_min, y_max, y_mean, y_std, t_min, t_max, t_mean, t_std, h_min, h_max, h_mean, h_std, u_min, u_max, u_mean, u_std, v_min, v_max, v_mean, v_std, Umag_min, Umag_max, Umag_mean, Umag_std])
-    print(f"x_min: {x_min}, x_max: {x_max}, x_mean: {x_mean}, x_std: {x_std}")
-    print(f"y_min: {y_min}, y_max: {y_max}, y_mean: {y_mean}, y_std: {y_std}")
-    print(f"t_min: {t_min}, t_max: {t_max}, t_mean: {t_mean}, t_std: {t_std}")
-    print(f"h_min: {h_min}, h_max: {h_max}, h_mean: {h_mean}, h_std: {h_std}")
-    print(f"u_min: {u_min}, u_max: {u_max}, u_mean: {u_mean}, u_std: {u_std}")
-    print(f"v_min: {v_min}, v_max: {v_max}, v_mean: {v_mean}, v_std: {v_std}")
-    print(f"Umag_min: {Umag_min}, Umag_max: {Umag_max}, Umag_mean: {Umag_mean}, Umag_std: {Umag_std}")
-    
-    
-    # Save data points (x, y coordinates)
-    np.save(os.path.join(output_dir, 'data_points.npy'), data_points)
-    
-    # Save data values (h, u, v)
-    np.save(os.path.join(output_dir, 'data_values.npy'), data_values)
-
-    # Save data flags (h_flag, u_flag, v_flag)
-    np.save(os.path.join(output_dir, 'data_flags.npy'), data_flags)
-
-    #save the statistics of the data points
-    np.save(os.path.join(output_dir, 'all_data_points_stats.npy'), all_data_points_stats)   #these can be used for normalization
-
-    print(f"Saved data points shape: {data_points.shape}")
-    print(f"Saved data values shape: {data_values.shape}")
-    print(f"Saved data flags shape: {data_flags.shape}")
-    print(f"Files saved in: {output_dir}")
 
 if __name__ == '__main__':
 
@@ -429,9 +337,9 @@ if __name__ == '__main__':
     convert_mesh_points_for_pinn()
 
     # Create data files for SRH-2D simulation results
-    vtk_file_name = "SRH2D_block_in_channel_C_0005.vtk"
-    units = "SI"
-    create_data_files_from_SRH2D_vtk(vtk_file_name, units)
+    result_file = "block_in_channel_XMDFC.h5"   #Name of the SRH-2D result file (currently only XMDFC format is supported)
+    bBoundary = True   #If True, the boundary points and their data will be exported too (currently only wall boundary is supported to enforce no-slip condition)
+    create_data_files_from_SRH2D_results(srhcontrol_file, result_file, bBoundary)
 
     print("All done!")
 

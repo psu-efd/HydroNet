@@ -7,15 +7,17 @@ device:
 
 # Architecture
 model:
-  name: "DeepONet"
+  name: "SWE_DeepONet"
   branch_net:
     hidden_layers: [64, 128, 256, 128, 64]
     activation: "relu"
     dropout_rate: 0.0
+    branch_input_dim: 7  # Number of sensors (input functions)
   trunk_net:
     hidden_layers: [64, 128, 256, 128, 64]
     activation: "relu"
     dropout_rate: 0.0
+    trunk_input_dim: 2  # (x, y) coordinates
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
 
 # Training parameters

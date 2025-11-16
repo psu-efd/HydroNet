@@ -119,27 +119,24 @@ class TrunkNet(nn.Module):
         return self.net(x)
 
 
-class DeepONetModel(nn.Module):
+class SWE_DeepONetModel(nn.Module):
     """
     DeepONet model for learning the operator of shallow water equations.
     """
-    def __init__(self, config_file=None, config=None):
+    def __init__(self, config):
         """
         Initialize the DeepONet model.
         
         Args:
-            config_file (str, optional): Path to configuration file.
-            config (Config, optional): Configuration object.
+            config (Config): Configuration object.
         """
-        super(DeepONetModel, self).__init__()
+        super(SWE_DeepONetModel, self).__init__()
         
         # Load configuration
-        if config is not None:
-            self.config = config
-        elif config_file is not None:
-            self.config = Config(config_file)
+        if config is not None and isinstance(config, Config):
+            self.config = config        
         else:
-            raise ValueError("Either config_file or config must be provided")
+            raise ValueError("config must be provided and must be an instance of Config")
             
         # Get model parameters from config
         branch_layers = self.config.get('model.branch_net.hidden_layers', [128, 128, 128])
@@ -157,6 +154,10 @@ class DeepONetModel(nn.Module):
         # Output dimension - 3 for (h, u, v) in shallow water equations
         self.output_dim = self.config.get('model.output_dim', 3)
         
+        #check whether the output dimensions of the branch net and the trunk net are consistent
+        if branch_layers[-1] != trunk_layers[-1]:
+            raise ValueError(f"Branch output dimension mismatch: {branch_layers[-1]} != {trunk_layers[-1]}")
+
         # Hidden dimension for the DeepONet architecture
         self.hidden_dim = branch_layers[-1]
         

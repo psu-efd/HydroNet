@@ -1,8 +1,0 @@
- $DATAC  
-  niter = 1
-  !dtnew = 5.0
-  damp      = 0.4
-  relax_h   = 0.3
-  relax_uv  = 2.0
-  itime_freq = 50
- $ENDC

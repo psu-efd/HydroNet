@@ -12,8 +12,11 @@ It is assumed:
 import numpy as np
 import sys
 import meshio
+import os
 import torch
 import vtk
+from vtk import vtkUnstructuredGridReader, vtkUnstructuredGrid
+from vtk.util import numpy_support as VN
 
 def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileName, bNodal, 
                           bNormalize=None, normalization_method=None,
@@ -283,6 +286,181 @@ def write_to_vtk(mesh, cells_list, prediction_variable_names_list, predictions, 
 
     # Write to VTK
     meshio.write(vtkFileName, out_mesh, binary=False)
+
+
+def compute_bed_slope(vtk_2d_fileName):
+    """Compute bed slope from a 2D unstructured mesh in vtk format.
+
+    The bed slope of each cell is computed using the Gauss theorem, which is given by:
+    Sx = -(1/A) * \int_{\partial A} z_b * ds
+    Sy = -(1/A) * \int_{\partial A} z_b * ds
+    where A is the area of the cell, z_b is the bed elevation, and ds is a vector whose direction is the outward normal vector and the length is the length of the boundary edge.
+
+    Currently, the mesh can only have triangular and quadrilateral cells.
+
+    Parameters
+    ----------
+    vtk_2d_fileName : str
+        Input VTK file containing the 2D unstructured mesh
+
+    Returns
+    -------
+    Sx : numpy.ndarray
+        Bed slope in the x direction at cell centers
+    Sy : numpy.ndarray
+        Bed slope in the y direction at cell centers
+    """    
+
+    #check the file exists
+    if not os.path.exists(vtk_2d_fileName):
+        raise FileNotFoundError(f"The file {vtk_2d_fileName} does not exist.")
+
+    # Read the VTK file
+    reader = vtkUnstructuredGridReader()
+    reader.SetFileName(vtk_2d_fileName)
+    reader.Update()
+    mesh = reader.GetOutput()
+
+    # Get points and cells
+    points = VN.vtk_to_numpy(mesh.GetPoints().GetData())
+    cells = VN.vtk_to_numpy(mesh.GetCells().GetData())
+    cell_types = VN.vtk_to_numpy(mesh.GetCellTypesArray())
+    
+    # Get bed elevation
+    zb = points[:, 2]
+    
+    # Initialize arrays for slopes
+    n_cells = mesh.GetNumberOfCells()
+    Sx = np.zeros(n_cells)
+    Sy = np.zeros(n_cells)
+    
+    # Process each cell
+    cell_id = 0
+    i = 0
+    while i < len(cells):
+        n_points = cells[i]
+        cell_type = cell_types[cell_id]
+        
+        if cell_type == 5:  # Triangle
+            # Get point indices for this cell
+            p1, p2, p3 = cells[i+1:i+4]
+            
+            # Get coordinates
+            x1, y1 = points[p1][:2]
+            x2, y2 = points[p2][:2]
+            x3, y3 = points[p3][:2]
+            
+            # Get bed elevations
+            zb1, zb2, zb3 = zb[p1], zb[p2], zb[p3]
+            
+            # Compute cell area
+            area = 0.5 * abs((x2-x1)*(y3-y1) - (x3-x1)*(y2-y1))
+            
+            # Compute edge lengths and normals
+            # Edge 1-2
+            dx12 = x2 - x1
+            dy12 = y2 - y1
+            length12 = np.sqrt(dx12**2 + dy12**2)
+            nx12 = dy12 / length12
+            ny12 = -dx12 / length12
+            
+            # Edge 2-3
+            dx23 = x3 - x2
+            dy23 = y3 - y2
+            length23 = np.sqrt(dx23**2 + dy23**2)
+            nx23 = dy23 / length23
+            ny23 = -dx23 / length23
+            
+            # Edge 3-1
+            dx31 = x1 - x3
+            dy31 = y1 - y3
+            length31 = np.sqrt(dx31**2 + dy31**2)
+            nx31 = dy31 / length31
+            ny31 = -dx31 / length31
+            
+            # Compute contributions to slopes
+            Sx[cell_id] = -(1/area) * (
+                (zb1 + zb2)/2 * nx12 * length12 +
+                (zb2 + zb3)/2 * nx23 * length23 +
+                (zb3 + zb1)/2 * nx31 * length31
+            )
+            
+            Sy[cell_id] = -(1/area) * (
+                (zb1 + zb2)/2 * ny12 * length12 +
+                (zb2 + zb3)/2 * ny23 * length23 +
+                (zb3 + zb1)/2 * ny31 * length31
+            )
+            
+        elif cell_type == 9:  # Quadrilateral
+            # Get point indices for this cell
+            p1, p2, p3, p4 = cells[i+1:i+5]
+            
+            # Get coordinates
+            x1, y1 = points[p1][:2]
+            x2, y2 = points[p2][:2]
+            x3, y3 = points[p3][:2]
+            x4, y4 = points[p4][:2]
+            
+            # Get bed elevations
+            zb1, zb2, zb3, zb4 = zb[p1], zb[p2], zb[p3], zb[p4]
+            
+            # Compute cell area using shoelace formula
+            area = 0.5 * abs(
+                x1*y2 + x2*y3 + x3*y4 + x4*y1 -
+                (y1*x2 + y2*x3 + y3*x4 + y4*x1)
+            )
+            
+            # Compute edge lengths and normals
+            # Edge 1-2
+            dx12 = x2 - x1
+            dy12 = y2 - y1
+            length12 = np.sqrt(dx12**2 + dy12**2)
+            nx12 = dy12 / length12
+            ny12 = -dx12 / length12
+            
+            # Edge 2-3
+            dx23 = x3 - x2
+            dy23 = y3 - y2
+            length23 = np.sqrt(dx23**2 + dy23**2)
+            nx23 = dy23 / length23
+            ny23 = -dx23 / length23
+            
+            # Edge 3-4
+            dx34 = x4 - x3
+            dy34 = y4 - y3
+            length34 = np.sqrt(dx34**2 + dy34**2)
+            nx34 = dy34 / length34
+            ny34 = -dx34 / length34
+            
+            # Edge 4-1
+            dx41 = x1 - x4
+            dy41 = y1 - y4
+            length41 = np.sqrt(dx41**2 + dy41**2)
+            nx41 = dy41 / length41
+            ny41 = -dx41 / length41
+            
+            # Compute contributions to slopes
+            Sx[cell_id] = -(1/area) * (
+                (zb1 + zb2)/2 * nx12 * length12 +
+                (zb2 + zb3)/2 * nx23 * length23 +
+                (zb3 + zb4)/2 * nx34 * length34 +
+                (zb4 + zb1)/2 * nx41 * length41
+            )
+            
+            Sy[cell_id] = -(1/area) * (
+                (zb1 + zb2)/2 * ny12 * length12 +
+                (zb2 + zb3)/2 * ny23 * length23 +
+                (zb3 + zb4)/2 * ny34 * length34 +
+                (zb4 + zb1)/2 * ny41 * length41
+            )
+            
+        else:
+            raise ValueError(f"Unsupported cell type: {cell_type}")
+        
+        i += n_points + 1
+        cell_id += 1
+    
+    return Sx, Sy
 
 
 

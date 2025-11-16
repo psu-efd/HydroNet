@@ -113,17 +113,19 @@ def save_predictions_and_true_values_to_vtk(predictions_and_true_values_file, ou
                           filename=os.path.join(output_dir, 'pde_points.vtk'))
     
     # Save initial points
-    if predictions_and_true_values['bInitial_loss']:
-        initial_points = np.array(predictions_and_true_values['initial_points'])
-        h_pred_initial = np.array(predictions_and_true_values['h_pred_initial_points'])
-        u_pred_initial = np.array(predictions_and_true_values['u_pred_initial_points'])
-        v_pred_initial = np.array(predictions_and_true_values['v_pred_initial_points'])
-        h_true_initial = np.array(predictions_and_true_values['h_true_initial_points'])
-        u_true_initial = np.array(predictions_and_true_values['u_true_initial_points'])
-        v_true_initial = np.array(predictions_and_true_values['v_true_initial_points'])
-        save_points_to_vtk(initial_points, h_pred_initial, u_pred_initial, v_pred_initial,
-                          h_true_initial, u_true_initial, v_true_initial,
-                          filename=os.path.join(output_dir, 'initial_points.vtk'))
+    #check if bInitial_loss is in the predictions_and_true_values dictionary
+    if 'bInitial_loss' in predictions_and_true_values:
+        if predictions_and_true_values['bInitial_loss']:
+            initial_points = np.array(predictions_and_true_values['initial_points'])
+            h_pred_initial = np.array(predictions_and_true_values['h_pred_initial_points'])
+            u_pred_initial = np.array(predictions_and_true_values['u_pred_initial_points'])
+            v_pred_initial = np.array(predictions_and_true_values['v_pred_initial_points'])
+            h_true_initial = np.array(predictions_and_true_values['h_true_initial_points'])
+            u_true_initial = np.array(predictions_and_true_values['u_true_initial_points'])
+            v_true_initial = np.array(predictions_and_true_values['v_true_initial_points'])
+            save_points_to_vtk(initial_points, h_pred_initial, u_pred_initial, v_pred_initial,
+                            h_true_initial, u_true_initial, v_true_initial,
+                            filename=os.path.join(output_dir, 'initial_points.vtk'))
     
     # Save boundary points
     if predictions_and_true_values['bBoundary_loss']:
@@ -187,6 +189,23 @@ def plot_training_history(history_file):
     
     with open(history_file, 'r') as f:
         history = json.load(f)
+
+    # Dictionary history keys: loss_history, component_loss_history, and sub-keys of component_loss_history
+    # print("\n=== History Dictionary Structure ===")
+    # def print_dict_structure(d, indent=0):
+    #     for key, value in d.items():
+    #         print("  " * indent + f"Key: {key}")
+    #         if isinstance(value, dict):
+    #             print_dict_structure(value, indent + 1)
+    #         elif isinstance(value, list):
+    #             print("  " * (indent + 1) + f"Type: list with {len(value)} elements")
+    #             if len(value) > 0:
+    #                 print("  " * (indent + 1) + f"First element type: {type(value[0])}")
+    #         else:
+    #             print("  " * (indent + 1) + f"Type: {type(value)}")
+
+    # print_dict_structure(history)
+    # print("\n=== End of Dictionary Structure ===\n")
     
     # Create plots directory if it doesn't exist
     os.makedirs('plots', exist_ok=True)
@@ -194,26 +213,125 @@ def plot_training_history(history_file):
     # Plot total loss
     plt.figure(figsize=(10, 6))
     plt.plot(history['loss_history'], label='Total Loss')
+    plt.plot(history['component_loss_history']['weighted_total_loss'], label='weighted_total_loss', linewidth=2)
+    plt.plot(history['component_loss_history']['unweighted_total_loss'], label='unweighted_total_loss', linewidth=2)
     plt.yscale('log')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('PINN Training History - Total Loss')
     plt.grid(True)
     plt.legend()
-    plt.savefig('plots/total_loss.png')
+    plt.savefig('plots/total_loss.png', dpi=300, bbox_inches='tight')
     plt.close()
-    
-    # Plot component losses
-    plt.figure(figsize=(12, 8))
-    for key in history['component_loss_history'].keys():
-        plt.plot(history['component_loss_history'][key], label=key)
+
+    # Plot total loss components: pde, boundary, data
+    plt.figure(figsize=(10, 6))
+    plt.plot(history['component_loss_history']['unweighted_total_loss'], label='unweighted_total_loss', linewidth=2)
+    plt.plot(history['component_loss_history']['loss_components']['pde_loss'], label='pde_loss', linewidth=2)
+    plt.plot(history['component_loss_history']['loss_components']['boundary_loss'], label='boundary_loss', linewidth=2)
+    plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='data_loss', linewidth=2)
     plt.yscale('log')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('PINN Training History - Component Losses')
+    plt.title('PINN Training History - Total Loss Components')
     plt.grid(True)
     plt.legend()
-    plt.savefig('plots/component_losses.png')
+    plt.savefig('plots/total_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Plot PDE/BC/IC/Data losses
+    plt.figure(figsize=(12, 8))
+    plt.plot(history['component_loss_history']['pde_loss_components']['continuity_loss'], label='PDE (continuity) Loss', linewidth=2)
+    plt.plot(history['component_loss_history']['pde_loss_components']['momentum_x_loss'], label='PDE (x-momentum) Loss', linewidth=2)
+    plt.plot(history['component_loss_history']['pde_loss_components']['momentum_y_loss'], label='PDE (y-momentum) Loss', linewidth=2)
+    #plt.plot(history['initial_condition_loss'], label='IC Loss', linewidth=2)
+    plt.plot(history['component_loss_history']['loss_components']['boundary_loss'], label='BC Loss', linewidth=2)
+    plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='Data Loss', linewidth=2)
+    plt.yscale('log')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('PINN Training History - PDE/BC/IC/Data Losses', fontsize=14)
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig('plots/component_losses_detailed.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Plot data loss components
+    plt.figure(figsize=(12, 8))
+    plt.plot(history['component_loss_history']['data_loss_components']['total_data_loss'], label='Total Data Loss', linewidth=2)
+    plt.plot(history['component_loss_history']['data_loss_components']['data_h_loss'], label='Data Loss (h)', linewidth=2)
+    plt.plot(history['component_loss_history']['data_loss_components']['data_u_loss'], label='Data Loss (u)', linewidth=2)
+    plt.plot(history['component_loss_history']['data_loss_components']['data_v_loss'], label='Data Loss (v)', linewidth=2)
+    plt.yscale('log')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('PINN Training History - Data Loss Components', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig('plots/data_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # plot boundary loss components
+    plt.figure(figsize=(12, 8))
+    
+    # Define BC loss prefixes to look for
+    bc_prefixes = ['wall', 'inlet-q', 'exit-h']
+    
+    # Store losses and their averages for ranking
+    bc_losses = {}
+    
+    # Filter and plot BC losses
+    for key in history['component_loss_history']['boundary_loss_components'].keys():
+        if any(key.startswith(prefix) for prefix in bc_prefixes):
+            # Create a more readable label by replacing underscores with spaces and capitalizing
+            label = key.replace('_', ' ').title()
+            losses = history['component_loss_history']['boundary_loss_components'][key]
+            bc_losses[label] = np.mean(losses)  # Store average loss
+            plt.plot(losses, label=label, linewidth=2)
+    
+    # Find top 3 losses
+    top_3_losses = sorted(bc_losses.items(), key=lambda x: x[1], reverse=True)[:3]
+    
+    # Add text box with top 3 losses
+    textstr = '\n'.join([f'{i+1}. {name}: {value:.2e}' for i, (name, value) in enumerate(top_3_losses)])
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    plt.text(0.02, 0.98, textstr, transform=plt.gca().transAxes, fontsize=10,
+             verticalalignment='top', bbox=props)
+    
+    plt.yscale('log')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('PINN Training History - Boundary Condition Losses', fontsize=14)
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.legend(fontsize=10, bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig('plots/boundary_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # plot the loss weights history 
+    plt.figure(figsize=(12, 8))
+    
+    # Define weight keys to plot
+    weight_keys = ['pde_loss', 'boundary_loss', 'data_loss']
+
+    #print(history['component_loss_history']['loss_weights'])
+    
+    # Plot each weight history
+    for key in weight_keys:
+        if f'{key}' in history['component_loss_history']['loss_weights']:
+            
+            plt.plot(history['component_loss_history']['loss_weights'][f'{key}'], 
+                    label=f'{key} Weight', linewidth=2)
+    #make y axis log scale
+    plt.yscale('log')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Weight Value', fontsize=12)
+    plt.title('PINN Training History - Loss Weights', fontsize=14)
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.legend(fontsize=10, loc='upper right')
+    plt.tight_layout()
+    plt.savefig('plots/loss_weights_history.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions'):    

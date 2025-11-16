@@ -43,7 +43,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, HydraulicDataset, Config
+from HydroNet import SWE_DeepONetModel, SWE_DeepONetTrainer, HydraulicDataset, Config
 
 def check_data_normalization(train_dataset, val_dataset):
     """
@@ -246,11 +246,11 @@ def deeponet_train_with_full_data():
         
         # Initialize model
         print("Initializing model...")
-        model = DeepONetModel(config_file=config_file, config=config).to(device)
+        model = SWE_DeepONetModel(config_file=config_file, config=config).to(device)
         print_gpu_memory("GPU memory after model initialization")
         
         # Initialize trainer
-        trainer = DeepONetTrainer(
+        trainer = SWE_DeepONetTrainer(
             model=model,
             config_file=config_file,
             config=config
@@ -353,11 +353,11 @@ def deeponet_test(best_model_path, dataset_mean_std_path):
     
     # Create model with default configuration and check the compatibility of the model with the test data
     print("Creating the trained model...")
-    model = DeepONetModel(config_file=config_file, config=config)
+    model = SWE_DeepONetModel(config_file=config_file, config=config)
     model.check_model_input_output_dimensions(branch_dim, trunk_dim, output_dim)
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file, config=config)
+    trainer = SWE_DeepONetTrainer(model, config_file=config_file, config=config)
     
     # Load the trained model checkpoint
     try:

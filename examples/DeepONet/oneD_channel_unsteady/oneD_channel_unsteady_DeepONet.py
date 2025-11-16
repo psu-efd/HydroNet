@@ -41,7 +41,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import DeepONetModel, DeepONetTrainer, DeepONetDataset, Config, get_deeponet_dataloader
+from HydroNet import SWE_DeepONetModel, SWE_DeepONetTrainer, SWE_DeepONetDataset, Config, create_deeponet_dataloader
 
 def check_data_normalization(train_dataset, val_dataset, test_dataset=None):
     """
@@ -144,10 +144,10 @@ def deeponet_train(train_dataset, val_dataset):
     config_file = './deeponet_config.yaml'
     
     # Create model
-    model = DeepONetModel(config_file=config_file)        
+    model = SWE_DeepONetModel(config_file=config_file)        
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file=config_file)
+    trainer = SWE_DeepONetTrainer(model, config_file=config_file)
     print(f"Model device: {next(model.parameters()).device}")
     
     # Train model
@@ -202,12 +202,12 @@ def deeponet_test(best_model_path):
         
         # Create model and check dimensions
         print("\nCreating model...")
-        model = DeepONetModel(config_file=config_file)
+        model = SWE_DeepONetModel(config_file=config_file)
         model.check_model_input_output_dimensions(branch_dim, trunk_dim, output_dim)
         
         # Create trainer
         print("\nInitializing trainer...")
-        trainer = DeepONetTrainer(model, config_file=config_file)
+        trainer = SWE_DeepONetTrainer(model, config_file=config_file)
         
         # Load the trained model checkpoint
         print(f"\nLoading checkpoint from {best_model_path}...")

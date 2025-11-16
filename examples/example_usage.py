@@ -17,8 +17,8 @@ from torch.utils.data import Dataset
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from HydroNet.src.models.DeepONet.model import DeepONetModel
-from HydroNet.src.models.DeepONet.trainer import DeepONetTrainer
+from HydroNet.src.models.DeepONet.model import SWE_DeepONetModel
+from HydroNet.src.models.DeepONet.trainer import SWE_DeepONetTrainer
 from HydroNet.src.models.PINN.model import SWE_PINN
 from HydroNet.src.models.PINN.trainer import PINNTrainer
 from HydroNet.src.models.PI_DeepONet.model import PI_DeepONetModel
@@ -105,10 +105,10 @@ def example_deeponet():
     print("\n=== DeepONet Example ===")
     
     # Create model
-    model = DeepONetModel(config_file='../src/config/deeponet_config.yaml')
+    model = SWE_DeepONetModel(config_file='../src/config/deeponet_config.yaml')
     
     # Create trainer
-    trainer = DeepONetTrainer(model, config_file='../src/config/deeponet_config.yaml')
+    trainer = SWE_DeepONetTrainer(model, config_file='../src/config/deeponet_config.yaml')
     
     # Train model (with very few epochs for demonstration)
     trainer.config.epochs = 5  # Override epochs for quick demonstration

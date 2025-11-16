@@ -489,25 +489,31 @@ class PINNTrainer:
         
         Args:
             epoch (int): Current epoch number
-            total_loss (float): Total loss value
+            total_loss (float): Total loss value (weighted)
             loss_components (dict): Dictionary containing individual loss components
             n_epochs (int): Total number of epochs for current optimizer
+            n_epochs_all_optimizers (int): Total number of epochs for all optimizers
             optimizer_name (str): Name of current optimizer
         """
         # Store losses in history
         self.loss_history.append(total_loss.item())
         
         # Store component losses
-        for key, value in loss_components.items():
-            if key not in self.component_loss_history:
-                self.component_loss_history[key] = []
+        for key, value in loss_components.items():           
+                
             if isinstance(value, dict):
-                # For nested dictionaries, save each of the items and values in sub-dictionaries
+                # For nested dictionaries, create sub-dictionaries
+                if key not in self.component_loss_history:
+                    self.component_loss_history[key] = {}
+                    
                 for subkey, subvalue in value.items():
-                    if subkey not in self.component_loss_history:
-                        self.component_loss_history[subkey] = []
-                    self.component_loss_history[subkey].append(subvalue.item() if torch.is_tensor(subvalue) else subvalue)
+                    if subkey not in self.component_loss_history[key]:
+                        self.component_loss_history[key][subkey] = []
+                    self.component_loss_history[key][subkey].append(subvalue.item() if torch.is_tensor(subvalue) else subvalue)
             else:
+                if key not in self.component_loss_history:
+                    self.component_loss_history[key] = []
+
                 self.component_loss_history[key].append(value.item() if torch.is_tensor(value) else value)
         
         # Print progress

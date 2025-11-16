@@ -1,0 +1,96 @@
+# Configuration for Physics-Informed Neural Network (PINN) for 2D Shallow Water Equations
+
+# Device configuration
+device:
+  use_gpu: true
+  device_id: 0
+
+# Architecture
+model:
+  name: "SWE_PINN"
+  bNormalize: true         #whether to normalize the training data (x,y,t,h,u,v,zb,Sx,Sy,ManningN, etc) and the PDEs
+  normalization_method: "z-score" #"min-max" or "z-score"
+  loss_flags:    
+    bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
+    bBoundary_loss: true   #whether to use boundary conditions in the loss function    
+    bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
+  hidden_layers: [32, 64, 32]  # Network architecture
+  activation: "relu"  # tanh, relu, leaky_relu
+  output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
+  initialization: "xavier_normal"
+
+# Physics parameters
+physics:
+  bSteady: true           #whether the problem is steady or transient. It is equal to bInitial_loss (internal variable), i.e., whether to include initial conditions mismatch in the loss function. For unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function.
+  gravity: 9.81  # Gravitational acceleration (m/s^2)  
+
+  scales:        #physical scales for normalizing the PDEs
+    length: 0.8  # Length scale (e.g., averaged water depth)
+    velocity: 0.5  # Velocity scale (e.g., averaged velocity)
+    
+  # Loss weights for different terms (initial values; will be adjusted by the loss weight scheduler)
+  loss_weights:    
+    pde: 1.0
+    initial_condition: 1.0
+    boundary_condition: 1.0
+    data_points: 10.0  # If you have measurement data
+    
+  # Loss weight scheduler settings
+  loss_weight_scheduler:
+    type: manual  # Options: constant, manual, gradnorm, softadapt
+    schedule:
+      - epoch: 1000       #epochs to start the scheduler
+        pde: 10.0
+        initial_condition: 1.0
+        boundary_condition: 10.0
+        data_points: 1.0
+      - epoch: 8000       #epochs to start the scheduler
+        pde: 2.0
+        initial_condition: 1.0
+        boundary_condition: 2.0
+        data_points: 1.0
+    # Settings for GradNorm scheduler
+    alpha: 1.0  # Balancing factor, e.g., 1.5 (the higher the alpha, the more weight is given to the components with higher gradients)
+    learning_rate: 0.001  # Learning rate for weight updates
+
+# Training parameters
+training:
+  optimizers: ["Adam"] #["Adam", "LBFGS"]
+  epochs: [1000]  # PINNs often need more epochs
+  learning_rates: [0.001]
+  weight_decay: 1.0e-5
+  scheduler:
+    use_scheduler: true
+    scheduler_type: "ReduceLROnPlateau"
+    patience: 1000
+    factor: 0.5
+    min_lr: 1.0e-6
+  early_stopping:
+    use_early_stopping: true
+    patience: 2000
+    min_delta: 1.0e-6
+  save_freq: 1  # Save checkpoint every N epochs
+  print_freq: 100  # Print progress every N epochs
+
+# Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)
+boundary_conditions:
+  1:   #BC ID
+    type: "inlet-q"
+    q_value: 0.38  # m^3/s
+  2:
+    type: "exit-h"
+    exit_h_option: "rating-curve"   #"constant" or "rating-curve". If "rating-curve", need to specify the rating curve file name.
+    wse_value: 0.4  # m
+    rating_curve_file: "curve_1.xys"  # Rating curve file name
+  3:
+    type: "symm"
+  4:
+    type: "symm"
+  5:
+    type: "symm"
+
+# Data paths
+data:
+  points_dir: "pinn_points"  # Directory containing the numpy point files
+  checkpoint_dir: "checkpoints"  # Directory to save model checkpoints
+  plot_dir: "plots"  # Directory to save plots

@@ -3,4 +3,4 @@
 from .model import *
 from .trainer import *
 
-__all__ = ["DeepONetModel", "DeepONetTrainer"]
+__all__ = ["SWE_DeepONetModel", "SWE_DeepONetTrainer"]

@@ -1,1 +1,0 @@
-This directory is used to prepare SRH-2D cases to generate training data.

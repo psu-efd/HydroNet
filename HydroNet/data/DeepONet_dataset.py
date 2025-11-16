@@ -9,7 +9,7 @@ import h5py
 from typing import Tuple, Optional
 
 
-class DeepONetDataset(Dataset):
+class SWE_DeepONetDataset(Dataset):
     """
     Dataset for DeepONet training data.
     
@@ -81,7 +81,7 @@ class DeepONetDataset(Dataset):
         Normalize the data to improve training stability.
         """
 
-        print("DeepONetDataset: Normalizing the data ...")
+        print("SWE_DeepONetDataset: Normalizing the data ...")
 
         # Branch input normalization
         self.branch_mean = np.mean(self.branch_inputs, axis=0, keepdims=True)
@@ -145,7 +145,7 @@ class DeepONetDataset(Dataset):
         return branch_input, trunk_input, output
 
 
-def get_deeponet_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4):
+def create_deeponet_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4):
     """
     Create a DataLoader for a DeepONet dataset.
     
