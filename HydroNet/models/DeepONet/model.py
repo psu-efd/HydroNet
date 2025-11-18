@@ -137,6 +137,8 @@ class SWE_DeepONetModel(nn.Module):
             self.config = config        
         else:
             raise ValueError("config must be provided and must be an instance of Config")
+
+        self.bSteady = self.config.get('physics.bSteady', True)
             
         # Get model parameters from config
         branch_layers = self.config.get('model.branch_net.hidden_layers', [128, 128, 128])
@@ -148,8 +150,8 @@ class SWE_DeepONetModel(nn.Module):
         trunk_dropout = self.config.get('model.trunk_net.dropout_rate', 0.0)
         
         # Input dimensions - use defaults if not specified
-        self.branch_input_dim = self.config.get('data.branch_input_dim', 10)  # Default to 10 for dummy data
-        self.trunk_input_dim = self.config.get('data.trunk_input_dim', 2)  # 2 for (x, y) coordinates, 3 for (x, y, t) coordinates
+        self.branch_input_dim = self.config.get('model.branch_net.branch_input_dim', 10)  # Default to 10 for dummy data
+        self.trunk_input_dim = self.config.get('model.trunk_net.trunk_input_dim', 2)  # 2 for (x, y) coordinates, 3 for (x, y, t) coordinates
         
         # Output dimension - 3 for (h, u, v) in shallow water equations
         self.output_dim = self.config.get('model.output_dim', 3)

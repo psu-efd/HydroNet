@@ -1,5 +1,5 @@
 """
-Training utilities for Physics-Informed DeepONet models.
+Training utilities for Physics-Informed SWE_DeepONet models.
 """
 import os
 import torch
@@ -11,41 +11,52 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import SWE_DeepONetDataset, PINNDataset
+from ...data import PINNDataset
+from ...models.PI_DeepONet.model import PI_SWE_DeepONetModel
 
 
-class PI_DeepONetTrainer:
+class PI_SWE_DeepONetTrainer:
     """
-    Trainer for Physics-Informed DeepONet models.
+    Trainer for Physics-Informed SWE_DeepONet models.
     """
-    def __init__(self, model, config_file=None, config=None):
+    def __init__(self, model, config):
         """
         Initialize the trainer.
         
         Args:
             model (nn.Module): Physics-Informed DeepONet model to train.
-            config_file (str, optional): Path to configuration file.
-            config (Config, optional): Configuration object.
+            config (Config): Configuration object.
         """
+        # Check if model is an instance of PI_SWE_DeepONetModel
+        if not isinstance(model, PI_SWE_DeepONetModel):
+            raise ValueError("model must be an instance of PI_SWE_DeepONetModel")
+
         self.model = model
         
         # Load configuration
-        if config is not None:
-            self.config = config
-        elif config_file is not None:
-            self.config = Config(config_file)
-        else:
-            self.config = model.config
+        if not isinstance(config, Config):
+            raise ValueError("config must be a Config object")
+
+        self.config = config
             
         # Set device
         self.device = self.config.get_device()
-        self.model.to(self.device)
+        # Note: Model should already be on the correct device from initialization
+        # Only move if it's not already on the device
+        if next(self.model.parameters()).device != self.device:
+            self.model.to(self.device)
+
+        print(f"Device: {self.device}")
         
         # Training parameters
         self.batch_size = self.config.get('training.batch_size', 32)
         self.epochs = self.config.get('training.epochs', 2000)
-        self.learning_rate = self.config.get('training.learning_rate', 0.001)
-        self.weight_decay = self.config.get('training.weight_decay', 1e-5)
+        self.learning_rate = float(self.config.get('training.learning_rate', 0.001))
+        self.weight_decay = float(self.config.get('training.weight_decay', 1e-5))
+        
+        # Loss function (for simple data loss computation)
+        # Note: Full training uses model.compute_total_loss() which includes physics constraints
+        self.loss_fn = nn.MSELoss()
         
         # Optimizer
         self.optimizer = optim.Adam(
@@ -59,9 +70,9 @@ class PI_DeepONetTrainer:
         if use_scheduler:
             scheduler_type = self.config.get('training.scheduler.scheduler_type', 'ReduceLROnPlateau')
             if scheduler_type == 'ReduceLROnPlateau':
-                patience = self.config.get('training.scheduler.patience', 20)
-                factor = self.config.get('training.scheduler.factor', 0.5)
-                min_lr = self.config.get('training.scheduler.min_lr', 1e-6)
+                patience = int(self.config.get('training.scheduler.patience', 20))
+                factor = float(self.config.get('training.scheduler.factor', 0.5))
+                min_lr = float(self.config.get('training.scheduler.min_lr', 1e-6))
                 self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     self.optimizer,
                     mode='min',
@@ -82,18 +93,18 @@ class PI_DeepONetTrainer:
         # Early stopping
         use_early_stopping = self.config.get('training.early_stopping.use_early_stopping', True)
         if use_early_stopping:
-            patience = self.config.get('training.early_stopping.patience', 50)
-            min_delta = self.config.get('training.early_stopping.min_delta', 1e-5)
+            patience = int(self.config.get('training.early_stopping.patience', 50))
+            min_delta = float(self.config.get('training.early_stopping.min_delta', 1e-5))
             self.early_stopping = EarlyStopping(patience, min_delta)
         else:
             self.early_stopping = None
             
         # Logging
-        log_dir = self.config.get('logging.tensorboard_log_dir', '../logs/tensorboard')
+        log_dir = self.config.get('logging.tensorboard_log_dir', './logs/tensorboard')
         self.writer = SummaryWriter(log_dir)
         
         # Checkpointing
-        self.checkpoint_dir = self.config.get('paths.checkpoint_dir', '../checkpoints')
+        self.checkpoint_dir = self.config.get('paths.checkpoint_dir', './checkpoints')
         self.save_freq = self.config.get('logging.save_freq', 10)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         
@@ -101,41 +112,58 @@ class PI_DeepONetTrainer:
         self.loss_history = []
         self.component_loss_history = []
         
-    def train(self, train_loader=None, val_loader=None, physics_dataset=None, 
-             initial_conditions=None, boundary_conditions=None):
+    def train(self, train_loader, val_loader, physics_dataset):
         """
-        Train the Physics-Informed DeepONet model.
+        Train the Physics-Informed SWE_DeepONet model.
         
         Args:
-            train_loader (DataLoader, optional): Training data loader.
-            val_loader (DataLoader, optional): Validation data loader.
-            physics_dataset (PINNDataset, optional): Dataset for physics constraints.
-            initial_conditions (callable, optional): Function that returns initial conditions.
-            boundary_conditions (callable, optional): Function that returns boundary conditions.
+            train_loader (DataLoader): Training data loader for DeepONet data.
+            val_loader (DataLoader): Validation data loader for DeepONet data.
+            physics_dataset (PINNDataset): Dataset for physics constraints.
+                Should have methods: get_pde_points(), get_initial_points(), get_boundary_points(),
+                get_mesh_stats(), get_data_stats().
             
         Returns:
-            dict: Training history.
+            dict: Training history containing loss_history and component_loss_history.
         """
-        # Load data if not provided
-        if train_loader is None or val_loader is None:
-            train_loader, val_loader = self._load_data()
-            
-        # Create physics dataset if not provided
-        if physics_dataset is None:
-            physics_dataset = self._create_physics_dataset()
             
         # Get branch input dimension from data if needed
-        if self.model.branch_dim == 0:
+        if self.model.branch_input_dim == 0:
             batch = next(iter(train_loader))
             branch_input = batch[0]
             branch_dim = branch_input.shape[1]
-            self.model.set_branch_dim(branch_dim)
+            self.model.set_branch_input_dim(branch_dim)
             print(f"Set branch input dimension to {branch_dim}")
             
-        # Get physics collocation points
-        domain_points = physics_dataset.get_pde_points().to(self.device)
-        initial_points = physics_dataset.get_initial_points().to(self.device) if initial_conditions is not None else None
-        boundary_points = physics_dataset.get_boundary_points().to(self.device) if boundary_conditions is not None else None
+        # Get physics collocation points and data
+        pde_points_data = physics_dataset.get_pde_points()
+        if pde_points_data is not None:
+            pde_points, pde_data = pde_points_data
+            pde_points = pde_points.to(self.device)
+            pde_data = pde_data.to(self.device)
+        else:
+            pde_points = None
+            pde_data = None
+        
+        initial_points_data = physics_dataset.get_initial_points()
+        if initial_points_data is not None:
+            initial_points, initial_values = initial_points_data
+            initial_points = initial_points.to(self.device)
+            initial_values = initial_values.to(self.device)
+        else:
+            initial_points = None
+            initial_values = None
+        
+        boundary_points_data = physics_dataset.get_boundary_points()
+        if boundary_points_data is not None:
+            boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN = boundary_points_data
+            boundary_points = boundary_points.to(self.device)
+        else:
+            boundary_points = None
+        
+        # Get DeepONet and PINN points stats for normalization
+        all_deeponet_points_stats = train_loader.dataset.get_deeponet_stats()
+        all_pinn_points_stats = physics_dataset.get_all_pinn_points_stats()
         
         # Training loop
         print(f"Starting training for {self.epochs} epochs...")
@@ -147,11 +175,13 @@ class PI_DeepONetTrainer:
             # Training step
             train_loss, loss_components = self._train_epoch(
                 train_loader, 
-                domain_points, 
-                initial_points, 
-                boundary_points, 
-                initial_conditions, 
-                boundary_conditions
+                pde_points, 
+                pde_data,
+                initial_points,
+                initial_values,
+                boundary_points,
+                all_deeponet_points_stats,
+                all_pinn_points_stats
             )
             
             self.loss_history.append(train_loss)
@@ -176,24 +206,24 @@ class PI_DeepONetTrainer:
                 print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}")
                 
             # Print component losses
-            print(f"  Data Loss: {loss_components['data_loss']:.6f}")
-            print(f"  PDE Loss: {loss_components['pde_loss']:.6f}")
+            print(f"  Data Loss: {loss_components.get('data_loss', 0.0):.6f}")
+            print(f"  PDE Loss: {loss_components.get('pde_loss', 0.0):.6f}")
             if initial_points is not None:
-                print(f"  Initial Loss: {loss_components['initial_loss']:.6f}")
+                print(f"  Initial Loss: {loss_components.get('initial_loss', 0.0):.6f}")
             if boundary_points is not None:
-                print(f"  Boundary Loss: {loss_components['boundary_loss']:.6f}")
+                print(f"  Boundary Loss: {loss_components.get('boundary_loss', 0.0):.6f}")
                 
             # Log to TensorBoard
             self.writer.add_scalar('Loss/train', train_loss, epoch)
             if val_loss is not None:
                 self.writer.add_scalar('Loss/val', val_loss, epoch)
                 
-            self.writer.add_scalar('Loss/data', loss_components['data_loss'], epoch)
-            self.writer.add_scalar('Loss/pde', loss_components['pde_loss'], epoch)
+            self.writer.add_scalar('Loss/data', loss_components.get('data_loss', 0.0), epoch)
+            self.writer.add_scalar('Loss/pde', loss_components.get('pde_loss', 0.0), epoch)
             if initial_points is not None:
-                self.writer.add_scalar('Loss/initial', loss_components['initial_loss'], epoch)
+                self.writer.add_scalar('Loss/initial', loss_components.get('initial_loss', 0.0), epoch)
             if boundary_points is not None:
-                self.writer.add_scalar('Loss/boundary', loss_components['boundary_loss'], epoch)
+                self.writer.add_scalar('Loss/boundary', loss_components.get('boundary_loss', 0.0), epoch)
                 
             # Save checkpoint
             if (epoch + 1) % self.save_freq == 0:
@@ -223,18 +253,21 @@ class PI_DeepONetTrainer:
             'component_loss_history': self.component_loss_history
         }
         
-    def _train_epoch(self, train_loader, domain_points, initial_points=None, 
-                    boundary_points=None, initial_conditions=None, boundary_conditions=None):
+    def _train_epoch(self, train_loader, pde_points=None, pde_data=None,
+                    initial_points=None, initial_values=None,
+                    boundary_points=None, all_deeponet_points_stats=None, all_pinn_points_stats=None):
         """
         Train for one epoch.
         
         Args:
             train_loader (DataLoader): Training data loader.
-            domain_points (torch.Tensor): Points inside the domain for physics constraints.
+            pde_points (torch.Tensor, optional): Points inside the domain for physics constraints.
+            pde_data (torch.Tensor, optional): PDE data (zb, Sx, Sy, ManningN) for physics constraints.
             initial_points (torch.Tensor, optional): Points at initial time.
+            initial_values (torch.Tensor, optional): Initial values at initial points.
             boundary_points (torch.Tensor, optional): Points on the boundary.
-            initial_conditions (callable, optional): Function that returns initial conditions.
-            boundary_conditions (callable, optional): Function that returns boundary conditions.
+            all_deeponet_points_stats (dict, optional): Statistics of DeepONet points for normalization.
+            all_pinn_points_stats (dict, optional): Statistics of PINN points for normalization.
             
         Returns:
             tuple: (average_loss, loss_components)
@@ -242,10 +275,13 @@ class PI_DeepONetTrainer:
         self.model.train()
         total_loss = 0
         total_components = {
-            'data_loss': 0.0,
-            'pde_loss': 0.0,
-            'initial_loss': 0.0,
-            'boundary_loss': 0.0,
+            'deeponet_data_loss': 0.0,      # DeepONet loss
+            'pinn_pde_loss': 0.0,       # PINN loss (include PDE and BC/IC if applicable)
+            'pinn_pde_loss_cty': 0.0,
+            'pinn_pde_loss_mom_x': 0.0,
+            'pinn_pde_loss_mom_y': 0.0,
+            'pinn_initial_loss': 0.0,
+            'pinn_boundary_loss': 0.0,
             'total_loss': 0.0
         }
         
@@ -256,27 +292,38 @@ class PI_DeepONetTrainer:
             trunk_input = trunk_input.to(self.device)
             target = target.to(self.device)
             
-            # Sample physics points for this batch
+            # Get the batch size for this batch
             batch_size = branch_input.shape[0]
             
-            # Sample domain points for physics constraints
-            physics_indices = torch.randint(0, len(domain_points), (batch_size,))
-            physics_trunk_input = domain_points[physics_indices]
-            physics_branch_input = branch_input  # Use the same branch input
+            # Randomly sample PINN mesh points for PINN physics (PDEs: SWEs) constraints
+            physics_branch_input = None
+            physics_trunk_input = None
+            physics_pde_data = None
+            
+            if pde_points is not None and pde_data is not None:
+                physics_indices = torch.randint(0, len(pde_points), (batch_size,))
+                physics_trunk_input = pde_points[physics_indices]
+                physics_pde_data = pde_data[physics_indices]
+                physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input, meaning the PDEs have to be satisfied for all the Branch inputs.
             
             # Sample initial points if provided
-            if initial_points is not None and initial_conditions is not None:
+            initial_trunk_input = None
+            initial_batch_values = None
+            if initial_points is not None and initial_values is not None:
                 initial_indices = torch.randint(0, len(initial_points), (batch_size,))
                 initial_trunk_input = initial_points[initial_indices]
-            else:
-                initial_trunk_input = None
+                initial_batch_values = initial_values[initial_indices]
                 
             # Sample boundary points if provided
-            if boundary_points is not None and boundary_conditions is not None:
+            # Note: For complex boundary conditions (inlet-q, exit-h, wall), 
+            # a more sophisticated sampling approach may be needed
+            boundary_trunk_input = None
+            boundary_batch_values = None
+            if boundary_points is not None:
                 boundary_indices = torch.randint(0, len(boundary_points), (batch_size,))
                 boundary_trunk_input = boundary_points[boundary_indices]
-            else:
-                boundary_trunk_input = None
+                # For now, we assume boundary_values would be provided separately
+                # This can be extended later for more complex boundary conditions
                 
             # Forward pass and compute loss
             self.optimizer.zero_grad()
@@ -287,16 +334,15 @@ class PI_DeepONetTrainer:
                 target=target,
                 physics_branch_input=physics_branch_input,
                 physics_trunk_input=physics_trunk_input,
-                initial_trunk_input=initial_trunk_input,
-                boundary_trunk_input=boundary_trunk_input,
-                initial_conditions=initial_conditions,
-                boundary_conditions=boundary_conditions
+                pde_data=physics_pde_data,                
+                all_deeponet_points_stats=all_deeponet_points_stats,
+                all_pinn_points_stats=all_pinn_points_stats
             )
             
             # Backward pass
             total_batch_loss.backward()
             
-            # Gradient clipping
+            # Gradient clipping (to avoid exploding gradients)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             
             # Update weights
@@ -307,7 +353,8 @@ class PI_DeepONetTrainer:
             
             # Update component losses
             for key in total_components:
-                total_components[key] += loss_components[key]
+                if key in loss_components:
+                    total_components[key] += loss_components[key]
                 
         # Compute average losses
         avg_loss = total_loss / len(train_loader)
@@ -349,70 +396,6 @@ class PI_DeepONetTrainer:
         avg_loss = total_loss / len(val_loader)
         
         return avg_loss
-        
-    def _load_data(self):
-        """
-        Load training and validation data.
-        
-        Returns:
-            tuple: (train_loader, val_loader)
-        """
-        # Get data paths from config
-        data_dir = self.config.get('data.train_data_path', '../data/train')
-        val_dir = self.config.get('data.val_data_path', '../data/val')
-        
-        # Create datasets
-        train_dataset = SWE_DeepONetDataset(data_dir, split='train', normalize=True)
-        val_dataset = SWE_DeepONetDataset(val_dir, split='val', normalize=True)
-        
-        # Create data loaders
-        train_loader = create_deeponet_dataloader(
-            train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=4
-        )
-        
-        val_loader = create_deeponet_dataloader(
-            val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=4
-        )
-        
-        return train_loader, val_loader
-        
-    def _create_physics_dataset(self):
-        """
-        Create a dataset for physics constraints.
-        
-        Returns:
-            PINNDataset: Dataset containing collocation points.
-        """
-        # Get domain parameters from config
-        domain_params = self.config.get('sampling.domain', {
-            'x_min': 0.0,
-            'x_max': 1.0,
-            'y_min': 0.0,
-            'y_max': 1.0,
-            't_min': 0.0,
-            't_max': 1.0
-        })
-        
-        # Get sampling parameters from config
-        num_domain_points = self.config.get('sampling.num_domain_points', 5000)
-        num_boundary_points = self.config.get('sampling.num_boundary_points', 1000)
-        num_initial_points = self.config.get('sampling.num_initial_points', 1000)
-        
-        # Create dataset
-        dataset = PINNDataset(
-            domain_params,
-            num_domain_points=num_domain_points,
-            num_boundary_points=num_boundary_points,
-            num_initial_points=num_initial_points
-        )
-        
-        return dataset
         
     def _save_checkpoint(self, epoch):
         """

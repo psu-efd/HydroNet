@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import h5py
 from typing import Tuple, Optional
+import json
 
 
 class SWE_DeepONetDataset(Dataset):
@@ -14,46 +15,57 @@ class SWE_DeepONetDataset(Dataset):
     Dataset for DeepONet training data.
     
     This dataset handles input functions (branch net inputs) and coordinates (trunk net inputs),
-    along with corresponding output values. It is designed to work with any type of operator learning
-    problem that can be formulated in the DeepONet framework.
+    along with corresponding output values. It is designed to work with any type of operator learning.
+    
+    The data is expected to be normalized.
+
+    The data is expected to be called "data.h5" and to be in the following format:
+    - branch_inputs: Input functions for the branch net.
+    - trunk_inputs: Coordinates for the trunk net.
+    - outputs: Corresponding output values.
     """
-    def __init__(self, data_dir, transform=None, normalize=False):
+
+    def __init__(self, data_path, config):
         """
-        Initialize the hydraulic dataset.
+        Initialize the DeepONet dataset.
         
         Args:
-            data_dir (str): Directory containing the simulation data.
-            transform (callable, optional): Optional transform to be applied to samples.
-            normalize (bool, optional): Whether to normalize the data.
+            data_path (str): Path to the data directory.
+            config (dict): Configuration dictionary.
         """
-        self.data_dir = data_dir
-        self.transform = transform
-        self.normalize = normalize
-        
+        self.data_path = data_path
+        self.config = config
+
         # Load the data
         self._load_data()
+
+        # Get the normalization stats
+        # get the upper directory of the data_path
+        self.upper_data_path = os.path.dirname(self.data_path)
+
+        if not os.path.exists(os.path.join(self.upper_data_path, 'all_DeepONet_stats.json')):
+            raise FileNotFoundError(f"Required file all_DeepONet_stats.json not found in {self.upper_data_path}")
         
-        # Normalize if required
-        if self.normalize:
-            self._normalize_data()
-            
+        with open(os.path.join(self.upper_data_path, 'all_DeepONet_stats.json'), 'r') as f:
+            self.all_DeepONet_stats = json.load(f)
+        
+        print("all_DeepONet_stats: ", self.all_DeepONet_stats)
+        
     def _load_data(self):
         """
         Load the hydraulic simulation data from HDF5 files.
         """
-        # Path to data files
-        data_path = self.data_dir
         
         # Check if the data directory exists
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data directory {data_path} does not exist")
+        if not os.path.exists(self.data_path):
+            raise FileNotFoundError(f"Data directory {self.data_path} does not exist")
                 
         try:
             # Check if required HDF5 file exists
-            h5_file = os.path.join(data_path, 'data.h5')
+            h5_file = os.path.join(self.data_path, 'data.h5')
             
             if not os.path.exists(h5_file):
-                raise FileNotFoundError(f"Required file data.h5 not found in {data_path}")
+                raise FileNotFoundError(f"Required file data.h5 not found in {self.data_path}")
                 
             # Load data from HDF5 file
             with h5py.File(h5_file, 'r') as f:
@@ -70,47 +82,13 @@ class SWE_DeepONetDataset(Dataset):
             print("trunk_inputs.shape: ", self.trunk_inputs.shape)
             print("outputs.shape: ", self.outputs.shape)
             
-            print(f"Loaded {len(self.branch_inputs)} samples from {data_path}")
+            print(f"Loaded {len(self.branch_inputs)} samples from {self.data_path}")
             
         except Exception as e:
             print(f"Error loading data: {e}")            
             raise RuntimeError("Error loading data. Please check the data directory and file structure.")
-            
-    def _normalize_data(self):
-        """
-        Normalize the data to improve training stability.
-        """
-
-        print("SWE_DeepONetDataset: Normalizing the data ...")
-
-        # Branch input normalization
-        self.branch_mean = np.mean(self.branch_inputs, axis=0, keepdims=True)
-        self.branch_std = np.std(self.branch_inputs, axis=0, keepdims=True) + 1e-8
-        self.branch_inputs = (self.branch_inputs - self.branch_mean) / self.branch_std
-
-        # Trunk input normalization
-        self.trunk_mean = np.mean(self.trunk_inputs, axis=0, keepdims=True)
-        self.trunk_std = np.std(self.trunk_inputs, axis=0, keepdims=True) + 1e-8
-        self.trunk_inputs = (self.trunk_inputs - self.trunk_mean) / self.trunk_std
-        
-        # Output normalization
-        self.output_mean = np.mean(self.outputs, axis=0, keepdims=True)
-        self.output_std = np.std(self.outputs, axis=0, keepdims=True) + 1e-8
-        self.outputs = (self.outputs - self.output_mean) / self.output_std
-        
-        # Save normalization params for later use
-        self.normalization = {
-            'branch_mean': self.branch_mean,
-            'branch_std': self.branch_std,
-            'trunk_mean': self.trunk_mean,
-            'trunk_std': self.trunk_std,
-            'output_mean': self.output_mean,
-            'output_std': self.output_std
-        }
-
-        #print the normalization parameters
-        print("Normalization parameters:")
-        print(self.normalization)
+           
+    
         
     def __len__(self):
         """Return the number of samples in the dataset."""
@@ -137,12 +115,14 @@ class SWE_DeepONetDataset(Dataset):
         branch_input = torch.tensor(branch_input, dtype=torch.float32)
         trunk_input = torch.tensor(trunk_input, dtype=torch.float32)
         output = torch.tensor(output, dtype=torch.float32)
-        
-        # Apply any transformations
-        if self.transform:
-            branch_input, trunk_input, output = self.transform(branch_input, trunk_input, output)
             
         return branch_input, trunk_input, output
+
+    def get_deeponet_stats(self):
+        """
+        Get the normalization stats for the DeepONet dataset.
+        """
+        return self.all_DeepONet_stats
 
 
 def create_deeponet_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4):

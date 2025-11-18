@@ -23,7 +23,7 @@ model:
 # Training parameters
 training:
   batch_size: 16384
-  epochs: 100
+  epochs: 10
   learning_rate: 0.001
   weight_decay: 1e-5
   scheduler:
@@ -43,7 +43,7 @@ data:
   val_data_path: "data/val"
   test_data_path: "data/test"
   bNormalized: true   #whether the data is normalized or not
-  train_val_test_stats_path: "data/train_val_test_stats.h5"  # Path to the dataset mean and std file (for normalization/denormalization purposes)
+  all_DeepONet_stats_path: "data/all_DeepONet_stats.json"  # Path to the DeepONet-related stats file (for normalization/denormalization purposes)
   branch_input_dim: 3  # Number of sensors (input functions)
   trunk_input_dim: 2  # (x, y) coordinates
   output_dim: 3  # h, u, v    

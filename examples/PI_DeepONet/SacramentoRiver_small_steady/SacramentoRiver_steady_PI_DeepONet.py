@@ -1,8 +1,8 @@
 """
 Example usage of the HydroNet framework.
 
-This script demonstrates how to use the DeepONet component of HydroNet for learning 
-the operator of shallow water equations.
+This script demonstrates how to use the PI-DeepONet component of HydroNet for learning 
+the operator of shallow water equations with physics-informed constraints.
 """
 import os
 import sys
@@ -44,156 +44,16 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     print(f"Added {project_root} to Python path")
 
-from HydroNet import SWE_DeepONetModel, SWE_DeepONetTrainer, SWE_DeepONetDataset, Config
+from HydroNet import PI_SWE_DeepONetModel, PI_SWE_DeepONetTrainer, PI_SWE_DeepONetDataset, Config
 
-def check_data_normalization(train_dataset, val_dataset):
-    """
-    Check normalization consistency between training and validation datasets.
-    
-    Args:
-        train_dataset: SWE_DeepONetDataset for training data
-        val_dataset: SWE_DeepONetDataset for validation data
-    
-    Returns:
-        dict: Dictionary containing statistics for both datasets
-    """
-    print("\n=== Data Normalization Check ===")
-    
-    # Function to compute statistics for a dataset
-    def compute_dataset_stats(dataset, name):
-        branch_inputs = []
-        trunk_inputs = []
-        outputs = []
-        
-        for branch, trunk, target in dataset:
-            branch_inputs.append(branch.numpy())
-            trunk_inputs.append(trunk.numpy())
-            outputs.append(target.numpy())
-        
-        branch_inputs = np.concatenate(branch_inputs)
-        trunk_inputs = np.concatenate(trunk_inputs)
-        outputs = np.concatenate(outputs)
-        
-        print(f"\n{name} Dataset Statistics:")
-        
-        # Branch inputs statistics (for each feature)
-        print(f"\nBranch Inputs (shape: {branch_inputs.shape}):")
-        for i in range(branch_inputs.shape[1]):
-            print(f"  Feature {i}:")
-            print(f"    Mean: {np.mean(branch_inputs[:, i]):.6f}")
-            print(f"    Std: {np.std(branch_inputs[:, i]):.6f}")
-            print(f"    Min: {np.min(branch_inputs[:, i]):.6f}")
-            print(f"    Max: {np.max(branch_inputs[:, i]):.6f}")
-        
-        # Trunk inputs statistics (for each spatial/temporal coordinate)
-        print(f"\nTrunk Inputs (shape: {trunk_inputs.shape}):")
-        for i in range(trunk_inputs.shape[1]):
-            print(f"  Coordinate {i}:")
-            print(f"    Mean: {np.mean(trunk_inputs[:, i]):.6f}")
-            print(f"    Std: {np.std(trunk_inputs[:, i]):.6f}")
-            print(f"    Min: {np.min(trunk_inputs[:, i]):.6f}")
-            print(f"    Max: {np.max(trunk_inputs[:, i]):.6f}")
-        
-        # Outputs statistics (for each output variable)
-        print(f"\nOutputs (shape: {outputs.shape}):")
-        output_names = ['X-Velocity (u)', 'Y-Velocity (v)', 'Water Depth (h)']
-        for i in range(outputs.shape[1]):
-            print(f"  {output_names[i]}:")
-            print(f"    Mean: {np.mean(outputs[:, i]):.6f}")
-            print(f"    Std: {np.std(outputs[:, i]):.6f}")
-            print(f"    Min: {np.min(outputs[:, i]):.6f}")
-            print(f"    Max: {np.max(outputs[:, i]):.6f}")
-        
-        return {
-            'branch': {
-                'mean': np.mean(branch_inputs, axis=0),
-                'std': np.std(branch_inputs, axis=0),
-                'min': np.min(branch_inputs, axis=0),
-                'max': np.max(branch_inputs, axis=0)
-            },
-            'trunk': {
-                'mean': np.mean(trunk_inputs, axis=0),
-                'std': np.std(trunk_inputs, axis=0),
-                'min': np.min(trunk_inputs, axis=0),
-                'max': np.max(trunk_inputs, axis=0)
-            },
-            'output': {
-                'mean': np.mean(outputs, axis=0),
-                'std': np.std(outputs, axis=0),
-                'min': np.min(outputs, axis=0),
-                'max': np.max(outputs, axis=0)
-            }
-        }
-    
-    # Compute statistics for both datasets
-    train_stats = compute_dataset_stats(train_dataset, "Training")
-    val_stats = compute_dataset_stats(val_dataset, "Validation")
-    
-    # Compare statistics between datasets
-    print("\n=== Normalization Comparison ===")
-    
-    def compare_stats(train_stat, val_stat, name, dim_names=None):
-        if dim_names is None:
-            dim_names = [f"Dimension {i}" for i in range(len(train_stat['mean']))]
-            
-        for i, (train_mean, val_mean, train_std, val_std) in enumerate(zip(
-            train_stat['mean'], val_stat['mean'],
-            train_stat['std'], val_stat['std']
-        )):
-            mean_diff = abs(train_mean - val_mean)
-            std_diff = abs(train_std - val_std)
-            print(f"\n{name} - {dim_names[i]}:")
-            print(f"  Mean difference: {mean_diff:.6f}")
-            print(f"  Std difference: {std_diff:.6f}")
-            if mean_diff > 0.1 or std_diff > 0.1:
-                print(f"  ⚠️ WARNING: Large difference detected in {name} - {dim_names[i]} statistics!")
-    
-    # Compare branch inputs (25 features)
-    branch_dim_names = [f"Feature {i}" for i in range(25)]
-    compare_stats(train_stats['branch'], val_stats['branch'], "Branch Inputs", branch_dim_names)
-    
-    # Compare trunk inputs (3 spatial coordinates)
-    trunk_dim_names = [f"Coordinate {i}" for i in range(3)]
-    compare_stats(train_stats['trunk'], val_stats['trunk'], "Trunk Inputs", trunk_dim_names)
-    
-    # Compare outputs (3 variables)
-    output_dim_names = ['Water Depth (h)', 'X-Velocity (u)', 'Y-Velocity (v)']
-    compare_stats(train_stats['output'], val_stats['output'], "Outputs", output_dim_names)
-    
-    return {
-        'train_stats': train_stats,
-        'val_stats': val_stats
-    }
 
-def load_config(config_path):
+def pi_deeponet_train_with_full_data(config):
     """
-    Load configuration from a YAML file.
-    
-    Args:
-        config_path (str): Path to the YAML configuration file
-        
-    Returns:
-        dict: Configuration dictionary
-    """
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        return config
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-    except yaml.YAMLError as e:
-        raise ValueError(f"Error parsing YAML file: {e}")
-
-def deeponet_train_with_full_data(config):
-    """
-    Train DeepONet using the full dataset loaded into memory.
-    This version uses HydraulicDataset which loads all data at once.
-    Includes memory monitoring and out-of-memory handling.
+    Train PI-DeepONet.
 
     Args:
         config: Configuration dictionary
-    """
-    
+    """    
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -211,16 +71,16 @@ def deeponet_train_with_full_data(config):
     print_gpu_memory("Initial GPU memory")
     
     try:
-        # Create dataset and dataloader
+        # Create PI-DeepONet dataset and dataloader for training and validation
         print("Loading training dataset...")
-        train_dataset = SWE_DeepONetDataset(
-            data_path=config.get('data.train_data_path'),
+        train_dataset = PI_SWE_DeepONetDataset(
+            deeponet_data_dir=config.get('data.deeponet.train_data_path'),
             config=config
         )
         
         print("Loading validation dataset...")
-        val_dataset = SWE_DeepONetDataset(
-            data_path=config.get('data.val_data_path'),
+        val_dataset = PI_SWE_DeepONetDataset(
+            deeponet_data_dir=config.get('data.deeponet.val_data_path'),
             config=config
         )
         
@@ -246,19 +106,21 @@ def deeponet_train_with_full_data(config):
         
         # Initialize model
         print("Initializing model...")
-        model = SWE_DeepONetModel(config=config).to(device)
+        model = PI_SWE_DeepONetModel(config).to(device)
         print_gpu_memory("GPU memory after model initialization")
         
         # Initialize trainer
-        trainer = SWE_DeepONetTrainer(
-            model=model,
-            config=config
+        trainer = PI_SWE_DeepONetTrainer(
+            model,
+            config
         )
         
         # Monitor memory after first batch
         print("\nMonitoring memory during first batch...")
-        for batch in train_loader:
-            branch_input, trunk_input, target = [b.to(device) for b in batch]
+        for branch_input, trunk_input, target in train_loader:
+            branch_input = branch_input.to(device)
+            trunk_input = trunk_input.to(device)
+            target = target.to(device)
             print_gpu_memory("GPU memory after data transfer")
             
             # Forward pass
@@ -280,7 +142,8 @@ def deeponet_train_with_full_data(config):
         print("\nStarting training...")
         history = trainer.train(
             train_loader=train_loader,
-            val_loader=val_loader
+            val_loader=val_loader,
+            physics_dataset=train_dataset.physics_dataset
         )
 
         #save the history to a json file with a time stamp
@@ -316,11 +179,11 @@ def deeponet_train_with_full_data(config):
             torch.cuda.empty_cache()
             print_gpu_memory("Final GPU memory")
 
-def deeponet_test(best_model_path, config):
+def pi_deeponet_test(best_model_path, config):
     """
     Using the trained DeepONet model for testing on the test dataset.
 
-    Note: The test dataset is not shuffled, so the first nCell (e.g., 100) samples (cell center points) are from the first case, the next nCells samples are from the second case, etc.
+    Note: The test dataset is not shuffled, so the first N (e.g., 100) samples are from the first case, the next N samples are from the second case, etc.
     
     Args:
         best_model_path: Path to the best model checkpoint
@@ -349,9 +212,9 @@ def deeponet_test(best_model_path, config):
     print("Determining input dimensions from test data...")
     try:
         test_dataset = SWE_DeepONetDataset(
-            data_path=config.get('data.test_data_path'),
-            config=config
-        )            
+            data_dir=config.get('data.test_data_path'),
+            normalize=not config.get('data.bNormalized'),   #if bNormalized is true, the data is already normalized, thus no need to normalize it again
+            transform=None)            
 
         # Get a sample to determine dimensions
         sample_branch, sample_trunk, sample_output = test_dataset[0]
@@ -390,8 +253,11 @@ def deeponet_test(best_model_path, config):
             pin_memory=True
         )
 
-    # read the mean and std of the dataset from file all_DeepONet_stats_path
-    all_DeepONet_stats = json.load(open(config.get('data.all_DeepONet_stats_path'), 'r'))
+    # read the mean and std of the dataset from file data_mean_std_path
+    dataset_mean_std = h5py.File(config.get('data.train_val_test_stats_path'), 'r')
+    output_mean = dataset_mean_std['train_val_test_mean_outputs'][()]
+    output_std = dataset_mean_std['train_val_test_std_outputs'][()]
+    dataset_mean_std.close()
     
     # Evaluate model on test dataset
     model.eval()  # Set model to evaluation mode
@@ -423,11 +289,11 @@ def deeponet_test(best_model_path, config):
             # Count samples
             sample_count += len(branch_input)
 
-    print("len(all_predictions): ", len(all_predictions))
-    print("all_predictions[0].shape: ", all_predictions[0].shape)
+    #print("len(all_predictions): ", len(all_predictions))
+    #print("all_predictions[0].shape: ", all_predictions[0].shape)
 
-    print("len(all_targets): ", len(all_targets))
-    print("all_targets[0].shape: ", all_targets[0].shape)
+    #print("len(all_targets): ", len(all_targets))
+    #print("all_targets[0].shape: ", all_targets[0].shape)
     
     # Calculate average test loss
     avg_test_loss = total_loss / len(test_loader)
@@ -441,38 +307,24 @@ def deeponet_test(best_model_path, config):
     mse_per_dim = np.mean((all_predictions - all_targets) ** 2, axis=0)
     print(f"MSE per output dimension: {mse_per_dim}")
 
-    print("after vstack")
-    print("all_predictions.shape: ", all_predictions.shape)
-    print("all_targets.shape: ", all_targets.shape)
+    #print("after vstack")
+    #print("all_predictions.shape: ", all_predictions.shape)
+    #print("all_targets.shape: ", all_targets.shape)
 
-    print("all_predictions[0].shape: ", all_predictions[0].shape)
-    print("all_targets[0].shape: ", all_targets[0].shape)
+    #print("all_predictions[0].shape: ", all_predictions[0].shape)
+    #print("all_targets[0].shape: ", all_targets[0].shape)
     
     # Denormalize the predictions and targets
-    all_DeepONet_branch_trunk_outputs_stats = all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']
-
-    # Get the min, max, mean, and std of the outputs and convert to numpy arrays
-    outputs_min = np.array(all_DeepONet_branch_trunk_outputs_stats['outputs']['min'])
-    outputs_max = np.array(all_DeepONet_branch_trunk_outputs_stats['outputs']['max'])
-    outputs_mean = np.array(all_DeepONet_branch_trunk_outputs_stats['outputs']['mean'])
-    outputs_std = np.array(all_DeepONet_branch_trunk_outputs_stats['outputs']['std'])
-
-    # The outputs are normalized using the method recorded in all_DeepONet_stats.json
-    if all_DeepONet_branch_trunk_outputs_stats['normalization_method']['outputs'] == 'z-score':
-        denorm_predictions = all_predictions * outputs_std + outputs_mean
-        denorm_targets = all_targets * outputs_std + outputs_mean
-    elif all_DeepONet_branch_trunk_outputs_stats['normalization_method']['outputs'] == 'min-max':
-        denorm_predictions = all_predictions * (outputs_max - outputs_min) + outputs_min
-        denorm_targets = all_targets * (outputs_max - outputs_min) + outputs_min
-    else:
-        raise ValueError(f"Invalid normalization method: {all_DeepONet_stats['normalization_method']['outputs']}")
-
+    # Assuming the outputs are normalized as (x - mean) / std
+    denorm_predictions = all_predictions * output_std + output_mean
+    denorm_targets = all_targets * output_std + output_mean
+    
     # Calculate metrics on denormalized values
     denorm_mse_per_dim = np.mean((denorm_predictions - denorm_targets) ** 2, axis=0)
     print(f"Denormalized MSE per output dimension: {denorm_mse_per_dim}")
 
-    print("denorm_predictions[0].shape: ", denorm_predictions[0].shape)
-    print("denorm_targets[0].shape: ", denorm_targets[0].shape)
+    #print("denorm_predictions[0].shape: ", denorm_predictions[0].shape)
+    #print("denorm_targets[0].shape: ", denorm_targets[0].shape)
 
     #save the denormalized predictions and targets to a npz file
     np.savez(f'data/test/test_results.npz', denorm_predictions=denorm_predictions, denorm_targets=denorm_targets)
@@ -538,8 +390,7 @@ def convert_test_results_to_vtk(config):
 
     #randomly select some samples from the test indices (1-based)
     #random_indices = np.random.choice(test_indices, size=num_samples_to_plot, replace=False)
-    #random_indices = [522, 738, 741, 661]
-    random_indices = [84, 54, 71, 46]
+    random_indices = [522, 738, 741, 661]
 
     print("selected random indices for plotting: ", random_indices)
 
@@ -555,12 +406,8 @@ def convert_test_results_to_vtk(config):
     print("corresponding indices: ", corresponding_indices)
 
     for i in range(num_samples_to_plot):
-
-        print("i = ", i)
         #get the corresponding parameter value (Q)
         #Q = successful_samples[random_indices[i]-1, 0]
-
-        #print("corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells: ", corresponding_indices[i]*nCells, (corresponding_indices[i]+1)*nCells)
 
         #get the current case's results: h, u, v
         h_pred = denorm_predictions[corresponding_indices[i]*nCells:(corresponding_indices[i]+1)*nCells,0]
@@ -674,20 +521,20 @@ if __name__ == "__main__":
     main_start_time = time.time()
 
     # Load configuration
-    config_file = './deeponet_config.yaml'
+    config_file = './pi_deeponet_config.yaml'
     config = Config(config_file)
     
     # Set the multiprocessing start method
     mp.set_start_method('spawn', force=True)
     
     # Train the model
-    #deeponet_train_with_full_data(config)
+    pi_deeponet_train_with_full_data(config)
 
     # Plot training history
     #plot_training_history('./history_20250314_154327.json')
 
     # Test the model with the best model and save the test results to vtk files
-    deeponet_test('./checkpoints/deeponet_epoch_9.pt', config)
+    #deeponet_test('./checkpoints/deeponet_epoch_96.pt', config)
     
     # Calculate and print the total execution time
     main_execution_time = time.time() - main_start_time

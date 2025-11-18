@@ -1,0 +1,11 @@
+{
+"normalization_specs": {
+            "x": "min-max",
+            "y": "min-max",
+            "t": "min-max",
+            "zb": "none",
+            "Sx": "none",
+            "Sy": "none",
+            "ManningN": "none"
+        }
+}

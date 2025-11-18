@@ -11,7 +11,6 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import SWE_DeepONetDataset, create_deeponet_dataloader
 from .model import BranchNet, SWE_DeepONetModel
 
 
@@ -153,20 +152,17 @@ class SWE_DeepONetTrainer:
         self.train_losses = []
         self.val_losses = []
         
-    def train(self, train_loader=None, val_loader=None):
+    def train(self, train_loader, val_loader):
         """
         Train the SWE_DeepONet model.
         
         Args:
-            train_loader (DataLoader, optional): Training data loader.
-            val_loader (DataLoader, optional): Validation data loader.
+            train_loader (DataLoader): Training data loader.
+            val_loader (DataLoader): Validation data loader.
             
         Returns:
             dict: Training history.
         """
-        # Load data if not provided
-        if train_loader is None or val_loader is None:
-            train_loader, val_loader = self._load_data()
             
         # Get sample from loader to determine input dimensions if needed
         if self.model.branch_input_dim == 0:
@@ -319,38 +315,6 @@ class SWE_DeepONetTrainer:
         avg_loss = total_loss / len(val_loader)
         
         return avg_loss
-        
-    def _load_data(self):
-        """
-        Load training and validation data.
-        
-        Returns:
-            tuple: (train_loader, val_loader)
-        """
-        # Get data paths from config - update paths to match actual location
-        data_dir = self.config.get('data.train_data_path', './data/train')
-        val_dir = self.config.get('data.val_data_path', './data/val')
-        
-        # Create datasets
-        train_dataset = SWE_DeepONetDataset(data_dir, normalize=False)
-        val_dataset = SWE_DeepONetDataset(val_dir, normalize=False)
-        
-        # Create data loaders
-        train_loader = create_deeponet_dataloader(
-            train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=4
-        )
-        
-        val_loader = create_deeponet_dataloader(
-            val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=4
-        )
-        
-        return train_loader, val_loader
         
     def _save_checkpoint(self, epoch):
         """

@@ -218,7 +218,37 @@ def convert_mesh_points_for_pinn():
     t_mean = 0.0
     t_std = 0.0
 
-    all_points_stats = np.array([x_min, x_max, x_mean, x_std, y_min, y_max, y_mean, y_std, t_min, t_max, t_mean, t_std, zb_min, zb_max, zb_mean, zb_std, Sx_min, Sx_max, Sx_mean, Sx_std, Sy_min, Sy_max, Sy_mean, Sy_std, ManningN_min, ManningN_max, ManningN_mean, ManningN_std])
+
+    all_points_stats_dict = {
+        'x_min': x_min,
+        'x_max': x_max,
+        'x_mean': x_mean,
+        'x_std': x_std,
+        'y_min': y_min,
+        'y_max': y_max,
+        'y_mean': y_mean,
+        'y_std': y_std,
+        't_min': t_min,
+        't_max': t_max,
+        't_mean': t_mean,
+        't_std': t_std,
+        'zb_min': zb_min,
+        'zb_max': zb_max,
+        'zb_mean': zb_mean,
+        'zb_std': zb_std,
+        'Sx_min': Sx_min,
+        'Sx_max': Sx_max,
+        'Sx_mean': Sx_mean,
+        'Sx_std': Sx_std,
+        'Sy_min': Sy_min,
+        'Sy_max': Sy_max,
+        'Sy_mean': Sy_mean,
+        'Sy_std': Sy_std,
+        'ManningN_min': ManningN_min,
+        'ManningN_max': ManningN_max,
+        'ManningN_mean': ManningN_mean,
+        'ManningN_std': ManningN_std
+    }
     
     # Print summary
     print("\nPoints Summary:")
@@ -253,7 +283,10 @@ def convert_mesh_points_for_pinn():
         np.save(os.path.join(output_dir, 'boundary_points.npy'), boundary_points)
         np.save(os.path.join(output_dir, 'boundary_info.npy'), boundary_info)
         #save the statistics of all the points
-        np.save(os.path.join(output_dir, 'all_mesh_points_stats.npy'), all_points_stats)   #these can be used for normalization
+        #np.save(os.path.join(output_dir, 'all_mesh_points_stats.npy'), all_points_stats)   #these can be used for normalization
+        #save the statistics of all the points as a json file
+        with open(os.path.join(output_dir, 'all_mesh_points_stats.json'), 'w') as f:
+            json.dump(all_points_stats_dict, f)
     except Exception as e:
         raise RuntimeError(f"Failed to save numpy files: {e}")
     

@@ -65,7 +65,11 @@ class SWE_PINN(nn.Module):
         # Get model parameters from config
         self.model_name = self.config.get('model.name', 'SWE_PINN')
         self.bNormalize = self.config.get('model.bNormalize', True)
-        self.normalization_method = self.config.get('model.normalization_method', 'z-score')            
+        self.normalization_method = self.config.get('model.normalization_method', 'z-score')      
+
+        # Enforce that the current supported normalization method is only 'z-score'
+        if self.normalization_method != 'z-score':
+            raise ValueError("Only 'z-score' normalization is supported for SWE_PINN")
 
         try:
             self.bPDE_loss = bool(self.config.get('model.loss_flags.bPDE_loss'))

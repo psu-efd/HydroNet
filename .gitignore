@@ -1,5 +1,6 @@
 # Project specific ignores
 *.xlsx
+examples/PI_DeepONet/SacramentoRiver_small_steady/data_generation/
 examples/data_case_preparation/
 examples/DeepONet/SacramentoRiver_small_steady/data_generation/
 examples/data_case_preparation/SacromentoRiver/case_preparation/

@@ -115,11 +115,30 @@ class Config:
         return True 
     
     def __getattr__(self, name):
-        if name in self.config:
-            item = self.config[name]
-            if isinstance(item, dict):
-                nested_config = Config.__new__(Config)
-                nested_config.config = item
-                return nested_config
-            return item
+        # Avoid recursion by checking for special attributes first
+        # These are used by Python's pickle and other internal mechanisms
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(f"'Config' object has no attribute '{name}'")
+        
+        # Use object.__getattribute__ to directly access __dict__ without triggering __getattr__
+        try:
+            instance_dict = object.__getattribute__(self, '__dict__')
+            if name in instance_dict:
+                return instance_dict[name]
+        except AttributeError:
+            pass
+        
+        # Now safely check config dictionary
+        try:
+            config_dict = object.__getattribute__(self, 'config')
+            if name in config_dict:
+                item = config_dict[name]
+                if isinstance(item, dict):
+                    nested_config = Config.__new__(Config)
+                    nested_config.config = item
+                    return nested_config
+                return item
+        except AttributeError:
+            pass
+            
         raise AttributeError(f"'Config' object has no attribute '{name}'")
