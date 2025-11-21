@@ -478,7 +478,7 @@ class SWE_PINN(nn.Module):
             momentum_y_residual = (dv_dt/sigma_t + momentum_y_residual)
 
         #scale the residuals (in unnormalized space) based on the length and velocity scales of the problem
-        mass_residual = mass_residual / self.velocity**2
+        mass_residual = mass_residual / self.velocity
         momentum_x_residual = momentum_x_residual / self.velocity**2 * self.length
         momentum_y_residual = momentum_y_residual / self.velocity**2 * self.length
         

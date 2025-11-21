@@ -73,11 +73,11 @@ class Config:
         Returns:
             torch.device: The device to use.
         """
-        use_gpu = self.get('device.use_gpu', False)
-        gpu_id = self.get('device.gpu_id', 0)
+        device_type = self.get('device.type', 'cpu')
+        device_index = self.get('device.index', 0)
         
-        if use_gpu and torch.cuda.is_available():
-            return torch.device(f'cuda:{gpu_id}')
+        if device_type == 'cuda' and torch.cuda.is_available():
+            return torch.device(f'cuda:{device_index}')
         else:
             return torch.device('cpu')
             

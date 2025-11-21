@@ -11,7 +11,7 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import PINNDataset
+from ...models.PINN.data import PINNDataset
 from ...models.PI_DeepONet.model import PI_SWE_DeepONetModel
 
 
@@ -19,7 +19,7 @@ class PI_SWE_DeepONetTrainer:
     """
     Trainer for Physics-Informed SWE_DeepONet models.
     """
-    def __init__(self, model, config):
+    def __init__(self, model, config: Config):
         """
         Initialize the trainer.
         
@@ -31,16 +31,15 @@ class PI_SWE_DeepONetTrainer:
         if not isinstance(model, PI_SWE_DeepONetModel):
             raise ValueError("model must be an instance of PI_SWE_DeepONetModel")
 
-        self.model = model
-        
-        # Load configuration
         if not isinstance(config, Config):
-            raise ValueError("config must be a Config object")
+            raise ValueError("config must be a Config object.")
 
+        self.model = model
         self.config = config
             
         # Set device
         self.device = self.config.get_device()
+        
         # Note: Model should already be on the correct device from initialization
         # Only move if it's not already on the device
         if next(self.model.parameters()).device != self.device:
@@ -78,8 +77,7 @@ class PI_SWE_DeepONetTrainer:
                     mode='min',
                     patience=patience,
                     factor=factor,
-                    min_lr=min_lr,
-                    verbose=True
+                    min_lr=min_lr
                 )
             elif scheduler_type == 'ExponentialLR':
                 gamma = self.config.get('training.scheduler.gamma', 0.999)
@@ -108,18 +106,46 @@ class PI_SWE_DeepONetTrainer:
         self.save_freq = self.config.get('logging.save_freq', 10)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         
-        # Training history
-        self.loss_history = []
-        self.component_loss_history = []
+        # Training and validation history
+        self.training_loss_history = []
+        self.validation_loss_history = []
+
+        # Training component loss history (no validation component loss history because for validation, we only compute the DeepONet data loss)
+        self.training_component_loss_history = {
+            'deeponet_data_loss': [],
+            'pinn_pde_loss': [],
+            'pinn_pde_loss_cty': [],
+            'pinn_pde_loss_mom_x': [],
+            'pinn_pde_loss_mom_y': [],
+            'pinn_initial_loss': [],
+            'pinn_boundary_loss': [],
+            'total_loss': []
+        }
         
-    def train(self, train_loader, val_loader, physics_dataset):
+        # Adaptive loss balancing
+        self.use_adaptive_loss_balancing = self.config.get('training.loss_weights.use_adaptive_balancing', False)
+        self.use_adaptive_pde_component_balancing = self.config.get('training.loss_weights.use_adaptive_pde_component_balancing', False)
+        self.adaptive_balancing_epochs = self.config.get('training.loss_weights.adaptive_balancing_epochs', 10)
+        self.initial_loss_magnitudes = {}
+        self.loss_balancing_factors = {}
+        
+        # Adaptive weight history tracking
+        self.adaptive_weight_history = {
+            'deeponet_data_loss_weight': [],
+            'deeponet_pinn_loss_weight': [],
+            'pde_continuity_weight': [],
+            'pde_momentum_x_weight': [],
+            'pde_momentum_y_weight': []
+        }        
+        
+    def train(self, train_loader, val_loader, physics_dataset=None):
         """
         Train the Physics-Informed SWE_DeepONet model.
         
         Args:
             train_loader (DataLoader): Training data loader for DeepONet data.
             val_loader (DataLoader): Validation data loader for DeepONet data.
-            physics_dataset (PINNDataset): Dataset for physics constraints.
+            physics_dataset (PINNDataset, optional): Dataset for physics constraints.
                 Should have methods: get_pde_points(), get_initial_points(), get_boundary_points(),
                 get_mesh_stats(), get_data_stats().
             
@@ -128,42 +154,85 @@ class PI_SWE_DeepONetTrainer:
         """
             
         # Get branch input dimension from data if needed
-        if self.model.branch_input_dim == 0:
-            batch = next(iter(train_loader))
-            branch_input = batch[0]
-            branch_dim = branch_input.shape[1]
+        batch = next(iter(train_loader))
+        branch_input = batch[0]
+        branch_dim = branch_input.shape[1]
+
+        if self.model.branch_input_dim == 0:            
             self.model.set_branch_input_dim(branch_dim)
             print(f"Set branch input dimension to {branch_dim}")
+
+        # Check if the model branch input dimension is the same as the branch input dimension of the data
+        if self.model.branch_input_dim != branch_dim:
+            raise ValueError(f"Model branch input dimension {self.model.branch_input_dim} is not the same as the branch input dimension {branch_dim} of the data.")
             
+        # Check if physics-informed loss is enabled and physics dataset is provided
+        if self.model.use_physics_loss and physics_dataset is None:
+            raise ValueError("physics_dataset must be provided when physics-informed loss is enabled.")
+
         # Get physics collocation points and data
-        pde_points_data = physics_dataset.get_pde_points()
-        if pde_points_data is not None:
-            pde_points, pde_data = pde_points_data
-            pde_points = pde_points.to(self.device)
-            pde_data = pde_data.to(self.device)
+        if self.model.use_physics_loss:
+            pde_points_data = physics_dataset.get_pde_points()
+            if pde_points_data is not None:
+                pde_points, pde_data = pde_points_data
+                pde_points = pde_points.to(self.device)
+                pde_data = pde_data.to(self.device)
+            else:
+                pde_points = None
+                pde_data = None
+
+            initial_points_data = physics_dataset.get_initial_points()
+            if initial_points_data is not None:
+                initial_points, initial_values = initial_points_data
+                initial_points = initial_points.to(self.device)
+                initial_values = initial_values.to(self.device)
+            else:
+                initial_points = None
+                initial_values = None
+
+            boundary_points_data = physics_dataset.get_boundary_points()
+            if boundary_points_data is not None:
+                (
+                    boundary_points,
+                    boundary_ids,
+                    boundary_z,
+                    boundary_normals,
+                    boundary_lengths,
+                    boundary_ManningN,
+                ) = boundary_points_data
+                boundary_points = boundary_points.to(self.device)
+            else:
+                boundary_points = None
+
+            all_pinn_points_stats = physics_dataset.get_all_pinn_points_stats()
         else:
             pde_points = None
             pde_data = None
-        
-        initial_points_data = physics_dataset.get_initial_points()
-        if initial_points_data is not None:
-            initial_points, initial_values = initial_points_data
-            initial_points = initial_points.to(self.device)
-            initial_values = initial_values.to(self.device)
-        else:
             initial_points = None
             initial_values = None
-        
-        boundary_points_data = physics_dataset.get_boundary_points()
-        if boundary_points_data is not None:
-            boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN = boundary_points_data
-            boundary_points = boundary_points.to(self.device)
-        else:
             boundary_points = None
+            all_pinn_points_stats = None
         
-        # Get DeepONet and PINN points stats for normalization
+        # Get DeepONet stats 
         all_deeponet_points_stats = train_loader.dataset.get_deeponet_stats()
-        all_pinn_points_stats = physics_dataset.get_all_pinn_points_stats()
+
+        if all_deeponet_points_stats is None:
+            raise ValueError("train_loader.dataset must provide DeepONet point statistics.")
+
+        if self.model.use_physics_loss:           
+            if all_pinn_points_stats is None:
+                raise ValueError("physics_dataset must provide PINN point statistics when physics loss is enabled.")
+        
+        # Adaptive loss balancing: compute initial loss magnitudes
+        if self.use_adaptive_loss_balancing:
+            print("Computing initial loss magnitudes for adaptive balancing...")
+            self._compute_initial_loss_magnitudes(
+                train_loader, pde_points, pde_data, all_deeponet_points_stats, all_pinn_points_stats
+            )
+            self._update_loss_weights_from_balancing()
+        
+        # Record initial weights
+        self._record_adaptive_weights()
         
         # Training loop
         print(f"Starting training for {self.epochs} epochs...")
@@ -184,59 +253,75 @@ class PI_SWE_DeepONetTrainer:
                 all_pinn_points_stats
             )
             
-            self.loss_history.append(train_loss)
-            self.component_loss_history.append(loss_components)
+            # Adaptive loss balancing: update weights during initial epochs
+            if self.use_adaptive_loss_balancing and epoch < self.adaptive_balancing_epochs:
+                self._update_adaptive_loss_weights(loss_components, epoch)
+            
+            # Record weights at every epoch (for complete history)
+            # This captures the current state of weights after any potential updates
+            self._record_adaptive_weights()
+            
+            # Update training history
+            self.training_loss_history.append(train_loss)
+            for key in loss_components:
+                if key not in self.training_component_loss_history:
+                    raise ValueError(f"Key {key} not found in training_component_loss_history")
+                self.training_component_loss_history[key].append(loss_components[key])
             
             # Validation step
-            if val_loader is not None:
-                val_loss = self._validate_epoch(val_loader)
-                
-                # Update learning rate scheduler if needed
-                if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_loss)
-            else:
-                val_loss = None
-                if self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step()
+            val_loss = self._validate_epoch(val_loader)
+            self.validation_loss_history.append(val_loss)
+
+            # Update learning rate scheduler if needed
+            if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                old_lr = self.optimizer.param_groups[0]['lr']
+                self.scheduler.step(val_loss)
+                new_lr = self.optimizer.param_groups[0]['lr']
+                if old_lr != new_lr:
+                    print(f"  Learning rate reduced from {old_lr:.2e} to {new_lr:.2e}")
+            elif self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                self.scheduler.step()
                     
             # Print progress
-            if val_loss is not None:
-                print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
-            else:
-                print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}")
+            print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
                 
             # Print component losses
-            print(f"  Data Loss: {loss_components.get('data_loss', 0.0):.6f}")
-            print(f"  PDE Loss: {loss_components.get('pde_loss', 0.0):.6f}")
+            print(f"  Data Loss: {loss_components.get('deeponet_data_loss', 0.0):.6f}")
+            if self.model.use_physics_loss:
+                print(f"  PDE Loss: {loss_components.get('pinn_pde_loss', 0.0):.6f}")
             if initial_points is not None:
-                print(f"  Initial Loss: {loss_components.get('initial_loss', 0.0):.6f}")
+                print(f"  Initial Loss: {loss_components.get('pinn_initial_loss', 0.0):.6f}")
             if boundary_points is not None:
-                print(f"  Boundary Loss: {loss_components.get('boundary_loss', 0.0):.6f}")
+                print(f"  Boundary Loss: {loss_components.get('pinn_boundary_loss', 0.0):.6f}")
+            
+            # Print loss weights if using adaptive balancing
+            if self.use_adaptive_loss_balancing:
+                print(f"  Loss Weights - Data: {self.model.loss_weight_deeponet_data_loss.item():.6f}, "
+                      f"PDE: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
                 
             # Log to TensorBoard
             self.writer.add_scalar('Loss/train', train_loss, epoch)
-            if val_loss is not None:
-                self.writer.add_scalar('Loss/val', val_loss, epoch)
+            self.writer.add_scalar('Loss/val', val_loss, epoch)
                 
-            self.writer.add_scalar('Loss/data', loss_components.get('data_loss', 0.0), epoch)
-            self.writer.add_scalar('Loss/pde', loss_components.get('pde_loss', 0.0), epoch)
+            self.writer.add_scalar('Loss/data', loss_components.get('deeponet_data_loss', 0.0), epoch)
+            if self.model.use_physics_loss:
+                self.writer.add_scalar('Loss/pde', loss_components.get('pinn_pde_loss', 0.0), epoch)
             if initial_points is not None:
-                self.writer.add_scalar('Loss/initial', loss_components.get('initial_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/initial', loss_components.get('pinn_initial_loss', 0.0), epoch)
             if boundary_points is not None:
-                self.writer.add_scalar('Loss/boundary', loss_components.get('boundary_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/boundary', loss_components.get('pinn_boundary_loss', 0.0), epoch)
                 
             # Save checkpoint
             if (epoch + 1) % self.save_freq == 0:
                 self._save_checkpoint(epoch + 1)
                 
             # Save best model
-            current_loss = val_loss if val_loss is not None else train_loss
-            if current_loss < best_loss:
-                best_loss = current_loss
+            if val_loss < best_loss:
+                best_loss = val_loss
                 self._save_checkpoint('best')
                 
             # Early stopping
-            if self.early_stopping is not None and val_loss is not None:
+            if self.early_stopping is not None:
                 if self.early_stopping(val_loss):
                     print(f"Early stopping at epoch {epoch+1}")
                     break
@@ -249,8 +334,10 @@ class PI_SWE_DeepONetTrainer:
         print(f"Training completed in {elapsed_time:.2f} seconds")
         
         return {
-            'loss_history': self.loss_history,
-            'component_loss_history': self.component_loss_history
+            'training_loss_history': self.training_loss_history,
+            'validation_loss_history': self.validation_loss_history,
+            'training_component_loss_history': self.training_component_loss_history,
+            'adaptive_weight_history': self.adaptive_weight_history
         }
         
     def _train_epoch(self, train_loader, pde_points=None, pde_data=None,
@@ -273,6 +360,7 @@ class PI_SWE_DeepONetTrainer:
             tuple: (average_loss, loss_components)
         """
         self.model.train()
+        
         total_loss = 0
         total_components = {
             'deeponet_data_loss': 0.0,      # DeepONet loss
@@ -286,6 +374,7 @@ class PI_SWE_DeepONetTrainer:
         }
         
         for batch in tqdm(train_loader, desc="Training", leave=False):
+            
             # Get batch data
             branch_input, trunk_input, target = batch
             branch_input = branch_input.to(self.device)
@@ -300,7 +389,12 @@ class PI_SWE_DeepONetTrainer:
             physics_trunk_input = None
             physics_pde_data = None
             
-            if pde_points is not None and pde_data is not None:
+            if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
+                # Sample random PDE points for this batch
+                # Note: Advanced indexing (tensor indices) creates a copy, not a view.
+                # The copy inherits requires_grad from pde_points, but compute_pde_residuals
+                # will clone, detach, and set requires_grad=True anyway, so we don't need to
+                # explicitly set requires_grad here.
                 physics_indices = torch.randint(0, len(pde_points), (batch_size,))
                 physics_trunk_input = pde_points[physics_indices]
                 physics_pde_data = pde_data[physics_indices]
@@ -325,9 +419,9 @@ class PI_SWE_DeepONetTrainer:
                 # For now, we assume boundary_values would be provided separately
                 # This can be extended later for more complex boundary conditions
                 
-            # Forward pass and compute loss
+            # Forward pass and compute loss            
             self.optimizer.zero_grad()
-            
+
             total_batch_loss, loss_components = self.model.compute_total_loss(
                 branch_input,
                 trunk_input,
@@ -409,8 +503,9 @@ class PI_SWE_DeepONetTrainer:
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'loss_history': self.loss_history,
-            'component_loss_history': self.component_loss_history,
+            'training_loss_history': self.training_loss_history,
+            'validation_loss_history': self.validation_loss_history,
+            'training_component_loss_history': self.training_component_loss_history,
             'epoch': epoch
         }
         
@@ -438,10 +533,21 @@ class PI_SWE_DeepONetTrainer:
         if 'scheduler_state_dict' in checkpoint and self.scheduler is not None:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             
-        self.loss_history = checkpoint.get('loss_history', [])
-        self.component_loss_history = checkpoint.get('component_loss_history', [])
+        # Load history
+        self.training_loss_history = checkpoint.get('training_loss_history', [])
+        self.validation_loss_history = checkpoint.get('validation_loss_history', [])
+        self.training_component_loss_history = checkpoint.get('training_component_loss_history', {
+            'deeponet_data_loss': [],
+            'pinn_pde_loss': [],
+            'pinn_pde_loss_cty': [],
+            'pinn_pde_loss_mom_x': [],
+            'pinn_pde_loss_mom_y': [],
+            'pinn_initial_loss': [],
+            'pinn_boundary_loss': [],
+            'total_loss': []
+        })
         
-        print(f"Loaded checkpoint from {checkpoint_path}")
+        #print(f"Loaded checkpoint from {checkpoint_path}")
         
     def predict(self, branch_input, trunk_input):
         """
@@ -474,6 +580,258 @@ class PI_SWE_DeepONetTrainer:
         output = output.cpu().numpy()
         
         return output
+    
+    def _compute_initial_loss_magnitudes(self, train_loader, pde_points, pde_data, 
+                                         all_deeponet_points_stats, all_pinn_points_stats):
+        """
+        Compute initial loss magnitudes for adaptive loss balancing.
+        
+        This runs a few forward passes to estimate the typical magnitudes of different loss components.
+        """
+        self.model.eval()
+        
+        # Sample a few batches
+        num_samples = min(5, len(train_loader))
+        data_losses = []
+        pde_losses = []
+        pde_continuity_losses = []
+        pde_momentum_x_losses = []
+        pde_momentum_y_losses = []
+        
+        # Note: We need gradients enabled for PDE loss computation (it uses autograd.grad),
+        # but we don't call backward() so no gradients are accumulated
+        for i, batch in enumerate(train_loader):
+            if i >= num_samples:
+                break
+                
+            branch_input, trunk_input, target = batch
+            branch_input = branch_input.to(self.device)
+            trunk_input = trunk_input.to(self.device)
+            target = target.to(self.device)
+            
+            batch_size = branch_input.shape[0]
+            
+            # Compute data loss (no gradients needed, but doesn't hurt)
+            with torch.no_grad():
+                data_loss, _ = self.model.compute_deeponet_data_loss(branch_input, trunk_input, target)
+                data_losses.append(data_loss.item())
+            
+            # Compute PDE loss if enabled (gradients needed for autograd.grad in compute_pde_residuals)
+            if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
+                physics_indices = torch.randint(0, len(pde_points), (batch_size,))
+                physics_trunk_input = pde_points[physics_indices]
+                physics_pde_data = pde_data[physics_indices]
+                physics_branch_input = branch_input
+                
+                # Enable gradients for PDE loss computation
+                pde_loss, pde_loss_components, _, _, _ = self.model.compute_pde_loss(
+                    physics_branch_input, physics_trunk_input, physics_pde_data,
+                    all_deeponet_points_stats, all_pinn_points_stats
+                )
+                pde_losses.append(pde_loss.detach().item())
+                
+                # Store PDE component losses for adaptive balancing
+                if self.use_adaptive_pde_component_balancing:
+                    pde_continuity_losses.append(pde_loss_components['continuity_loss'])
+                    pde_momentum_x_losses.append(pde_loss_components['momentum_x_loss'])
+                    pde_momentum_y_losses.append(pde_loss_components['momentum_y_loss'])
+        
+        # Store initial magnitudes (use median to be robust to outliers)
+        if data_losses:
+            self.initial_loss_magnitudes['deeponet_data_loss'] = np.median(data_losses)
+        if pde_losses:
+            self.initial_loss_magnitudes['pinn_pde_loss'] = np.median(pde_losses)
+        
+        # Store PDE component loss magnitudes
+        if self.use_adaptive_pde_component_balancing:
+            if pde_continuity_losses:
+                self.initial_loss_magnitudes['pde_continuity_loss'] = np.median(pde_continuity_losses)
+            if pde_momentum_x_losses:
+                self.initial_loss_magnitudes['pde_momentum_x_loss'] = np.median(pde_momentum_x_losses)
+            if pde_momentum_y_losses:
+                self.initial_loss_magnitudes['pde_momentum_y_loss'] = np.median(pde_momentum_y_losses)
+        
+        self.model.train()
+        
+        print(f"Initial loss magnitudes: {self.initial_loss_magnitudes}")
+    
+    def _update_loss_weights_from_balancing(self):
+        """
+        Update loss weights based on computed balancing factors.
+        
+        The balancing factor for each loss is computed as:
+        balancing_factor = reference_loss_magnitude / loss_magnitude
+        
+        This ensures losses are on similar scales.
+        """
+        if not self.initial_loss_magnitudes:
+            return
+        
+        # Use data loss as reference (typically the smallest)
+        reference_magnitude = self.initial_loss_magnitudes.get('deeponet_data_loss', 1.0)
+        
+        # Compute balancing factors
+        if 'deeponet_data_loss' in self.initial_loss_magnitudes:
+            data_magnitude = self.initial_loss_magnitudes['deeponet_data_loss']
+            if data_magnitude > 0:
+                self.loss_balancing_factors['deeponet_data_loss'] = reference_magnitude / data_magnitude
+            else:
+                self.loss_balancing_factors['deeponet_data_loss'] = 1.0
+        
+        if 'pinn_pde_loss' in self.initial_loss_magnitudes:
+            pde_magnitude = self.initial_loss_magnitudes['pinn_pde_loss']
+            if pde_magnitude > 0:
+                self.loss_balancing_factors['pinn_pde_loss'] = reference_magnitude / pde_magnitude
+            else:
+                self.loss_balancing_factors['pinn_pde_loss'] = 1.0
+        
+        # Apply balancing factors to model's loss weights
+        base_data_weight = self.config.get("training.loss_weights.deeponet.data_loss", 1.0)
+        base_pde_weight = self.config.get("training.loss_weights.deeponet.pinn_loss", 1.0)
+        
+        if 'deeponet_data_loss' in self.loss_balancing_factors:
+            new_data_weight = base_data_weight * self.loss_balancing_factors['deeponet_data_loss']
+            self.model.loss_weight_deeponet_data_loss.data = torch.tensor(
+                float(new_data_weight), dtype=torch.float32, device=self.device
+            )
+        
+        if 'pinn_pde_loss' in self.loss_balancing_factors:
+            new_pde_weight = base_pde_weight * self.loss_balancing_factors['pinn_pde_loss']
+            self.model.loss_weight_deeponet_pinn_loss.data = torch.tensor(
+                float(new_pde_weight), dtype=torch.float32, device=self.device
+            )
+        
+        # Balance PDE component losses if enabled
+        if self.use_adaptive_pde_component_balancing:
+            # Use the largest PDE component loss as reference to balance them
+            pde_component_magnitudes = {}
+            if 'pde_continuity_loss' in self.initial_loss_magnitudes:
+                pde_component_magnitudes['continuity'] = self.initial_loss_magnitudes['pde_continuity_loss']
+            if 'pde_momentum_x_loss' in self.initial_loss_magnitudes:
+                pde_component_magnitudes['momentum_x'] = self.initial_loss_magnitudes['pde_momentum_x_loss']
+            if 'pde_momentum_y_loss' in self.initial_loss_magnitudes:
+                pde_component_magnitudes['momentum_y'] = self.initial_loss_magnitudes['pde_momentum_y_loss']
+            
+            if pde_component_magnitudes:
+                # Use the median magnitude as reference (more robust than max)
+                reference_pde_magnitude = np.median(list(pde_component_magnitudes.values()))
+                
+                # Compute and apply balancing factors
+                base_continuity_weight = self.config.get("training.loss_weights.pde.continuity", 1.0)
+                base_momentum_x_weight = self.config.get("training.loss_weights.pde.momentum_x", 1.0)
+                base_momentum_y_weight = self.config.get("training.loss_weights.pde.momentum_y", 1.0)
+                
+                if 'continuity' in pde_component_magnitudes and pde_component_magnitudes['continuity'] > 0:
+                    factor = reference_pde_magnitude / pde_component_magnitudes['continuity']
+                    new_weight = base_continuity_weight * factor
+                    self.model.loss_weight_pde_continuity.data = torch.tensor(
+                        float(new_weight), dtype=torch.float32, device=self.device
+                    )
+                    self.loss_balancing_factors['pde_continuity'] = factor
+                
+                if 'momentum_x' in pde_component_magnitudes and pde_component_magnitudes['momentum_x'] > 0:
+                    factor = reference_pde_magnitude / pde_component_magnitudes['momentum_x']
+                    new_weight = base_momentum_x_weight * factor
+                    self.model.loss_weight_pde_momentum_x.data = torch.tensor(
+                        float(new_weight), dtype=torch.float32, device=self.device
+                    )
+                    self.loss_balancing_factors['pde_momentum_x'] = factor
+                
+                if 'momentum_y' in pde_component_magnitudes and pde_component_magnitudes['momentum_y'] > 0:
+                    factor = reference_pde_magnitude / pde_component_magnitudes['momentum_y']
+                    new_weight = base_momentum_y_weight * factor
+                    self.model.loss_weight_pde_momentum_y.data = torch.tensor(
+                        float(new_weight), dtype=torch.float32, device=self.device
+                    )
+                    self.loss_balancing_factors['pde_momentum_y'] = factor
+                
+                print(f"Updated PDE component weights - Continuity: {self.model.loss_weight_pde_continuity.item():.6f}, "
+                      f"Momentum X: {self.model.loss_weight_pde_momentum_x.item():.6f}, "
+                      f"Momentum Y: {self.model.loss_weight_pde_momentum_y.item():.6f}")
+        
+        print(f"Updated loss weights - Data: {self.model.loss_weight_deeponet_data_loss.item():.6f}, "
+              f"PDE: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
+    
+    def _update_adaptive_loss_weights(self, loss_components, epoch):
+        """
+        Update loss weights adaptively during training.
+        
+        This uses exponential moving average to smooth the updates.
+        """
+        alpha = 0.1  # Smoothing factor
+        
+        # Update magnitudes with exponential moving average
+        if 'deeponet_data_loss' in loss_components:
+            current_magnitude = loss_components['deeponet_data_loss']
+            if 'deeponet_data_loss' not in self.initial_loss_magnitudes:
+                self.initial_loss_magnitudes['deeponet_data_loss'] = current_magnitude
+            else:
+                self.initial_loss_magnitudes['deeponet_data_loss'] = (
+                    alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['deeponet_data_loss']
+                )
+        
+        if 'pinn_pde_loss' in loss_components:
+            current_magnitude = loss_components['pinn_pde_loss']
+            if 'pinn_pde_loss' not in self.initial_loss_magnitudes:
+                self.initial_loss_magnitudes['pinn_pde_loss'] = current_magnitude
+            else:
+                self.initial_loss_magnitudes['pinn_pde_loss'] = (
+                    alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['pinn_pde_loss']
+                )
+        
+        # Update PDE component loss magnitudes if adaptive balancing is enabled
+        if self.use_adaptive_pde_component_balancing:
+            if 'pinn_pde_loss_cty' in loss_components:
+                current_magnitude = loss_components['pinn_pde_loss_cty']
+                if 'pde_continuity_loss' not in self.initial_loss_magnitudes:
+                    self.initial_loss_magnitudes['pde_continuity_loss'] = current_magnitude
+                else:
+                    self.initial_loss_magnitudes['pde_continuity_loss'] = (
+                        alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['pde_continuity_loss']
+                    )
+            
+            if 'pinn_pde_loss_mom_x' in loss_components:
+                current_magnitude = loss_components['pinn_pde_loss_mom_x']
+                if 'pde_momentum_x_loss' not in self.initial_loss_magnitudes:
+                    self.initial_loss_magnitudes['pde_momentum_x_loss'] = current_magnitude
+                else:
+                    self.initial_loss_magnitudes['pde_momentum_x_loss'] = (
+                        alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['pde_momentum_x_loss']
+                    )
+            
+            if 'pinn_pde_loss_mom_y' in loss_components:
+                current_magnitude = loss_components['pinn_pde_loss_mom_y']
+                if 'pde_momentum_y_loss' not in self.initial_loss_magnitudes:
+                    self.initial_loss_magnitudes['pde_momentum_y_loss'] = current_magnitude
+                else:
+                    self.initial_loss_magnitudes['pde_momentum_y_loss'] = (
+                        alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['pde_momentum_y_loss']
+                    )
+        
+        # Recompute balancing factors every few epochs
+        if (epoch + 1) % 5 == 0:
+            self._update_loss_weights_from_balancing()
+            # Note: Weights are recorded at every epoch in the training loop, so no need to record here
+    
+    def _record_adaptive_weights(self):
+        """
+        Record current adaptive loss weights to history.
+        """
+        self.adaptive_weight_history['deeponet_data_loss_weight'].append(
+            self.model.loss_weight_deeponet_data_loss.item()
+        )
+        self.adaptive_weight_history['deeponet_pinn_loss_weight'].append(
+            self.model.loss_weight_deeponet_pinn_loss.item()
+        )
+        self.adaptive_weight_history['pde_continuity_weight'].append(
+            self.model.loss_weight_pde_continuity.item()
+        )
+        self.adaptive_weight_history['pde_momentum_x_weight'].append(
+            self.model.loss_weight_pde_momentum_x.item()
+        )
+        self.adaptive_weight_history['pde_momentum_y_weight'].append(
+            self.model.loss_weight_pde_momentum_y.item()
+        )
 
 
 class EarlyStopping:

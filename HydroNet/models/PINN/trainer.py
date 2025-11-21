@@ -10,7 +10,7 @@ import numpy as np
 import time
 
 from ...utils.config import Config
-from ...data import PINNDataset
+from .data import PINNDataset
 from .model import SWE_PINN  # Direct import instead of relative import
 
 class PINNTrainer:
@@ -453,7 +453,7 @@ class PINNTrainer:
         self.loss_history = checkpoint.get('loss_history', [])
         self.component_loss_history = checkpoint.get('component_loss_history', {})
         
-        print(f"Loaded checkpoint from {checkpoint_path}")
+        #print(f"Loaded checkpoint from {checkpoint_path}")
         
     def predict(self, x):
         """

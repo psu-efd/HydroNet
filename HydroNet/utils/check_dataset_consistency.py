@@ -4,8 +4,8 @@ def check_data_normalization(train_dataset, val_dataset):
     Check normalization consistency between training and validation datasets.
     
     Args:
-        train_dataset: SWE_DeepONetDataset for training data
-        val_dataset: SWE_DeepONetDataset for validation data
+        train_dataset: PI_SWE_DeepONetDataset for training data
+        val_dataset: PI_SWE_DeepONetDataset for validation data
     
     Returns:
         dict: Dictionary containing statistics for both datasets

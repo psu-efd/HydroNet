@@ -3,134 +3,318 @@ Physics-Informed SWE_DeepONet model for HydroNet.
 """
 import torch
 import torch.nn as nn
-import numpy as np
+
 from ...utils.config import Config
-from ..DeepONet.model import SWE_DeepONetModel, BranchNet
-from typing import Dict, Tuple, Optional
 
 
-class PI_SWE_DeepONetModel(SWE_DeepONetModel):
+class FCLayer(nn.Module):
     """
-    Physics-Informed SWE_DeepONet model for learning the operator of shallow water equations.
-    
-    This model extends SWE_DeepONetModel with physics-informed constraints
-    to enforce the governing equations of shallow water flow.
-    
-    The model supports both steady and unsteady problems, similar to PINN.
+    Fully connected layer with activation and optional dropout.
     """
-    def __init__(self, config):
-        """
-        Initialize the Physics-Informed DeepONet model.
-        
-        Args:            
-            config (Config): Configuration object.
-        """
 
+    def __init__(self, in_dim, out_dim, activation="relu", dropout_rate=0.0):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, out_dim)
+        nn.init.xavier_normal_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
+
+        if activation == "relu":
+            self.activation = nn.ReLU()
+        elif activation == "tanh":
+            self.activation = nn.Tanh()
+        elif activation == "sigmoid":
+            self.activation = nn.Sigmoid()
+        elif activation == "leaky_relu":
+            self.activation = nn.LeakyReLU(0.2)
+        else:
+            self.activation = nn.Identity()
+
+        self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0 else nn.Identity()
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        return x
+
+
+class BranchNet(nn.Module):
+    """
+    Branch network of DeepONet for encoding input functions.
+    """
+
+    def __init__(
+        self,
+        in_dim,
+        out_dim,
+        hidden_layers=None,
+        activation="relu",
+        dropout_rate=0.0,
+    ):
+        super().__init__()
+        hidden_layers = hidden_layers or [128, 128, 128]
+        layers = []
+        layer_dims = [in_dim] + hidden_layers
+
+        for i in range(len(layer_dims) - 1):
+            layers.append(
+                FCLayer(
+                    layer_dims[i], layer_dims[i + 1], activation=activation, dropout_rate=dropout_rate
+                )
+            )
+
+        layers.append(nn.Linear(layer_dims[-1], out_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class TrunkNet(nn.Module):
+    """
+    Trunk network of DeepONet for encoding coordinates.
+    """
+
+    def __init__(
+        self,
+        in_dim,
+        out_dim,
+        hidden_layers=None,
+        activation="relu",
+        dropout_rate=0.0,
+    ):
+        super().__init__()
+        hidden_layers = hidden_layers or [128, 128, 128]
+        layers = []
+        layer_dims = [in_dim] + hidden_layers
+
+        for i in range(len(layer_dims) - 1):
+            layers.append(
+                FCLayer(
+                    layer_dims[i], layer_dims[i + 1], activation=activation, dropout_rate=dropout_rate
+                )
+            )
+
+        layers.append(nn.Linear(layer_dims[-1], out_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class PI_SWE_DeepONetModel(nn.Module):
+    """
+    Unified DeepONet model with optional physics-informed loss computation.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+    ):
+        super().__init__()
         if not isinstance(config, Config):
-            raise ValueError("config must be a Config object")
+            raise ValueError("config must be a Config object.")
 
         self.config = config
-        
-        # Initialize parent class (SWE_DeepONetModel)
-        # Note: We need to handle the case where branch_input_dim might be 0
-        # The parent class expects a valid branch_input_dim, so we'll set a default
-        # and update it later if needed
-        #original_branch_dim = self.config.get('model.branch_net.branch_input_dim', 0)
-        #if original_branch_dim == 0:
-            # Temporarily set a default value for parent initialization
-        #    self.config.set('model.branch_net.branch_input_dim', 10)  # Temporary default
-        
-        # Check if steady or unsteady and set trunk_input_dim accordingly
-        #bSteady = self.config.get('physics.bSteady', False)
-        #if bSteady:
-        #    self.config.set('data.deeponet.trunk_input_dim', 2)  # (x, y) for steady
-        #else:
-        #    self.config.set('data.deeponet.trunk_input_dim', 3)  # (x, y, t) for unsteady
-        
-        # Call parent constructor
-        super(PI_SWE_DeepONetModel, self).__init__(self.config)
-        
-        # Restore original branch_input_dim if it was 0
-        #if original_branch_dim == 0:
-        #    self.branch_input_dim = 0
-        #    # Set branch_net to None so it can be created later
-        #    self.branch_net = None
-        
-        # Get device from config
-        device_type = self.config.get('device.type', 'cuda')
-        device_index = self.config.get('device.index', 0)
-        
-        if device_type == 'cuda' and torch.cuda.is_available():
-            self.device = torch.device(f'cuda:{device_index}')
-        else:
-            self.device = torch.device('cpu')
-        
-        # Check if steady or unsteady (no need because it is already set in the parent class)
-        #self.bSteady = bSteady
-        
-        # Physics parameters
-        g_value = self.config.get('physics.gravity', 9.81)
-        self.register_buffer('g', torch.tensor(g_value, dtype=torch.float32))
-        
-        # Get physics scales       
-        length_scale_value = self.config.get('physics.scales.length')
-        print(f"DEBUG: length_scale_value from config: {length_scale_value}, type: {type(length_scale_value)}")
-        #make sure length scale is positive 
-        if length_scale_value <= 0:
-            raise ValueError("Length scale must be positive")
-        length_scale_tensor = torch.tensor(length_scale_value, dtype=torch.float32)
-        print(f"DEBUG: length_scale_tensor before register_buffer: {length_scale_tensor}")
-        self.register_buffer('length_scale', length_scale_tensor)
-        print(f"DEBUG: self.length_scale after register_buffer: {self.length_scale}")
-       
-        velocity_scale_value = self.config.get('physics.scales.velocity')
-        print(f"DEBUG: velocity_scale_value from config: {velocity_scale_value}, type: {type(velocity_scale_value)}")
-        if velocity_scale_value <= 0:
-            raise ValueError("Velocity scale must be positive")
-        velocity_scale_tensor = torch.tensor(velocity_scale_value, dtype=torch.float32)
-        print(f"DEBUG: velocity_scale_tensor before register_buffer: {velocity_scale_tensor}")
-        self.register_buffer('velocity_scale', velocity_scale_tensor)
-        print(f"DEBUG: self.velocity_scale after register_buffer: {self.velocity_scale}")
+        self.bSteady = self.config.get("physics.bSteady", True)
+        self.use_physics_loss = self.config.get("model.use_physics_loss", False)
 
-        #debug: print length_scale and velocity_scale
-        print(f"length_scale: {self.length_scale.item() if self.length_scale.numel() == 1 else self.length_scale}")
-        print(f"velocity_scale: {self.velocity_scale.item() if self.velocity_scale.numel() == 1 else self.velocity_scale}")
-        
-        # Loss weights - register as buffers so they're properly moved with self.to(device)
-        if self.bSteady:
-            deeponet_data_loss_val = self.config.get('training.loss_weights.deeponet.data_loss', 1.0)
-            deeponet_pinn_loss_val = self.config.get('training.loss_weights.deeponet.pinn_loss', 1.0)
-            print(f"DEBUG: Loss weights from config - deeponet_data_loss: {deeponet_data_loss_val}, deeponet_pinn_loss: {deeponet_pinn_loss_val}")
-            self.register_buffer('loss_weight_pinn_data_loss', torch.tensor(self.config.get('training.loss_weights.pinn.data_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_pinn_pde_loss', torch.tensor(self.config.get('training.loss_weights.pinn.pde_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_pinn_boundary_loss', torch.tensor(self.config.get('training.loss_weights.pinn.boundary_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_data_loss', torch.tensor(deeponet_data_loss_val, dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_pinn_loss', torch.tensor(deeponet_pinn_loss_val, dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_boundary_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.boundary_loss', 1.0), dtype=torch.float32))
-            print(f"DEBUG: After register_buffer - loss_weight_deeponet_data_loss: {self.loss_weight_deeponet_data_loss}, loss_weight_deeponet_pinn_loss: {self.loss_weight_deeponet_pinn_loss}")
+        device_type = self.config.get("device.type", None)
+        if device_type is not None:
+            device_index = self.config.get("device.index", 0)
+            if device_type == "cuda" and torch.cuda.is_available():
+                self.device = torch.device(f"cuda:{device_index}")
+            else:
+                self.device = torch.device("cpu")
         else:
-            deeponet_data_loss_val = self.config.get('training.loss_weights.deeponet.data_loss', 1.0)
-            deeponet_pinn_loss_val = self.config.get('training.loss_weights.deeponet.pinn_loss', 1.0)
-            print(f"DEBUG: Loss weights from config - deeponet_data_loss: {deeponet_data_loss_val}, deeponet_pinn_loss: {deeponet_pinn_loss_val}")
-            self.register_buffer('loss_weight_pinn_data_loss', torch.tensor(self.config.get('training.loss_weights.pinn.data_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_pinn_pde_loss', torch.tensor(self.config.get('training.loss_weights.pinn.pde_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_pinn_boundary_loss', torch.tensor(self.config.get('training.loss_weights.pinn.boundary_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_pinn_initial_loss', torch.tensor(self.config.get('training.loss_weights.pinn.initial_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_data_loss', torch.tensor(deeponet_data_loss_val, dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_pinn_loss', torch.tensor(deeponet_pinn_loss_val, dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_boundary_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.boundary_loss', 1.0), dtype=torch.float32))
-            self.register_buffer('loss_weight_deeponet_initial_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.initial_loss', 1.0), dtype=torch.float32))
-            print(f"DEBUG: After register_buffer - loss_weight_deeponet_data_loss: {self.loss_weight_deeponet_data_loss}, loss_weight_deeponet_pinn_loss: {self.loss_weight_deeponet_pinn_loss}")
-        
-        # Move model to device
-        print(f"DEBUG: Before self.to(device), length_scale: {self.length_scale}, velocity_scale: {self.velocity_scale}")
-        print(f"DEBUG: Before self.to(device), loss_weights: {self.loss_weights}")
-        print(f"DEBUG: Device: {self.device}")
+            self.device = self.config.get_device()
+
+        # Required model configuration parameters
+        branch_layers = self._get_required_config("model.branch_net.hidden_layers")
+        branch_activation = self._get_required_config("model.branch_net.activation")
+        branch_dropout = self._get_required_config("model.branch_net.dropout_rate")
+
+        trunk_layers = self._get_required_config("model.trunk_net.hidden_layers")
+        trunk_activation = self._get_required_config("model.trunk_net.activation")
+        trunk_dropout = self._get_required_config("model.trunk_net.dropout_rate")
+
+        self.branch_input_dim = self._get_required_config("model.branch_net.branch_input_dim")
+        self.trunk_input_dim = self._get_required_config("model.trunk_net.trunk_input_dim")
+        self.output_dim = self._get_required_config("model.output_dim")
+
+        if branch_layers[-1] != trunk_layers[-1]:
+            raise ValueError(
+                f"Branch output dimension mismatch: {branch_layers[-1]} != {trunk_layers[-1]}"
+            )
+
+        self.hidden_dim = branch_layers[-1]
+
+        self.branch_net = None
+        if self.branch_input_dim > 0:
+            self.branch_net = BranchNet(
+                self.branch_input_dim,
+                self.hidden_dim,
+                branch_layers,
+                branch_activation,
+                branch_dropout,
+            )
+
+        self.trunk_net = TrunkNet(
+            self.trunk_input_dim,
+            self.hidden_dim,
+            trunk_layers,
+            trunk_activation,
+            trunk_dropout,
+        )
+
+        self.bias = nn.Parameter(torch.zeros(self.output_dim))
+
+        self._init_physics_buffers()
+        self._init_loss_weight_buffers()
+
         self.to(self.device)
-        print(f"DEBUG: After self.to(device), length_scale: {self.length_scale}, velocity_scale: {self.velocity_scale}")
-        print(f"DEBUG: After self.to(device), loss_weights: {self.loss_weights}")
-        print(f"DEBUG: After self.to(device), length_scale device: {self.length_scale.device}, velocity_scale device: {self.velocity_scale.device}")
-    
+
+    def set_use_physics_loss(self, flag: bool):
+        """
+        Enable or disable physics-informed loss terms after initialization.
+        """
+        self.use_physics_loss = bool(flag)
+
+    def _get_required_config(self, key: str):
+        """
+        Get a required configuration value, raising an error if it's missing.
+        
+        Args:
+            key: Configuration key (e.g., "model.branch_net.hidden_layers")
+            
+        Returns:
+            The configuration value
+            
+        Raises:
+            ValueError: If the configuration key is missing
+        """
+        value = self.config.get(key, None)
+        if value is None:
+            raise ValueError(f"Required configuration parameter '{key}' is missing from config.")
+        return value
+
+    def _require_positive(self, key: str, default: float) -> float:
+        value = self.config.get(key, None)
+        if value is None:
+            if self.use_physics_loss:
+                raise ValueError(f"{key} must be provided when physics-informed loss is enabled.")
+            return default
+        if value <= 0:
+            if self.use_physics_loss:
+                raise ValueError(f"{key} must be positive.")
+            return default
+        return float(value)
+
+    def _init_physics_buffers(self):
+        """
+        Initialize the physics buffers.
+
+        Explaining PyTorch buffers and why they're used here:
+
+        ## PyTorch Buffers Explained
+
+        **Buffers** are non-trainable tensors that are part of the model's state. They differ from **Parameters** (trainable weights/biases) in that they don't receive gradients.
+
+        ### Why Use Buffers?
+
+        1. Automatic device management: When you call `model.to(device)`, buffers move with the model (CPU ↔ GPU).
+        2. State persistence: Buffers are included in `state_dict()`, so they're saved/loaded with checkpoints.
+        3. No gradients: They're excluded from backpropagation and optimizer updates.
+        4. Model state: They're part of the model's persistent state, not just temporary variables.
+
+        ### In Our Code
+
+        In `_init_physics_buffers()`, you're storing:
+
+        ```python
+        self.register_buffer("g", ...)              # Gravity constant (9.81 m/s²)
+        self.register_buffer("length_scale", ...)   # Physical length scale for normalization
+        self.register_buffer("velocity_scale", ...) # Physical velocity scale for normalization
+        ```
+
+        These are physics constants that should:
+        - Move to GPU when the model moves to GPU
+        - Be saved in checkpoints (so you can reload the model with the same physics parameters)
+        - Not be updated during training (they're constants, not learnable parameters)
+        - Be accessible as `self.g`, `self.length_scale`, etc., throughout the model
+
+        ### Alternative (Without Buffers)
+
+        If we used regular attributes like `self.g = torch.tensor(9.81)`:
+        - They wouldn't automatically move to GPU with `model.to(device)`
+        - They wouldn't be saved in `state_dict()` (checkpoint loading would lose them)
+        - You'd have to manually manage device placement
+
+        Buffers handle this automatically, which is why they're perfect for constants and configuration values that need to persist with the model.
+        """
+        g_value = float(self.config.get("physics.gravity", 9.81))
+        length_scale_value = self._require_positive("physics.scales.length", 1.0)
+        velocity_scale_value = self._require_positive("physics.scales.velocity", 1.0)
+        
+        # Create buffers without specifying device - they will be moved by self.to(device) later
+        self.register_buffer("g", torch.tensor(g_value, dtype=torch.float32))
+        self.register_buffer("length_scale", torch.tensor(length_scale_value, dtype=torch.float32))
+        self.register_buffer("velocity_scale", torch.tensor(velocity_scale_value, dtype=torch.float32))
+
+    def _init_loss_weight_buffers(self):
+        """
+        Initialize the loss weight buffers.
+        """
+        def to_tensor(val):
+            return torch.tensor(float(val), dtype=torch.float32)
+
+        deeponet_data_loss_val = self.config.get("training.loss_weights.deeponet.data_loss", 1.0)
+        deeponet_pinn_loss_val = self.config.get("training.loss_weights.deeponet.pinn_loss", 1.0)
+
+        self.register_buffer(
+            "loss_weight_pinn_data_loss",
+            to_tensor(self.config.get("training.loss_weights.pinn.data_loss", 1.0)),
+        )
+        self.register_buffer(
+            "loss_weight_pinn_pde_loss",
+            to_tensor(self.config.get("training.loss_weights.pinn.pde_loss", 1.0)),
+        )
+        self.register_buffer(
+            "loss_weight_pinn_boundary_loss",
+            to_tensor(self.config.get("training.loss_weights.pinn.boundary_loss", 1.0)),
+        )
+
+        self.register_buffer("loss_weight_deeponet_data_loss", to_tensor(deeponet_data_loss_val))
+        self.register_buffer("loss_weight_deeponet_pinn_loss", to_tensor(deeponet_pinn_loss_val))
+        self.register_buffer(
+            "loss_weight_deeponet_boundary_loss",
+            to_tensor(self.config.get("training.loss_weights.deeponet.boundary_loss", 1.0)),
+        )
+        
+        # Weights for individual PDE component losses (continuity, momentum_x, momentum_y)
+        self.register_buffer(
+            "loss_weight_pde_continuity",
+            to_tensor(self.config.get("training.loss_weights.pde.continuity", 1.0)),
+        )
+        self.register_buffer(
+            "loss_weight_pde_momentum_x",
+            to_tensor(self.config.get("training.loss_weights.pde.momentum_x", 1.0)),
+        )
+        self.register_buffer(
+            "loss_weight_pde_momentum_y",
+            to_tensor(self.config.get("training.loss_weights.pde.momentum_y", 1.0)),
+        )
+
+        if not self.bSteady:
+            self.register_buffer(
+                "loss_weight_pinn_initial_loss",
+                to_tensor(self.config.get("training.loss_weights.pinn.initial_loss", 1.0)),
+            )
+            self.register_buffer(
+                "loss_weight_deeponet_initial_loss",
+                to_tensor(self.config.get("training.loss_weights.deeponet.initial_loss", 1.0)),
+            )
+
     def load_state_dict(self, state_dict, strict=True):
         """
         Override load_state_dict to preserve buffers if they're missing from the loaded state_dict.
@@ -141,6 +325,7 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         buffer_backup = {}
         for name, buffer in self.named_buffers():
             if name in ['length_scale', 'velocity_scale', 'g'] or name.startswith('loss_weight_'):
+                # Also preserve PDE component loss weights
                 buffer_backup[name] = buffer.clone()
         
         # Load the state_dict
@@ -154,53 +339,64 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
                 print(f"Warning: Buffer '{name}' was missing from state_dict, preserving current value: {backup_value.item() if backup_value.numel() == 1 else backup_value}")
         
         return missing_keys, unexpected_keys
-    
+
     @property
     def loss_weights(self):
         """
         Property that returns loss weights as a dictionary for convenient access.
         The actual weights are stored as registered buffers.
         """
+        base_dict = {
+            "pinn_data_loss": self.loss_weight_pinn_data_loss,
+            "pinn_pde_loss": self.loss_weight_pinn_pde_loss,
+            "pinn_boundary_loss": self.loss_weight_pinn_boundary_loss,
+            "deeponet_data_loss": self.loss_weight_deeponet_data_loss,
+            "deeponet_pinn_loss": self.loss_weight_deeponet_pinn_loss,
+            "deeponet_boundary_loss": self.loss_weight_deeponet_boundary_loss,
+            "pde_continuity": self.loss_weight_pde_continuity,
+            "pde_momentum_x": self.loss_weight_pde_momentum_x,
+            "pde_momentum_y": self.loss_weight_pde_momentum_y,
+        }
+        
         if self.bSteady:
-            return {
-                'pinn_data_loss': self.loss_weight_pinn_data_loss,
-                'pinn_pde_loss': self.loss_weight_pinn_pde_loss,
-                'pinn_boundary_loss': self.loss_weight_pinn_boundary_loss,
-                'deeponet_data_loss': self.loss_weight_deeponet_data_loss,
-                'deeponet_pinn_loss': self.loss_weight_deeponet_pinn_loss,
-                'deeponet_boundary_loss': self.loss_weight_deeponet_boundary_loss
-            }
+            return base_dict
         else:
-            return {
-                'pinn_data_loss': self.loss_weight_pinn_data_loss,
-                'pinn_pde_loss': self.loss_weight_pinn_pde_loss,
-                'pinn_boundary_loss': self.loss_weight_pinn_boundary_loss,
-                'pinn_initial_loss': self.loss_weight_pinn_initial_loss,
-                'deeponet_data_loss': self.loss_weight_deeponet_data_loss,
-                'deeponet_pinn_loss': self.loss_weight_deeponet_pinn_loss,
-                'deeponet_boundary_loss': self.loss_weight_deeponet_boundary_loss,
-                'deeponet_initial_loss': self.loss_weight_deeponet_initial_loss
-            }
-    
+            base_dict.update({
+                "pinn_initial_loss": self.loss_weight_pinn_initial_loss,
+                "deeponet_initial_loss": self.loss_weight_deeponet_initial_loss,
+            })
+            return base_dict
+
+    def check_model_input_output_dimensions(self, branch_input_dim, trunk_input_dim, output_dim):
+        if self.branch_input_dim > 0 and branch_input_dim != self.branch_input_dim:
+            raise ValueError(
+                f"Branch input dimension mismatch: {branch_input_dim} != {self.branch_input_dim}"
+            )
+        if trunk_input_dim != self.trunk_input_dim:
+            raise ValueError(
+                f"Trunk input dimension mismatch: {trunk_input_dim} != {self.trunk_input_dim}"
+            )
+        if output_dim != self.output_dim:
+            raise ValueError(f"Output dimension mismatch: {output_dim} != {self.output_dim}")
+        #print("Model input and output dimensions are consistent with the specified configuration.")
+
     def forward(self, branch_input, trunk_input):
-        """
-        Forward pass of Physics-Informed DeepONet.
-        
-        This method extends the parent's forward method to add a check for branch_net initialization.
-        
-        Args:
-            branch_input (torch.Tensor): Input function for branch net [batch_size, branch_input_dim].
-            trunk_input (torch.Tensor): Coordinates for trunk net [batch_size, trunk_input_dim].
-            
-        Returns:
-            torch.Tensor: Model output [batch_size, output_dim] containing (h, u, v).
-        """
         if self.branch_net is None:
-            raise ValueError("Branch network not initialized. Set branch_input_dim first using set_branch_input_dim().")
-        
-        # Use parent's forward method
-        return super().forward(branch_input, trunk_input)
-    
+            raise ValueError(
+                "Branch network not initialized. Set branch_input_dim first using set_branch_input_dim()."
+            )
+        branch_output = self.branch_net(branch_input)
+        trunk_output = self.trunk_net(trunk_input)
+
+        outputs = []
+        for i in range(self.output_dim):
+            branch_i = branch_output[:, i :: self.output_dim]
+            trunk_i = trunk_output[:, i :: self.output_dim]
+            output_i = torch.sum(branch_i * trunk_i, dim=1, keepdim=True) + self.bias[i]
+            outputs.append(output_i)
+
+        return torch.cat(outputs, dim=1)
+
     def set_branch_input_dim(self, dim):
         """
         Set the input dimension for the branch network and recreate it.
@@ -210,18 +406,18 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         """
         self.branch_input_dim = dim
         
-        # Get branch network parameters from config
-        branch_layers = self.config.get('model.branch_net.hidden_layers', [128, 128, 128])
-        branch_activation = self.config.get('model.branch_net.activation', 'relu')
-        branch_dropout = self.config.get('model.branch_net.dropout_rate', 0.0)
+        # Get branch network parameters from config (required)
+        branch_layers = self._get_required_config('model.branch_net.hidden_layers')
+        branch_activation = self._get_required_config('model.branch_net.activation')
+        branch_dropout = self._get_required_config('model.branch_net.dropout_rate')
         
         # Recreate branch network with new input dimension
         self.branch_net = BranchNet(
-            self.branch_input_dim, 
-            self.hidden_dim, 
-            branch_layers, 
-            branch_activation, 
-            branch_dropout
+            self.branch_input_dim,
+            self.hidden_dim,
+            branch_layers,
+            branch_activation,
+            branch_dropout,
         ).to(self.device)
         
     def compute_pde_residuals(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
@@ -240,18 +436,8 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
             
         Returns:
             tuple: (continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v)
-        """
-        # Safety check: Ensure buffers are not zero (they might have been reset by load_state_dict)
-        if self.velocity_scale.item() == 0.0 or self.length_scale.item() == 0.0:
-            print(f"WARNING: Physics scales are zero! Re-initializing from config...")
-            print(f"  velocity_scale was: {self.velocity_scale.item()}, length_scale was: {self.length_scale.item()}")
-            velocity_scale_value = self.config.get('physics.scales.velocity')
-            length_scale_value = self.config.get('physics.scales.length')
-            if velocity_scale_value > 0:
-                self.register_buffer('velocity_scale', torch.tensor(velocity_scale_value, dtype=torch.float32, device=self.device))
-            if length_scale_value > 0:
-                self.register_buffer('length_scale', torch.tensor(length_scale_value, dtype=torch.float32, device=self.device))
-            print(f"  Re-initialized: velocity_scale={self.velocity_scale.item()}, length_scale={self.length_scale.item()}")
+        """        
+        
         
         # Ensure that gradients are computed
         trunk_input = trunk_input.clone().detach().requires_grad_(True)
@@ -276,26 +462,10 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         dv_hat_dx_hat = v_hat_grad[:, 0:1]
         dv_hat_dy_hat = v_hat_grad[:, 1:2]
 
-        #debug: print h_hat, u_hat, v_hat and their gradients
-        #print(f"h_hat: {h_hat}")
-        #print(f"u_hat: {u_hat}")
-        #print(f"v_hat: {v_hat}")
-        #print(f"dh_hat_dx_hat: {dh_hat_dx_hat}")
-        #print(f"dh_hat_dy_hat: {dh_hat_dy_hat}")
-        #print(f"du_hat_dx_hat: {du_hat_dx_hat}")
-        #print(f"du_hat_dy_hat: {du_hat_dy_hat}")
-        #print(f"dv_hat_dx_hat: {dv_hat_dx_hat}")
-        #print(f"dv_hat_dy_hat: {dv_hat_dy_hat}")
-
-        
         if not self.bSteady:
             dh_hat_dt_hat = h_hat_grad[:, 2:3]
             du_hat_dt_hat = u_hat_grad[:, 2:3]
             dv_hat_dt_hat = v_hat_grad[:, 2:3]
-        
-        #debug: print all keys of deeponet_points_stats
-        #print(f"All keys of deeponet_points_stats: {deeponet_points_stats.keys()}")
-        #print(f"All keys of pinn_points_stats: {pinn_points_stats.keys()}")
 
         # Get normalization stats (note: the inputs and outputs are always normalized)
         # Normalization stats for the output (h, u, v) of the DeepONet.
@@ -328,7 +498,7 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         #clip water depth to be positive
         h = torch.clamp(h, min=1e-3)
         
-        #denormalize the coordinates (which are normalized with min-max) (NOT USEFUL FOR NOW)
+        #denormalize the coordinates (which are normalized with min-max) (NOT USED FOR NOW)
         #x = x_hat * Lx + x_min
         #y = y_hat * Ly + y_min
         #if not self.bSteady:
@@ -351,14 +521,6 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         dv_dx = dv_hat_dx_hat * sigma_v / Lx
         dv_dy = dv_hat_dy_hat * sigma_v / Ly
 
-        #debug: print dh_dx, dh_dy, du_dx, du_dy, dv_dx, dv_dy
-        #print(f"dh_dx: {dh_dx}")
-        #print(f"dh_dy: {dh_dy}")
-        #print(f"du_dx: {du_dx}")
-        #print(f"du_dy: {du_dy}")
-        #print(f"dv_dx: {dv_dx}")
-        #print(f"dv_dy: {dv_dy}")
-        
         if not self.bSteady:
             dh_dt = dh_hat_dt_hat * sigma_h / Lt
             du_dt = du_hat_dt_hat * sigma_u / Lt
@@ -377,23 +539,42 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         momentum_y_residual = u*dv_dx + v*dv_dy + self.g * dh_dy - self.g * Sy + self.g * ManningN**2 * v * u_mag / (h**(4/3) + 1e-8)
         if not self.bSteady:
             momentum_y_residual = dv_dt + momentum_y_residual
-        
+
         # Scale the residuals based on physics scales
         mass_residual = mass_residual / self.velocity_scale
         momentum_x_residual = momentum_x_residual / self.velocity_scale**2 * self.length_scale
         momentum_y_residual = momentum_y_residual / self.velocity_scale**2 * self.length_scale
 
-        #debug: print mass_residual, momentum_x_residual, momentum_y_residual
-        print(f"DEBUG at line 329: velocity_scale type: {type(self.velocity_scale)}, value: {self.velocity_scale}, device: {self.velocity_scale.device if hasattr(self.velocity_scale, 'device') else 'N/A'}")
-        print(f"DEBUG at line 329: length_scale type: {type(self.length_scale)}, value: {self.length_scale}, device: {self.length_scale.device if hasattr(self.length_scale, 'device') else 'N/A'}")
-        print(f"velocity_scale: {self.velocity_scale.item() if self.velocity_scale.numel() == 1 else self.velocity_scale}")
-        print(f"length_scale: {self.length_scale.item() if self.length_scale.numel() == 1 else self.length_scale}")
-        print(f"mass_residual: {mass_residual}")
-        print(f"momentum_x_residual: {momentum_x_residual}")
-        print(f"momentum_y_residual: {momentum_y_residual}")
+        #debug print (all tensors are batched, so print first element and statistics)
+        bDebug = False
+        if bDebug:
+            #print(f"zb shape: {zb.shape}, first: {zb[0].item():.6f}, mean: {zb.mean().item():.6f}, min: {zb.min().item():.6f}, max: {zb.max().item():.6f}")
+            #print(f"Sx shape: {Sx.shape}, first: {Sx[0].item():.6f}, mean: {Sx.mean().item():.6f}, min: {Sx.min().item():.6f}, max: {Sx.max().item():.6f}")
+            #print(f"Sy shape: {Sy.shape}, first: {Sy[0].item():.6f}, mean: {Sy.mean().item():.6f}, min: {Sy.min().item():.6f}, max: {Sy.max().item():.6f}")
+            #print(f"ManningN shape: {ManningN.shape}, first: {ManningN[0].item():.6f}, mean: {ManningN.mean().item():.6f}, min: {ManningN.min().item():.6f}, max: {ManningN.max().item():.6f}")
+            print(f"h shape: {h.shape}, first: {h[0].item():.6f}, mean: {h.mean().item():.6f}, min: {h.min().item():.6f}, max: {h.max().item():.6f}")
+            print(f"u shape: {u.shape}, first: {u[0].item():.6f}, mean: {u.mean().item():.6f}, min: {u.min().item():.6f}, max: {u.max().item():.6f}")
+            print(f"v shape: {v.shape}, first: {v[0].item():.6f}, mean: {v.mean().item():.6f}, min: {v.min().item():.6f}, max: {v.max().item():.6f}")
+            print(f"mass_residual shape: {mass_residual.shape}, first: {mass_residual[0].item():.6f}, mean: {mass_residual.mean().item():.6f}, min: {mass_residual.min().item():.6f}, max: {mass_residual.max().item():.6f}")
+            print(f"momentum_x_residual shape: {momentum_x_residual.shape}, first: {momentum_x_residual[0].item():.6f}, mean: {momentum_x_residual.mean().item():.6f}, min: {momentum_x_residual.min().item():.6f}, max: {momentum_x_residual.max().item():.6f}")
+            print(f"momentum_y_residual shape: {momentum_y_residual.shape}, first: {momentum_y_residual[0].item():.6f}, mean: {momentum_y_residual.mean().item():.6f}, min: {momentum_y_residual.min().item():.6f}, max: {momentum_y_residual.max().item():.6f}")
+            print(f"dh_dx shape: {dh_dx.shape}, first: {dh_dx[0].item():.6f}, mean: {dh_dx.mean().item():.6f}")
+            print(f"dh_dy shape: {dh_dy.shape}, first: {dh_dy[0].item():.6f}, mean: {dh_dy.mean().item():.6f}")
+            print(f"du_dx shape: {du_dx.shape}, first: {du_dx[0].item():.6f}, mean: {du_dx.mean().item():.6f}")
+            print(f"du_dy shape: {du_dy.shape}, first: {du_dy[0].item():.6f}, mean: {du_dy.mean().item():.6f}")
+            print(f"dv_dx shape: {dv_dx.shape}, first: {dv_dx[0].item():.6f}, mean: {dv_dx.mean().item():.6f}")
+            print(f"dv_dy shape: {dv_dy.shape}, first: {dv_dy[0].item():.6f}, mean: {dv_dy.mean().item():.6f}")
+            if not self.bSteady:
+                print(f"dh_dt shape: {dh_dt.shape}, first: {dh_dt[0].item():.6f}, mean: {dh_dt.mean().item():.6f}")
+                print(f"du_dt shape: {du_dt.shape}, first: {du_dt[0].item():.6f}, mean: {du_dt.mean().item():.6f}")
+                print(f"dv_dt shape: {dv_dt.shape}, first: {dv_dt[0].item():.6f}, mean: {dv_dt.mean().item():.6f}")
+            # Lx, Ly, Lt, mu_*, sigma_* are Python floats from stats dict, not tensors
+            #print(f"Lx: {Lx}, Ly: {Ly}" + (f", Lt: {Lt}" if not self.bSteady else ""))
+            #print(f"sigma_h: {sigma_h}, sigma_u: {sigma_u}, sigma_v: {sigma_v}")
+            #print(f"mu_h: {mu_h}, mu_u: {mu_u}, mu_v: {mu_v}")
+            #exit()
 
-        #exit()
-        
+
         return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
         
     def compute_pde_loss(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
@@ -422,8 +603,10 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
         # Add small epsilon to prevent complete zero
         eps = torch.tensor(1e-8, device=self.device)
         
-        # PDE loss is just the sum of the losses for each equation (no weighting implemented yet)
-        pde_loss = continuity_loss + momentum_x_loss + momentum_y_loss + eps
+        # PDE loss is the weighted sum of the losses for each equation
+        pde_loss = (self.loss_weight_pde_continuity * continuity_loss + 
+                   self.loss_weight_pde_momentum_x * momentum_x_loss + 
+                   self.loss_weight_pde_momentum_y * momentum_y_loss + eps)
         
         pde_loss_components = {
             'continuity_loss': continuity_loss.item(),
@@ -536,38 +719,14 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
 
         Returns:
             tuple: (total_loss, loss_components)
-        """
-        # Safety check: Ensure loss weight buffers are not zero (they might have been reset)
-        loss_weights_dict = self.loss_weights
-        any_zero = any(w.item() == 0.0 for w in loss_weights_dict.values() if hasattr(w, 'item'))
-        if any_zero:
-            print(f"WARNING: Some loss weights are zero! Re-initializing from config...")
-            # Re-initialize all loss weights from config
-            if self.bSteady:
-                self.register_buffer('loss_weight_pinn_data_loss', torch.tensor(self.config.get('training.loss_weights.pinn.data_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_pinn_pde_loss', torch.tensor(self.config.get('training.loss_weights.pinn.pde_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_pinn_boundary_loss', torch.tensor(self.config.get('training.loss_weights.pinn.boundary_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_data_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.data_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_pinn_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.pinn_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_boundary_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.boundary_loss', 1.0), dtype=torch.float32, device=self.device))
-            else:
-                self.register_buffer('loss_weight_pinn_data_loss', torch.tensor(self.config.get('training.loss_weights.pinn.data_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_pinn_pde_loss', torch.tensor(self.config.get('training.loss_weights.pinn.pde_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_pinn_boundary_loss', torch.tensor(self.config.get('training.loss_weights.pinn.boundary_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_pinn_initial_loss', torch.tensor(self.config.get('training.loss_weights.pinn.initial_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_data_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.data_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_pinn_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.pinn_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_boundary_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.boundary_loss', 1.0), dtype=torch.float32, device=self.device))
-                self.register_buffer('loss_weight_deeponet_initial_loss', torch.tensor(self.config.get('training.loss_weights.deeponet.initial_loss', 1.0), dtype=torch.float32, device=self.device))
-            print(f"  Re-initialized loss weights: {self.loss_weights}")
+        """        
         
         # Initialize losses with requires_grad=True
+        # Initialize loss for DeepONet
+        deeponet_data_loss = torch.zeros(1, device=self.device, requires_grad=True)
 
-        # Initialize losses for PINN        
-        pinn_pde_loss = torch.zeros(1, device=self.device, requires_grad=True)       
-
-        # Initialize losses for DeepONet
-        deeponet_data_loss = torch.zeros(1, device=self.device, requires_grad=True)        
+        # Initialize loss for PINN
+        pinn_pde_loss = torch.zeros(1, device=self.device, requires_grad=True)
 
         # Initialize loss components
         loss_components = {
@@ -586,38 +745,30 @@ class PI_SWE_DeepONetModel(SWE_DeepONetModel):
             deeponet_data_loss, deeponet_data_loss_components = self.compute_deeponet_data_loss(branch_input, trunk_input, target)
             loss_components['deeponet_data_loss'] = deeponet_data_loss.item()
             
-        # Compute PDE loss if physics inputs are provided
-        # if (physics_branch_input is not None and physics_trunk_input is not None and 
-        #     pde_data is not None and all_pinn_points_stats is not None and all_deeponet_points_stats is not None):
-        #     pinn_pde_loss, pinn_pde_loss_components, _, _, _ = self.compute_pde_loss(
-        #         physics_branch_input, physics_trunk_input, pde_data, all_deeponet_points_stats, all_pinn_points_stats
-        #     )
 
-        #     loss_components['pinn_pde_loss'] = pinn_pde_loss.item()
-        #     loss_components['pinn_pde_loss_cty'] = pinn_pde_loss_components['continuity_loss']
-        #     loss_components['pinn_pde_loss_mom_x'] = pinn_pde_loss_components['momentum_x_loss']
-        #     loss_components['pinn_pde_loss_mom_y'] = pinn_pde_loss_components['momentum_y_loss']
+        # Check if physics-informed loss is enabled and all required inputs are provided
+        # If not, raise an error.
+        if self.use_physics_loss:
+            if physics_branch_input is None or physics_trunk_input is None or pde_data is None or all_pinn_points_stats is None or all_deeponet_points_stats is None:
+                raise ValueError("Physics-informed loss is enabled but required physics inputs or statistics are missing.")
+
+        # Compute PINN PDE loss if physics-informed loss is enabled
+        if self.use_physics_loss:
+            pinn_pde_loss, pinn_pde_loss_components, _, _, _ = self.compute_pde_loss(
+                physics_branch_input, physics_trunk_input, pde_data, all_deeponet_points_stats, all_pinn_points_stats
+            )
+
+            loss_components['pinn_pde_loss'] = pinn_pde_loss.item()
+            loss_components['pinn_pde_loss_cty'] = pinn_pde_loss_components['continuity_loss']
+            loss_components['pinn_pde_loss_mom_x'] = pinn_pde_loss_components['momentum_x_loss']
+            loss_components['pinn_pde_loss_mom_y'] = pinn_pde_loss_components['momentum_y_loss']        
             
         # Compute total loss
-        if self.bSteady:
-            total_loss = (
-                self.loss_weights['deeponet_data_loss'] * deeponet_data_loss +
-                self.loss_weights['deeponet_pinn_loss'] * pinn_pde_loss
-            )
-        else:
-            total_loss = (
-                self.loss_weights['deeponet_data_loss'] * deeponet_data_loss +
-                self.loss_weights['deeponet_pinn_loss'] * pinn_pde_loss
-            )
+        total_loss = self.loss_weights['deeponet_data_loss'] * deeponet_data_loss
+        if self.use_physics_loss:
+            total_loss = total_loss + self.loss_weights['deeponet_pinn_loss'] * pinn_pde_loss
 
-        #debug: print loss weights
-        #print(f"Loss weights: {self.loss_weights}")
-        #exit()
-        
         # Update loss components with total loss
-        loss_components['total_loss'] = total_loss.item()        
+        loss_components['total_loss'] = total_loss.item()
 
-        #debug: print loss components
-        print(f"Loss components: {loss_components}")
-        
         return total_loss, loss_components 

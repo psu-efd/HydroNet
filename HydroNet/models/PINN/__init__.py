@@ -3,6 +3,7 @@ PINN module initialization.
 """
 from .model import SWE_PINN
 from .trainer import PINNTrainer
+from .data import PINNDataset, get_pinn_dataloader
 from .loss_weight_scheduler import (
     LossWeightScheduler,
     ConstantWeightScheduler,
@@ -14,6 +15,8 @@ from .loss_weight_scheduler import (
 __all__ = [
     'SWE_PINN',
     'PINNTrainer',
+    'PINNDataset',
+    'get_pinn_dataloader',
     'LossWeightScheduler',
     'ConstantWeightScheduler',
     'ManualWeightScheduler',

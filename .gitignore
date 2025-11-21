@@ -1,8 +1,8 @@
 # Project specific ignores
 *.xlsx
-examples/PI_DeepONet/SacramentoRiver_small_steady/data_generation/
+examples/PI_DeepONet/block_in_channel_steady/data_generation/
+examples/PI_DeepONet/SacramentoRiver_steady/data_generation/
 examples/data_case_preparation/
-examples/DeepONet/SacramentoRiver_small_steady/data_generation/
 examples/data_case_preparation/SacromentoRiver/case_preparation/
 examples/**/*.png
 examples/DeepONet/dummy_example/
@@ -54,8 +54,8 @@ Output_MISC/
 *_PT*.dat
 *_RC*.dat
 #allow SIF and DIP files to be tracked
-!*_SIF.dat  
-!*_DIP.dat
+#!*_SIF.dat  
+#!*_DIP.dat
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -3,6 +3,7 @@
 # Architecture
 model:
   name: "PI_DeepONet"
+  use_physics_loss: true  # Whether to enable physics-informed loss computation
   branch_net:
     hidden_layers: [128, 128, 128]
     activation: "relu"
