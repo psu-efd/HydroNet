@@ -125,7 +125,16 @@ class PI_SWE_DeepONetTrainer:
         # Adaptive loss balancing
         self.use_adaptive_loss_balancing = self.config.get('training.loss_weights.use_adaptive_balancing', False)
         self.use_adaptive_pde_component_balancing = self.config.get('training.loss_weights.use_adaptive_pde_component_balancing', False)
+        
+        # Adaptive balancing frequency: update weights every N epochs throughout training
+        # If not specified, falls back to old behavior (only first N epochs)
+        self.adaptive_balancing_frequency = self.config.get('training.loss_weights.adaptive_balancing_frequency', None)
         self.adaptive_balancing_epochs = self.config.get('training.loss_weights.adaptive_balancing_epochs', 10)
+        
+        # If frequency is not specified, use old behavior (only first N epochs)
+        if self.adaptive_balancing_frequency is None:
+            self.adaptive_balancing_frequency = 0  # 0 means use old behavior
+        
         self.initial_loss_magnitudes = {}
         self.loss_balancing_factors = {}
         
@@ -253,8 +262,17 @@ class PI_SWE_DeepONetTrainer:
                 all_pinn_points_stats
             )
             
-            # Adaptive loss balancing: update weights during initial epochs
-            if self.use_adaptive_loss_balancing and epoch < self.adaptive_balancing_epochs:
+            # Adaptive loss balancing: update weights periodically
+            should_update_weights = False
+            if self.use_adaptive_loss_balancing:
+                if self.adaptive_balancing_frequency > 0:
+                    # New behavior: update every N epochs throughout training
+                    should_update_weights = (epoch % self.adaptive_balancing_frequency == 0)
+                else:
+                    # Old behavior: only update during first N epochs
+                    should_update_weights = (epoch < self.adaptive_balancing_epochs)
+            
+            if should_update_weights:
                 self._update_adaptive_loss_weights(loss_components, epoch)
             
             # Record weights at every epoch (for complete history)
@@ -808,10 +826,16 @@ class PI_SWE_DeepONetTrainer:
                         alpha * current_magnitude + (1 - alpha) * self.initial_loss_magnitudes['pde_momentum_y_loss']
                     )
         
-        # Recompute balancing factors every few epochs
-        if (epoch + 1) % 5 == 0:
+        # Recompute balancing factors
+        # If using frequency-based updates, update immediately
+        # Otherwise, update every 5 epochs (old behavior for backward compatibility)
+        if self.adaptive_balancing_frequency > 0:
+            # Frequency-based: update immediately when this method is called
             self._update_loss_weights_from_balancing()
-            # Note: Weights are recorded at every epoch in the training loop, so no need to record here
+        elif (epoch + 1) % 5 == 0:
+            # Old behavior: update every 5 epochs
+            self._update_loss_weights_from_balancing()
+        # Note: Weights are recorded at every epoch in the training loop, so no need to record here
     
     def _record_adaptive_weights(self):
         """

@@ -25,19 +25,20 @@ model:
 
 # Physics parameters
 physics:
+  unit: "SI"  # Unit, SI or EN. It should be the same as the output unit.
   bSteady: true           #whether the problem is steady or transient.
   gravity: 9.81  # Gravitational acceleration (m/s^2)  
 
   scales:        #physical scales for normalizing the PDEs
-    length: 5.0  # Length scale (e.g., averaged water depth)
-    velocity: 0.2  # Velocity scale (e.g., averaged velocity)
+    length: 10.0  # Length scale (e.g., averaged water depth)
+    velocity: 1.2  # Velocity scale (e.g., averaged velocity)
     
 # Training parameters
 training:
   batch_size: 16384
   epochs: 10
   save_freq: 10
-  learning_rate: 0.01
+  learning_rate: 0.001
   weight_decay: 1e-5
   scheduler:
     use_scheduler: true
@@ -50,9 +51,21 @@ training:
     patience: 30
     min_delta: 1e-5
   loss_weights:
+    # Adaptive loss balancing: automatically adjust weights to balance loss scales
+    # Set to true to enable automatic balancing based on initial loss magnitudes
+    # When enabled, the base weights below are multiplied by balancing factors
+    use_adaptive_balancing: true  # Recommended: true for better training stability
+    use_adaptive_pde_component_balancing: true  # Balance continuity vs momentum losses (recommended: true)
+    adaptive_balancing_frequency: 10  # Update weights every N epochs throughout training (recommended: 10)
+    # If adaptive_balancing_frequency is not specified, uses old behavior:
+    # adaptive_balancing_epochs: 10  # Only update weights during first N epochs (deprecated, use frequency instead)
+    
+    # Base loss weights (before adaptive balancing)
+    # Note: If adaptive balancing is enabled, these are starting weights that will be adjusted
+    # If adaptive balancing is disabled, these are the final weights used throughout training
     deeponet:
-      data_loss: 1.0
-      pinn_loss: 1.0
+      data_loss: 1.0      # Weight for DeepONet data loss
+      pinn_loss: 1.0     # Weight for physics PDE loss 
       boundary_loss: 1.0
       initial_loss: 1.0
     pinn:
@@ -60,6 +73,12 @@ training:
       pde_loss: 1.0
       boundary_loss: 1.0
       initial_loss: 1.0
+    # Weights for individual PDE component losses (continuity, momentum_x, momentum_y)
+    # These are balanced automatically if use_adaptive_pde_component_balancing is true
+    pde:
+      continuity: 1.0     # Weight for continuity equation loss
+      momentum_x: 1.0     # Weight for x-momentum equation loss
+      momentum_y: 1.0     # Weight for y-momentum equation loss
     
 
 # Data parameters
@@ -72,3 +91,12 @@ data:
     test_data_path: "data/DeepONet/test"  
     train_val_test_stats_path: "data/DeepONet/train_val_test_stats.h5"  # Path to the dataset mean and std file (for normalization/denormalization purposes)
   nCells: 5036  # Number of cells in the SRH-2D cases
+  template_vtk_file: "data/case.vtk"  # Template vtk file for the data generation (test cases)
+
+# Application parameters
+application:
+  application_dir: "application"
+  application_parameters_file: "applicationParameters.dat"
+  application_vtk_file: "case.vtk"   # The vtk file that contains the application mesh information
+  model_checkpoint_file: "checkpoints/pi_deeponet_epoch_best.pt"
+  train_val_test_stats_path: "all_DeepONet_stats.json"  # Path to the dataset mean and std file (for normalization/denormalization purposes)

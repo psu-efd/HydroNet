@@ -516,22 +516,67 @@ def pi_deeponet_plot_training_history(history_file_name, save_path=None):
     
     Args:
         history_file_name: Path to the history JSON file
-        save_path: Optional path to save the plot. If None, the plot is shown instead.
+        save_path: Optional path to save the plot. If None, saved to the current directory.
     """
 
     # Load the history json file
     with open(history_file_name, 'r') as f:
         history = json.load(f)
 
-    # Handle both old and new history key formats
+    # Read the training loss and validation loss from the history
     if 'training_loss_history' in history:
-        train_loss = history['training_loss_history']
-        val_loss = history['validation_loss_history']
-    elif 'train_loss' in history:
-        train_loss = history['train_loss']
-        val_loss = history['val_loss']
+        train_loss = history['training_loss_history']        
     else:
-        raise KeyError("History file must contain either 'training_loss_history'/'validation_loss_history' or 'train_loss'/'val_loss' keys")
+        raise KeyError("History file must contain 'training_loss_history'")
+
+    if 'validation_loss_history' in history:
+        val_loss = history['validation_loss_history']
+    else:
+        raise KeyError("History file must contain 'validation_loss_history'")
+
+    if 'training_component_loss_history' in history:
+        training_component_loss_history = history['training_component_loss_history']
+
+        #get the component loss values from the training_component_loss_history
+        deeponet_data_loss = training_component_loss_history['deeponet_data_loss']
+        pinn_pde_loss = training_component_loss_history['pinn_pde_loss']
+        pinn_pde_loss_cty = training_component_loss_history['pinn_pde_loss_cty']
+        pinn_pde_loss_mom_x = training_component_loss_history['pinn_pde_loss_mom_x']
+        pinn_pde_loss_mom_y = training_component_loss_history['pinn_pde_loss_mom_y']
+        pinn_initial_loss = training_component_loss_history['pinn_initial_loss']
+        pinn_boundary_loss = training_component_loss_history['pinn_boundary_loss']
+    else:
+        raise KeyError("History file must contain 'training_component_loss_history'")
+
+    if 'adaptive_weight_history' in history:
+        adaptive_weight_history = history['adaptive_weight_history']
+
+        #get the adaptive weight values from the adaptive_weight_history
+        adaptive_weight_deeponet_data_loss = adaptive_weight_history['deeponet_data_loss_weight']
+        adaptive_weight_pinn_pde_loss = adaptive_weight_history['deeponet_pinn_loss_weight']
+        adaptive_weight_pde_continuity = adaptive_weight_history['pde_continuity_weight']
+        adaptive_weight_pde_momentum_x = adaptive_weight_history['pde_momentum_x_weight']
+        adaptive_weight_pde_momentum_y = adaptive_weight_history['pde_momentum_y_weight']
+    else:
+        raise KeyError("History file must contain 'adaptive_weight_history'")
+
+    # Plot the training history (instead of train_loss, we pass in deeponet_data_loss because train_loss is the total loss=data_loss+pinn_loss)
+    #_pi_deeponet_plot_training_history_training_loss_and_validation_loss(train_loss, val_loss, save_path)
+    _pi_deeponet_plot_training_history_training_loss_and_validation_loss(deeponet_data_loss, val_loss, save_path)
+
+    _pi_deeponet_plot_training_component_loss_history_data_loss_and_pinn_loss(deeponet_data_loss, pinn_pde_loss, adaptive_weight_deeponet_data_loss, adaptive_weight_pinn_pde_loss, save_path)
+
+    _pi_deeponet_plot_training_component_loss_history_pde_loss_continuity_and_momentum(pinn_pde_loss_cty, pinn_pde_loss_mom_x, pinn_pde_loss_mom_y, adaptive_weight_pde_continuity, adaptive_weight_pde_momentum_x, adaptive_weight_pde_momentum_y, save_path)
+    
+
+def _pi_deeponet_plot_training_history_training_loss_and_validation_loss(train_loss, val_loss, save_path=None):
+    """Plot the training history from the training loss and validation loss lists.
+    
+    Args:
+        train_loss: List of training loss values
+        val_loss: List of validation loss values
+        save_path: Optional path to save the plot. If None, saved to the current directory.
+    """
 
     # Length of the training history
     num_epochs = len(train_loss)
@@ -561,6 +606,132 @@ def pi_deeponet_plot_training_history(history_file_name, save_path=None):
     # Save or show the plot
     if save_path is None:
         save_path = 'training_history.png'
+    else:
+        save_path = os.path.join(save_path, 'training_history.png')
+
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+def _pi_deeponet_plot_training_component_loss_history_data_loss_and_pinn_loss(deeponet_data_loss, pinn_pde_loss, adaptive_weight_deeponet_data_loss, adaptive_weight_pinn_pde_loss, save_path=None):
+    """Plot the training component loss history from the training component loss lists.
+    Creates a figure with two subplots (two rows):
+    - Top: Losses without weights
+    - Bottom: Losses with adaptive weights applied
+
+    Args:
+        deeponet_data_loss: List of deeponet data loss values
+        pinn_pde_loss: List of pinn pde loss values
+        adaptive_weight_deeponet_data_loss: List of adaptive weight deeponet data loss values
+        adaptive_weight_pinn_pde_loss: List of adaptive weight pinn pde loss values
+        save_path: Optional path to save the plot. If None, saved to the current directory.
+    """
+
+    # Length of the training component loss history
+    num_epochs = len(deeponet_data_loss)
+    epochs = np.arange(1, num_epochs + 1)
+
+    # Convert lists to numpy arrays
+    deeponet_data_loss = np.array(deeponet_data_loss)
+    pinn_pde_loss = np.array(pinn_pde_loss)
+    
+    # Weight history may have one extra entry (recorded before training starts)
+    # Align weights with losses by taking the last num_epochs entries
+    adaptive_weight_deeponet_data_loss = np.array(adaptive_weight_deeponet_data_loss[-num_epochs:])
+    adaptive_weight_pinn_pde_loss = np.array(adaptive_weight_pinn_pde_loss[-num_epochs:])
+
+    # Create figure with two subplots (two rows)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+    # Top subplot: Losses without weights
+    ax1.plot(epochs, deeponet_data_loss, label='DeepONet Data Loss', linewidth=2)
+    ax1.plot(epochs, pinn_pde_loss, label='PINN PDE Loss', linewidth=2)
+    ax1.set_xlabel('Epoch', fontsize=14)
+    ax1.set_ylabel('Loss', fontsize=14)
+    ax1.legend(fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title('Component Losses (Unweighted)', fontsize=14, fontweight='bold')
+
+    # Bottom subplot: Losses with adaptive weights
+    ax2.plot(epochs, deeponet_data_loss * adaptive_weight_deeponet_data_loss, label='DeepONet Data Loss (Weighted)', linewidth=2)
+    ax2.plot(epochs, pinn_pde_loss * adaptive_weight_pinn_pde_loss, label='PINN PDE Loss (Weighted)', linewidth=2)
+    ax2.set_xlabel('Epoch', fontsize=14)
+    ax2.set_ylabel('Weighted Loss', fontsize=14)
+    ax2.legend(fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_title('Component Losses (Weighted by Adaptive Weights)', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    # Save or show the plot
+    if save_path is None:
+        save_path = 'data_loss_and_pinn_loss.png'
+    else:
+        save_path = os.path.join(save_path, 'data_loss_and_pinn_loss.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+
+def _pi_deeponet_plot_training_component_loss_history_pde_loss_continuity_and_momentum(pinn_pde_loss_cty, pinn_pde_loss_mom_x, pinn_pde_loss_mom_y, adaptive_weight_pde_continuity, adaptive_weight_pde_momentum_x, adaptive_weight_pde_momentum_y, save_path=None):
+    """Plot the training component loss history for PDE continuity and momentum losses.
+    Creates a figure with two subplots (two rows):
+    - Top: PDE component losses without weights
+    - Bottom: PDE component losses with adaptive weights applied
+
+    Args:
+        pinn_pde_loss_cty: List of pinn pde loss continuity values
+        pinn_pde_loss_mom_x: List of pinn pde loss momentum x values
+        pinn_pde_loss_mom_y: List of pinn pde loss momentum y values
+        adaptive_weight_pde_continuity: List of adaptive weight pinn pde loss continuity values
+        adaptive_weight_pde_momentum_x: List of adaptive weight pinn pde loss momentum x values
+        adaptive_weight_pde_momentum_y: List of adaptive weight pinn pde loss momentum y values
+        save_path: Optional path to save the plot. If None, saved to the current directory.
+    """
+
+    # Length of the training component loss history
+    num_epochs = len(pinn_pde_loss_cty)
+    epochs = np.arange(1, num_epochs + 1)
+
+    # Convert lists to numpy arrays
+    pinn_pde_loss_cty = np.array(pinn_pde_loss_cty)
+    pinn_pde_loss_mom_x = np.array(pinn_pde_loss_mom_x)
+    pinn_pde_loss_mom_y = np.array(pinn_pde_loss_mom_y)
+    
+    # Weight history may have one extra entry (recorded before training starts)
+    # Align weights with losses by taking the last num_epochs entries
+    adaptive_weight_pde_continuity = np.array(adaptive_weight_pde_continuity[-num_epochs:])
+    adaptive_weight_pde_momentum_x = np.array(adaptive_weight_pde_momentum_x[-num_epochs:])
+    adaptive_weight_pde_momentum_y = np.array(adaptive_weight_pde_momentum_y[-num_epochs:])
+
+    # Create figure with two subplots (two rows)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+    # Top subplot: PDE component losses without weights
+    ax1.plot(epochs, pinn_pde_loss_cty, label='PINN PDE Loss Continuity', linewidth=2)
+    ax1.plot(epochs, pinn_pde_loss_mom_x, label='PINN PDE Loss Momentum X', linewidth=2)
+    ax1.plot(epochs, pinn_pde_loss_mom_y, label='PINN PDE Loss Momentum Y', linewidth=2)
+    ax1.set_xlabel('Epoch', fontsize=14)
+    ax1.set_ylabel('Loss', fontsize=14)
+    ax1.legend(fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title('PDE Component Losses (Unweighted)', fontsize=14, fontweight='bold')
+
+    # Bottom subplot: PDE component losses with adaptive weights
+    ax2.plot(epochs, pinn_pde_loss_cty * adaptive_weight_pde_continuity, label='PINN PDE Loss Continuity (Weighted)', linewidth=2)
+    ax2.plot(epochs, pinn_pde_loss_mom_x * adaptive_weight_pde_momentum_x, label='PINN PDE Loss Momentum X (Weighted)', linewidth=2)
+    ax2.plot(epochs, pinn_pde_loss_mom_y * adaptive_weight_pde_momentum_y, label='PINN PDE Loss Momentum Y (Weighted)', linewidth=2)
+    ax2.set_xlabel('Epoch', fontsize=14)
+    ax2.set_ylabel('Weighted Loss', fontsize=14)
+    ax2.legend(fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_title('PDE Component Losses (Weighted by Adaptive Weights)', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    # Save or show the plot
+    if save_path is None:
+        save_path = 'pde_loss_continuity_and_momentum.png'
+    else:
+        save_path = os.path.join(save_path, 'pde_loss_continuity_and_momentum.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 

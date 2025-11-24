@@ -57,13 +57,6 @@ from HydroNet import (
     pi_deeponet_convert_test_results_to_vtk
 )
 
-# Create aliases for backward compatibility with old function names
-convert_test_results_to_vtk = pi_deeponet_convert_test_results_to_vtk
-plot_training_history = pi_deeponet_plot_training_history
-
-# Common functions are now imported from HydroNet.utils.pi_deeponet_utils
-# Old function definitions removed - now using shared functions from HydroNet
-
 
 if __name__ == "__main__":
     # Start the main timer

@@ -1,4 +1,13 @@
 {
+    "PINN_normalization_specs": {
+        "x": "min-max",
+        "y": "min-max",
+        "t": "min-max",
+        "zb": "none",
+        "Sx": "none",
+        "Sy": "none",
+        "ManningN": "none"
+    },
     "all_points_stats": {
         "x_min": 16953.830078125,
         "x_max": 22295.591796875,
@@ -28,14 +37,5 @@
         "ManningN_max": 0.10000000149011612,
         "ManningN_mean": 0.04501786828041077,
         "ManningN_std": 0.023841289803385735
-    },
-    "PINN_normalization_specs": {
-        "x": "min-max",
-        "y": "min-max",
-        "t": "min-max",
-        "zb": "none",
-        "Sx": "none",
-        "Sy": "none",
-        "ManningN": "none"
     }
 }
