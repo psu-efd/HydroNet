@@ -36,7 +36,7 @@ physics:
 # Training parameters
 training:
   batch_size: 16384
-  epochs: 10
+  epochs: 200
   save_freq: 10
   learning_rate: 0.001
   weight_decay: 1e-5
@@ -97,6 +97,7 @@ data:
 application:
   application_dir: "application"
   application_parameters_file: "applicationParameters.dat"
+  training_parameters_file: "sampledParameters_2025_11_14-11_40_47_AM.dat"
   application_vtk_file: "case.vtk"   # The vtk file that contains the application mesh information
   model_checkpoint_file: "checkpoints/pi_deeponet_epoch_best.pt"
   train_val_test_stats_path: "all_DeepONet_stats.json"  # Path to the dataset mean and std file (for normalization/denormalization purposes)

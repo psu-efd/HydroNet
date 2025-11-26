@@ -53,7 +53,7 @@ echo "Bash: $(which bash)"
 echo "Python path: $(which python)"
 echo "MPI path: $(which mpirun)"
 
-python SacramentoRiver_steady_DeepONet.py
+python train_val_test.py
 
 echo "Finished at"
 date

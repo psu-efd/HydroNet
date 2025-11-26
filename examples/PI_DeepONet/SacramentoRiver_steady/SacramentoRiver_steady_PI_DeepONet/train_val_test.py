@@ -57,27 +57,6 @@ from HydroNet import (
     pi_deeponet_convert_test_results_to_vtk
 )
 
-# Create aliases for backward compatibility with old function names
-convert_test_results_to_vtk = pi_deeponet_convert_test_results_to_vtk
-plot_training_history = pi_deeponet_plot_training_history
-
-
-# Common functions are now imported from HydroNet.utils.pi_deeponet_utils
-# If you need case-specific customization, you can override these functions here
-
-# Wrapper function with case-specific case indices for VTK conversion
-def convert_test_results_to_vtk_custom(config):
-    """Case-specific VTK conversion with hardcoded case indices."""
-    case_indices = [84, 54, 71, 1]  # Custom case indices for this example
-    pi_deeponet_convert_test_results_to_vtk(config, case_indices=case_indices)
-
-# Override the test function to use custom VTK conversion
-def pi_deeponet_test_custom(best_model_path, config):
-    """Test function with case-specific VTK conversion."""
-    pi_deeponet_test(best_model_path, config, case_indices=[84, 54, 71, 1])
-
-# Old function definitions removed - now using shared functions from HydroNet
-
 
 if __name__ == "__main__":
     # Start the main timer
@@ -88,18 +67,16 @@ if __name__ == "__main__":
     config = Config(config_file)
     
     # Set the multiprocessing start method
-    #mp.set_start_method('spawn', force=True)
+    mp.set_start_method('spawn', force=True)
     
     # Train the model
     #pi_deeponet_train(config)
 
     # Plot training history
-    #plot_training_history('./history_20250314_154327.json')
+    pi_deeponet_plot_training_history('./history_20251124_212115.json')
 
     # Test the model with the best model and save the test results to vtk files
-    # Use the wrapper function with custom case indices, or use the shared function directly:
-    # pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
-    pi_deeponet_test_custom('./checkpoints/pi_deeponet_epoch_best.pt', config)
+    pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
     
     # Calculate and print the total execution time
     main_execution_time = time.time() - main_start_time

@@ -13,12 +13,15 @@ import torch.multiprocessing as mp
 from torch.utils.data import DataLoader
 from datetime import datetime
 import vtk
-from vtk.util.numpy_support import numpy_to_vtk
+from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+from scipy.spatial.distance import cdist
+import h5py
 
 from ..models.PI_DeepONet.model import PI_SWE_DeepONetModel
 from ..models.PI_DeepONet.trainer import PI_SWE_DeepONetTrainer
 from ..models.PI_DeepONet.data import PI_SWE_DeepONetDataset
 from .config import Config
+from .data_processing_common import get_cells_in_domain
 
 
 def pi_deeponet_train(config):
@@ -31,6 +34,10 @@ def pi_deeponet_train(config):
     Returns:
         tuple: (model, history) - The trained model and training history dictionary
     """    
+
+    # Check if config is an instance of Config
+    if not isinstance(config, Config):
+        raise ValueError("config must be an instance of Config")
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -83,10 +90,9 @@ def pi_deeponet_train(config):
             pin_memory=config.get('training.pin_memory', False)
         )
         
-        # Initialize model
+        # Initialize model 
         print("Initializing model...")
-        model = PI_SWE_DeepONetModel(config).to(device)
-        print_gpu_memory("GPU memory after model initialization")
+        model = PI_SWE_DeepONetModel(config)        
 
         # Check whether the model and data are compatible
         model.check_model_input_output_dimensions(train_dataset.branch_dim, train_dataset.trunk_dim, train_dataset.output_dim)
@@ -96,6 +102,17 @@ def pi_deeponet_train(config):
             model,
             config
         )
+
+        # Load the initial model if specified in the config
+        bLoad_initial_model = config.get('training.bLoad_initial_model', False)
+        if bLoad_initial_model:
+            initial_model_checkpoint_file = config.get('training.initial_model_checkpoint_file')
+            if initial_model_checkpoint_file is None:
+                raise ValueError("initial_model_checkpoint_file is not specified in the config")
+            trainer.load_checkpoint(initial_model_checkpoint_file)
+            print(f"Successfully loaded initial model from {initial_model_checkpoint_file}")
+        else:
+            print("No initial model to load; using random initial weights")
         
         # Monitor memory after first batch. Note the GPU memory footprint only involves the DeepONet model, not the physics equations constrains.
         print("\nMonitoring memory during first batch...")
@@ -734,4 +751,976 @@ def _pi_deeponet_plot_training_component_loss_history_pde_loss_continuity_and_mo
         save_path = os.path.join(save_path, 'pde_loss_continuity_and_momentum.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
+
+
+
+def pi_deeponet_application_create_model_application_dataset(config):
+    """
+
+    Create the model application dataset (PI_SWE_DeepONetDataset). The dataset is created from the application parameters and the application vtk file. In fact, only the DeepONet data is relevant for the model application. The PINN data is not needed.
+
+    Args:
+        config: The configuration object.
+
+    Returns:
+        dataset: The model application dataset (PI_SWE_DeepONetDataset).
+    """
+
+    # Check if config is an instance of Config
+    if not isinstance(config, Config):
+        raise ValueError("config must be an instance of Config")
+
+    # Application parameters file: The path to the application parameters file
+    application_dir = config['application']['application_dir']
+    application_parameters_file = config['application']['application_parameters_file']
+    application_vtk_file = config['application']['application_vtk_file']
+
+    # Read the header row to determine the number of parameters
+    with open(os.path.join(application_dir, application_parameters_file), 'r') as f:
+        header_line = f.readline().strip()
+        n_params = len(header_line.split())  # Count the number of column headers
+    
+    print(f"Number of parameters (from header) for application: {n_params}")
+    
+    # Load the application parameters (skip the header row)
+    application_parameters = np.loadtxt(os.path.join(application_dir, application_parameters_file), skiprows=1)
+    print(f"Application parameters: {application_parameters}")
+    
+    # Ensure application_parameters is 2D
+    # If 1D, it could be:
+    # - One case with multiple parameters: reshape to (1, n_params) if length == n_params
+    # - Multiple cases with one parameter: reshape to (n_cases, 1) if length != n_params
+    if application_parameters.ndim == 1:
+        if len(application_parameters) == n_params:
+            # One case with multiple parameters: reshape to (1, n_params)
+            print(f"Application parameters is 1D with {len(application_parameters)} values (matches {n_params} parameters). Reshaping to (1, {n_params})...")
+            application_parameters = application_parameters.reshape(1, -1)
+        else:
+            # Multiple cases with one parameter: reshape to (n_cases, 1)
+            print(f"Application parameters is 1D with {len(application_parameters)} values (does not match {n_params} parameters). Reshaping to ({len(application_parameters)}, 1)...")
+            application_parameters = application_parameters.reshape(-1, 1)
+    # If already 2D, it means multiple rows (multiple cases), so keep as is
+        
+    print(f"Application parameters after reshaping: {application_parameters}")
+    print(f"Application parameters shape: {application_parameters.shape}")
+
+    # Make sure the dimension of the application parameters is compatible with the DeepONet branch inputs
+    if application_parameters.shape[1] != config['model']['branch_net']['branch_input_dim']:
+        print(f"The dimension of the application parameters is {application_parameters.shape[1]}")
+        print(f"The dimension of the DeepONet branch inputs is {config['model']['branch_net']['branch_input_dim']}")
+        raise ValueError("The dimension of the application parameters is not compatible with the DeepONet branch inputs")
+
+    # Read VTK file and extract cell centers only
+    print(f"Reading VTK file and extracting cell centers from {application_vtk_file}...")
+    vtk_reader = vtk.vtkUnstructuredGridReader()
+    vtk_reader.SetFileName(os.path.join(application_dir, application_vtk_file))
+    vtk_reader.Update()
+    
+    # Get cell centers from the VTK file
+    cell_ids, cell_centers, cell_Sx, cell_Sy = get_cells_in_domain(vtk_reader)
+    
+    # Get the number of cells
+    n_cells = len(cell_centers)
+    print(f"Number of cells: {n_cells}")
+    
+    # Determine unit system for metadata (default to SI if not specified)
+    unit_system = config['physics']['unit']
+    if unit_system not in ['SI', 'EN']:
+        print(f"Invalid unit system: {unit_system}")
+        print("Valid unit systems are: SI, EN")
+        raise ValueError("Invalid unit system")
+    
+    # Prepare data for this application case
+    # Branch inputs: tile the application parameters for each cell
+    # application_parameters should have shape (n_cases, n_features). n_cases is the number of application cases. n_features is the number of application parameters.
+    # For each case, we tile the parameters for all cells
+    # Note: application_parameters is already 2D at this point (reshaped earlier if needed)
+    n_cases = application_parameters.shape[0]
+    n_features = application_parameters.shape[1]
+
+    # Check if the number of cases, cells, and features are valid
+    if n_cases < 1:
+        print(f"Number of application cases is {n_cases}")
+        raise ValueError("Number of application cases is less than 1")
+    if n_cells < 1:
+        print(f"Number of cells is {n_cells}")
+        raise ValueError("Number of cells is less than 1")
+    if n_features < 1:
+        print(f"Number of features is {n_features}")
+        raise ValueError("Number of features is less than 1")    
+    
+    # Create branch inputs: for each case, tile the parameters for all cells
+    branch_inputs_list = []
+    trunk_inputs_list = []
+    
+    for case_idx in range(n_cases):
+        # Tile the parameters for this case to match the number of cells
+        case_branch_inputs = np.tile(application_parameters[case_idx, :], (n_cells, 1))
+        branch_inputs_list.append(case_branch_inputs)
+        
+        # Trunk inputs are the same for all cases (cell centers)
+        case_trunk_inputs = cell_centers[:, :2]  # Only need x, y coordinates for steady case. For unsteady case, we need to add the time variable.
+        trunk_inputs_list.append(case_trunk_inputs)
+    
+    # Concatenate all cases
+    branch_inputs = np.concatenate(branch_inputs_list, axis=0).astype(np.float32)
+    trunk_inputs = np.concatenate(trunk_inputs_list, axis=0).astype(np.float32)
+    
+    # Load normalization stats from the training data
+    stats_path = config['application']['train_val_test_stats_path']
+    if not os.path.exists(os.path.join(application_dir, stats_path)):
+        raise FileNotFoundError(f"Normalization stats file not found: {os.path.join(application_dir, stats_path)}")
+    
+    with open(os.path.join(application_dir, stats_path), 'r') as f:
+        all_DeepONet_stats = json.load(f)
+
+    print(f"All DeepONet stats: {all_DeepONet_stats}")
+    
+    # Get normalization methods and stats
+    normalization_specs = all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']
+    branch_normalization_method = normalization_specs['normalization_method']['branch_inputs']
+    trunk_normalization_method = normalization_specs['normalization_method']['trunk_inputs']
+    
+    branch_stats = normalization_specs['branch_inputs']
+    trunk_stats = normalization_specs['trunk_inputs']
+    
+    # Normalize branch inputs
+    if branch_normalization_method == 'z-score':
+        branch_mean = np.array(branch_stats['mean'])
+        branch_std = np.array(branch_stats['std'])
+        branch_inputs = (branch_inputs - branch_mean) / branch_std
+    elif branch_normalization_method == 'min-max':
+        branch_min = np.array(branch_stats['min'])
+        branch_max = np.array(branch_stats['max'])
+        branch_inputs = (branch_inputs - branch_min) / (branch_max - branch_min)
+    else:
+        raise ValueError(f"Invalid branch inputs normalization method: {branch_normalization_method}")
+    
+    # Normalize trunk inputs
+    if trunk_normalization_method == 'z-score':
+        trunk_mean = np.array(trunk_stats['mean'])
+        trunk_std = np.array(trunk_stats['std'])
+        trunk_inputs = (trunk_inputs - trunk_mean) / trunk_std
+    elif trunk_normalization_method == 'min-max':
+        trunk_min = np.array(trunk_stats['min'])
+        trunk_max = np.array(trunk_stats['max'])
+        trunk_inputs = (trunk_inputs - trunk_min) / (trunk_max - trunk_min)
+    else:
+        raise ValueError(f"Invalid trunk inputs normalization method: {trunk_normalization_method}")
+    
+    # Create output directory for application data
+    # Put it under application/DeepONet/ so it can find the stats file correctly
+    # The PI_SWE_DeepONetDataset looks for all_DeepONet_stats.json in the parent directory
+    application_data_dir = os.path.join(application_dir, 'DeepONet')
+    os.makedirs(application_data_dir, exist_ok=True)
+    
+    # Create dummy outputs (zeros) since we don't have ground truth for application
+    # The shape should match: (n_cases * n_cells, n_outputs) where n_outputs = 3 (h, u, v)
+    n_outputs = config['model']['output_dim']
+    outputs = np.zeros((n_cases * n_cells, n_outputs), dtype=np.float32)
+    
+    # Save to HDF5 file
+    h5_file_path = os.path.join(application_data_dir, 'data.h5')
+    print(f"Saving application dataset to {h5_file_path}...")
+    with h5py.File(h5_file_path, 'w') as f:
+        f.create_dataset('branch_inputs', data=branch_inputs, dtype='float32')
+        f.create_dataset('trunk_inputs', data=trunk_inputs, dtype='float32')
+        f.create_dataset('outputs', data=outputs, dtype='float32')
+        
+        # Add metadata
+        f.attrs['n_cases'] = n_cases
+        f.attrs['n_cells'] = n_cells
+        f.attrs['n_features'] = n_features
+        f.attrs['n_outputs'] = n_outputs
+        f.attrs['unit'] = unit_system
+    
+    print(f"Application dataset created successfully!")
+    print(f"  - Branch inputs shape: {branch_inputs.shape}")
+    print(f"  - Trunk inputs shape: {trunk_inputs.shape}")
+    print(f"  - Outputs shape: {outputs.shape}")
+    
+    # Create and return the dataset
+    # First set model.use_physics_loss to False because we don't need the PINN data for model application
+    config['model']['use_physics_loss'] = False
+    # Then create the dataset
+    dataset = PI_SWE_DeepONetDataset(data_path=application_data_dir, config=config)
+    
+    return dataset, application_parameters
+
+def pi_deeponet_application_compute_distance_between_application_and_training_data(config):
+    """
+    Compute the distance between the application data and the training data (the branch inputs).
+
+    Currently, we compute the Wasserstein Distance between the application data and training distribution.
+
+    $$D_W(\mathbf{q}) = |\mathbf{q} - \mathbf{q}_{\mathrm{closest;train}}|_1.$$
+
+    Equivalent to "distance to nearest training example", but grounded in optimal transport theory.
+
+    The application parameter file and the training parameter file are in the dat format. Their file names should be specified in the config file.
+
+    Args:
+        config: The configuration object.
+
+    """
+
+    # Check if config is an instance of Config
+    if not isinstance(config, Config):
+        raise ValueError("config must be an instance of Config")
+
+   
+    # Get the application directory
+    application_dir = config['application']['application_dir']
+
+    # Get the application parameters file
+    application_parameters_file = config['application']['application_parameters_file']
+    
+    # Read the header row to determine the number of parameters
+    with open(os.path.join(application_dir, application_parameters_file), 'r') as f:
+        header_line = f.readline().strip()
+        n_params = len(header_line.split())  # Count the number of column headers
+    
+    # Load the application parameters (skip the header row)
+    application_parameters = np.loadtxt(os.path.join(application_dir, application_parameters_file), skiprows=1)
+    
+    # Ensure application_parameters is 2D
+    if application_parameters.ndim == 1:
+        if len(application_parameters) == n_params:
+            # One case with multiple parameters: reshape to (1, n_params)
+            application_parameters = application_parameters.reshape(1, -1)
+        else:
+            # Multiple cases with one parameter: reshape to (n_cases, 1)
+            application_parameters = application_parameters.reshape(-1, 1)
+    
+    print(f"Application parameters shape: {application_parameters.shape}")
+    
+    # Get the training parameters file
+    training_parameters_file = config['application']['training_parameters_file']
+    
+    # Read the header row to determine the number of parameters (should match application)
+    with open(os.path.join(application_dir, training_parameters_file), 'r') as f:
+        header_line = f.readline().strip()
+        n_params_train = len(header_line.split())
+    
+    if n_params_train != n_params:
+        raise ValueError(f"Number of parameters in training file ({n_params_train}) does not match application file ({n_params})")
+    
+    # Load the training parameters (skip the header row)
+    training_parameters = np.loadtxt(os.path.join(application_dir, training_parameters_file), skiprows=1)
+    
+    # Ensure training_parameters is 2D
+    if training_parameters.ndim == 1:
+        if len(training_parameters) == n_params:
+            training_parameters = training_parameters.reshape(1, -1)
+        else:
+            training_parameters = training_parameters.reshape(-1, 1)
+    
+    print(f"Training parameters shape: {training_parameters.shape}")
+    
+    # Load normalization stats from the training data
+    stats_path = config['application']['train_val_test_stats_path']
+    if not os.path.exists(os.path.join(application_dir, stats_path)):
+        raise FileNotFoundError(f"Normalization stats file not found: {os.path.join(application_dir, stats_path)}")
+    
+    with open(os.path.join(application_dir, stats_path), 'r') as f:
+        all_DeepONet_stats = json.load(f)
+    
+    # Get normalization methods and stats for branch inputs
+    normalization_specs = all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']
+    branch_normalization_method = normalization_specs['normalization_method']['branch_inputs']
+    branch_stats = normalization_specs['branch_inputs']
+    
+    # Normalize application and training parameters (currently only z-score is supported)
+    if branch_normalization_method == 'z-score':
+        branch_mean = np.array(branch_stats['mean'])
+        branch_std = np.array(branch_stats['std'])
+        application_parameters_norm = (application_parameters - branch_mean) / branch_std
+        training_parameters_norm = (training_parameters - branch_mean) / branch_std
+    else:
+        raise ValueError(f"Invalid branch inputs normalization method: {branch_normalization_method}")
+    
+    print(f"Normalized application parameters shape: {application_parameters_norm.shape}")
+    print(f"Normalized training parameters shape: {training_parameters_norm.shape}")
+    
+    # Compute the Wasserstein Distance for each application parameter row
+    # Based on the formula: D_W(q) = |q - q_closest_train|_1
+    # This computes the L1 distance to the nearest training example for each application sample
+    
+    n_application_cases = application_parameters_norm.shape[0]
+    wasserstein_distances = []
+    
+    for i in range(n_application_cases):
+        print(f"Computing Wasserstein Distance for case {i+1} of {n_application_cases}...")
+
+        # Get the current application parameter row
+        app_param = application_parameters_norm[i, :].reshape(1, -1)  # Shape: (1, n_params)
+        print(f"Application parameter row {i+1}: {app_param}")
+        
+        # Compute pairwise L1 distances between this application sample and all training samples
+        # cdist with metric='cityblock' computes L1 (Manhattan) distance
+        distances = cdist(app_param, training_parameters_norm, metric='cityblock')
+        
+        # Find the minimum distance to any training sample (this is the Wasserstein distance)
+        min_distance = np.min(distances)
+        wasserstein_distances.append(float(min_distance))
+        
+        print(f"Case {i+1}: Wasserstein Distance = {min_distance:.6f}")
+    
+    # Compute statistics across all application cases
+    wasserstein_distances_array = np.array(wasserstein_distances)
+    mean_distance = np.mean(wasserstein_distances_array)
+    min_distance = np.min(wasserstein_distances_array)
+    max_distance = np.max(wasserstein_distances_array)
+    median_distance = np.median(wasserstein_distances_array)
+    std_distance = np.std(wasserstein_distances_array)
+    
+    print(f"\nWasserstein Distance Statistics (across all application cases):")
+    print(f"  Mean: {mean_distance:.6f}")
+    print(f"  Min: {min_distance:.6f}")
+    print(f"  Max: {max_distance:.6f}")
+    print(f"  Median: {median_distance:.6f}")
+    print(f"  Std: {std_distance:.6f}")
+    
+    # Save the results
+    distance_results = {
+        'wasserstein_distance_per_case': wasserstein_distances,
+        'statistics': {
+            'mean': float(mean_distance),
+            'min': float(min_distance),
+            'max': float(max_distance),
+            'median': float(median_distance),
+            'std': float(std_distance)
+        },
+        'normalization_method': branch_normalization_method
+    }
+    
+    results_file = os.path.join(application_dir, 'wasserstein_distance_results.json')
+    with open(results_file, 'w') as f:
+        json.dump(distance_results, f, indent=4)
+    print(f"\nDistance results saved to {results_file}")
+
+    return wasserstein_distances_array
+
+def pi_deeponet_application_run_model_application(config):
+    """
+    Apply the trained model to the evaluation cases.
+
+    Args:
+        config: The configuration object.
+    """
+
+    # Check if config is an instance of Config
+    if not isinstance(config, Config):
+        raise ValueError("config must be an instance of Config")
+
+    # Get application directory
+    application_dir = config['application']['application_dir']
+    
+    # Model checkpoint file: The path to the best model checkpoint file
+    model_checkpoint_file = config['application']['model_checkpoint_file']
+
+    # Create the application dataset
+    dataset, application_parameters = pi_deeponet_application_create_model_application_dataset(config)
+
+    # Get a sample to determine dimensions
+    sample_branch, sample_trunk, sample_output = dataset[0]
+    branch_dim = sample_branch.shape[0]
+    trunk_dim = sample_trunk.shape[0]
+    output_dim = sample_output.shape[0]
+    print(f"Detected branch_dim={branch_dim}, trunk_dim={trunk_dim}, output_dim={output_dim}")
+
+    # Create model
+    print("\n\nCreating the trained model...")
+    model = PI_SWE_DeepONetModel(config=config)
+    model.check_model_input_output_dimensions(branch_dim, trunk_dim, output_dim)
+
+    # Create trainer
+    trainer = PI_SWE_DeepONetTrainer(model, config=config)
+    
+    # Load the trained model checkpoint
+    try:
+        trainer.load_checkpoint(model_checkpoint_file)
+        print(f"Successfully loaded model checkpoint from {model_checkpoint_file}")
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"Error loading model checkpoint: {e}, exiting...")        
+        exit()
+
+    # Load application dataset
+    print("\n\nLoading application dataset...")
+    test_loader = DataLoader(
+            dataset,
+            batch_size=1280,   # Batch size for the application dataset (probably does not matter)
+            shuffle=False, # Do not shuffle the application dataset because the order of the samples is important
+            num_workers=0,
+            pin_memory=False
+        )
+
+     # Get the all_DeepONet_stats
+    all_DeepONet_stats = dataset.get_deeponet_stats()
+
+    # Make sure the normalization method for outputs is "z-score" (currently only "z-score" is supported)
+    if all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']['normalization_method']['outputs'] != "z-score":
+        raise ValueError("Output normalization method is not supported. Currently only 'z-score' is supported.")
+
+    output_mean = all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']['outputs']['mean']
+    output_std = all_DeepONet_stats['all_DeepONet_branch_trunk_outputs_stats']['outputs']['std']
+
+    # Evaluate model on application dataset
+    model.eval()  # Set model to evaluation mode
+    all_predictions = []
+    
+    print("Running predictions on application dataset...")
+    sample_count = 0
+
+    with torch.no_grad():  # Disable gradient calculation for inference
+        for branch_input, trunk_input, target in test_loader:
+            # Move data to device
+            branch_input = branch_input.to(trainer.device)
+            trunk_input = trunk_input.to(trainer.device)
+            target = target.to(trainer.device)
+            
+            # Forward pass
+            output = model(branch_input, trunk_input)           
+            
+            # Store predictions 
+            all_predictions.append(output.cpu().numpy())
+            
+            # Count samples
+            sample_count += len(branch_input)
+
+    # Concatenate all predictions
+    all_predictions = np.vstack(all_predictions)
+
+    # Denormalize the predictions
+    # Assuming the outputs are normalized as (x - mean) / std
+    denorm_predictions = all_predictions * output_std + output_mean
+    
+    # Save the denormalized predictions to a npz file
+    np.savez(f'{application_dir}/application_predictions.npz', denorm_predictions=denorm_predictions)
+
+    print(f"Application predictions saved to {application_dir}/application_predictions.npz")
+
+    # Convert the denormalized predictions to vtk files for visualization
+    print("\n\nConverting application predictions to vtk files...")
+    print("================================================")
+    
+    # Get application parameters and VTK file paths
+    application_vtk_file = config['application']['application_vtk_file']
+    application_vtk_path = os.path.join(application_dir, application_vtk_file)
+    
+    # application_parameters is already loaded from create_model_application_dataset
+    # Ensure application_parameters is 2D (handle case where it's 1D with only one feature)
+    if application_parameters.ndim == 1:
+        application_parameters = application_parameters.reshape(-1, 1)
+    n_features = application_parameters.shape[1]
+    
+    # Get the number of cells from the dataset HDF5 file metadata
+    application_data_dir = os.path.join(application_dir, 'DeepONet')
+    h5_file_path = os.path.join(application_data_dir, 'data.h5')
+    with h5py.File(h5_file_path, 'r') as f:
+        n_cells = f.attrs['n_cells']
+        n_cases = f.attrs['n_cases']
+    
+    print(f"Number of cells: {n_cells}")
+    print(f"Number of cases: {n_cases}")
+    print(f"Number of parameters: {n_features}")
+
+    # make the directory for the vtk files
+    vtk_dir = os.path.join(application_dir, 'predictions_vtks')
+    os.makedirs(vtk_dir, exist_ok=True)
+    
+    # Process each case
+    for case_idx in range(n_cases):
+        # Get the current case's predictions: h, u, v
+        h_pred = denorm_predictions[case_idx * n_cells:(case_idx + 1) * n_cells, 0]
+        u_pred = denorm_predictions[case_idx * n_cells:(case_idx + 1) * n_cells, 1]
+        v_pred = denorm_predictions[case_idx * n_cells:(case_idx + 1) * n_cells, 2]
+        
+        # Get the current case's parameters
+        case_parameters = application_parameters[case_idx, :]  # Shape: (n_features,)
+        
+        # Read the VTK file which has the mesh information
+        reader = vtk.vtkUnstructuredGridReader()
+        reader.SetFileName(application_vtk_path)
+        reader.Update()
+        mesh = reader.GetOutput()
+        
+        # Remove any existing point data and cell data from the template file
+        # We only want the mesh structure (points and cells), not any existing data arrays
+        mesh.GetPointData().Initialize()
+        mesh.GetCellData().Initialize()
+        mesh.GetFieldData().Initialize()  # Also clear field data
+        
+        # Create cell data arrays for the predicted results
+        h_pred_array = numpy_to_vtk(h_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        h_pred_array.SetName("Water_Depth_Pred")
+        
+        u_pred_array = numpy_to_vtk(u_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        u_pred_array.SetName("X_Velocity_Pred")
+        
+        v_pred_array = numpy_to_vtk(v_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        v_pred_array.SetName("Y_Velocity_Pred")
+        
+        # Create velocity vectors for predicted values
+        velocity_pred = np.column_stack((u_pred, v_pred, np.zeros_like(u_pred)))  # Add z-component as 0
+        velocity_pred_array = numpy_to_vtk(velocity_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        velocity_pred_array.SetNumberOfComponents(3)
+        velocity_pred_array.SetName("Velocity_Pred")
+
+        # Create velocity magnitude for predicted values
+        velocity_magnitude_pred = np.sqrt(u_pred**2 + v_pred**2)
+        velocity_magnitude_pred_array = numpy_to_vtk(velocity_magnitude_pred, deep=True, array_type=vtk.VTK_FLOAT)
+        velocity_magnitude_pred_array.SetName("Velocity_Magnitude_Pred")
+        
+        # Add the arrays to the mesh as cell data
+        mesh.GetCellData().AddArray(h_pred_array)
+        mesh.GetCellData().AddArray(u_pred_array)
+        mesh.GetCellData().AddArray(v_pred_array)
+        mesh.GetCellData().AddArray(velocity_pred_array)
+        mesh.GetCellData().AddArray(velocity_magnitude_pred_array)
+        
+        # Add parameter values as Field Data (metadata for the entire dataset)
+        # Field Data is appropriate for case-level information like parameters
+        for param_idx in range(n_features):
+            # Create a single-element array with the parameter value
+            param_value = np.array([case_parameters[param_idx]], dtype=np.float32)
+            param_array = numpy_to_vtk(param_value, deep=True, array_type=vtk.VTK_FLOAT)
+            param_array.SetName(f"Parameter_{param_idx + 1}")
+            mesh.GetFieldData().AddArray(param_array)
+        
+        # Create a writer
+        writer = vtk.vtkUnstructuredGridWriter()
+        output_file = os.path.join(vtk_dir, f'case_{case_idx + 1}_application_results.vtk')
+        writer.SetFileName(output_file)
+        writer.SetInputData(mesh)
+        writer.Write()
+        
+        # Print parameter values for this case
+        param_str = ", ".join([f"Param_{i+1}={case_parameters[i]:.6f}" for i in range(n_features)])
+        print(f"Saved results for case {case_idx + 1} to {output_file} ({param_str})")
+    
+    print(f"\nFinished converting {n_cases} application cases to VTK files.")
+
+
+def pi_deeponet_application_compare_model_application_results_with_simulation_results(config, system_name):
+    """
+    Compare the model application results with the simulation results. 
+    The simulation results are stored in the "application/simulated_vtks" directory.
+    The model application results are stored in the "application/predictions_vtks" directory.
+
+    The results (both simulation and model application) are in vtk unstructured grid format. The function will read the results and compute the difference.
+
+    Args:
+        config: The configuration object.
+        system_name: The name of the system (e.g. "Windows", "Linux", "Mac").
+    """
+
+    # Check if config is an instance of Config
+    if not isinstance(config, Config):
+        raise ValueError("config must be an instance of Config")
+
+
+    # Get the unit system
+    unit_system = config['physics']['unit']
+    if unit_system not in ['SI', 'EN']:
+        raise ValueError("Invalid unit system. Valid unit systems are: SI, EN")
+
+    # Get the application directory
+    application_dir = config['application']['application_dir']
+    
+    # Make the diff_vtks directory
+    diff_vtks_dir = os.path.join(application_dir, "diff_vtks")
+    os.makedirs(diff_vtks_dir, exist_ok=True)
+
+    # Set the variable names for the results of model application and simulation
+    if unit_system == 'SI':
+        # Model application variables
+        model_application_h_name = 'Water_Depth_Pred'
+        model_application_u_name = 'X_Velocity_Pred'
+        model_application_v_name = 'Y_Velocity_Pred'
+        model_application_velocity_name = 'Velocity_Pred'  # Vector (3 components)
+        # Simulation variables
+        simulation_h_name = 'Water_Depth_m'
+        simulation_velocity_name = 'Velocity_m_p_s'  # Vector (2 or 3 components)
+        simulation_velocity_magnitude_name = 'Vel_Mag_m_p_s'
+    elif unit_system == 'EN':
+        # Model application variables
+        model_application_h_name = 'Water_Depth_Pred'
+        model_application_u_name = 'X_Velocity_Pred'
+        model_application_v_name = 'Y_Velocity_Pred'
+        model_application_velocity_name = 'Velocity_Pred'  # Vector (3 components)
+        # Simulation variables
+        simulation_h_name = 'Water_Depth_ft'
+        simulation_velocity_name = 'Velocity_ft_p_s'  # Vector (2 or 3 components)
+        simulation_velocity_magnitude_name = 'Vel_Mag_ft_p_s'
+    else:
+        raise ValueError("Invalid unit system. Valid unit systems are: SI, EN")
+
+    # Get the number of cases from the dataset HDF5 file metadata
+    application_data_dir = os.path.join(application_dir, 'DeepONet')
+    h5_file_path = os.path.join(application_data_dir, 'data.h5')
+    with h5py.File(h5_file_path, 'r') as f:
+        n_cases = f.attrs['n_cases']
+    
+    print(f"Number of cases: {n_cases}")
+
+    # Get the normalization statistics from the json file
+    with open(os.path.join(application_dir, config['application']['train_val_test_stats_path']), "r") as f:
+        normalization_stats = json.load(f)
+    normalization_method = normalization_stats["all_DeepONet_branch_trunk_outputs_stats"]["normalization_method"]
+    output_normalization_method = normalization_method["outputs"]
+    h_mean = normalization_stats["all_data_stats"]["h_mean"]
+    h_std = normalization_stats["all_data_stats"]["h_std"]
+    u_mean = normalization_stats["all_data_stats"]["u_mean"]
+    u_std = normalization_stats["all_data_stats"]["u_std"]
+    v_mean = normalization_stats["all_data_stats"]["v_mean"]
+    v_std = normalization_stats["all_data_stats"]["v_std"]
+    velocity_magnitude_mean = normalization_stats["all_data_stats"]["Umag_mean"]
+    velocity_magnitude_std = normalization_stats["all_data_stats"]["Umag_std"]
+
+    diff_h_mse_list = []
+    diff_u_mse_list = []
+    diff_v_mse_list = []
+    diff_velocity_magnitude_mse_list = []
+
+    diff_h_normalized_mse_list = []
+    diff_u_normalized_mse_list = []
+    diff_v_normalized_mse_list = []
+    diff_velocity_magnitude_normalized_mse_list = []
+
+    # Get the simulation results directory
+    simulation_results_dir = os.path.join(config['application']['application_dir'], 'simulated_vtks')
+    # Get the model application results directory
+    predictions_vtks_dir = os.path.join(config['application']['application_dir'], 'predictions_vtks')
+
+    # Loop over all cases 
+    for case_idx in range(n_cases):
+        # Get the simulation results
+        simulation_results = os.path.join(simulation_results_dir, f'case_{str(case_idx + 1).zfill(6)}.vtk')
+
+        # Get the model application results
+        predictions_results = os.path.join(predictions_vtks_dir, f'case_{case_idx + 1}_application_results.vtk')
+
+        # Read the two vtk files, check the consistency of the variables
+        simulation_reader = vtk.vtkUnstructuredGridReader()
+        simulation_reader.SetFileName(simulation_results)
+        simulation_reader.Update()
+        simulation_mesh = simulation_reader.GetOutput()
+        predictions_reader = vtk.vtkUnstructuredGridReader()
+        predictions_reader.SetFileName(predictions_results)
+        predictions_reader.Update()
+        predictions_mesh = predictions_reader.GetOutput()
+
+        # Check the consistency of the variables in simulation results
+        simulation_cell_data = simulation_mesh.GetCellData()
+        if not simulation_cell_data.HasArray(simulation_h_name):
+            raise ValueError(f"Variable {simulation_h_name} not found in simulation results")
+        if not simulation_cell_data.HasArray(simulation_velocity_name):
+            raise ValueError(f"Variable {simulation_velocity_name} not found in simulation results")
+        if not simulation_cell_data.HasArray(simulation_velocity_magnitude_name):
+            raise ValueError(f"Variable {simulation_velocity_magnitude_name} not found in simulation results")
+        
+        # Check the consistency of the variables in predictions results
+        predictions_cell_data = predictions_mesh.GetCellData()
+        if not predictions_cell_data.HasArray(model_application_h_name):
+            raise ValueError(f"Variable {model_application_h_name} not found in predictions results")
+        if not predictions_cell_data.HasArray(model_application_u_name):
+            raise ValueError(f"Variable {model_application_u_name} not found in predictions results")
+        if not predictions_cell_data.HasArray(model_application_v_name):
+            raise ValueError(f"Variable {model_application_v_name} not found in predictions results")
+        if not predictions_cell_data.HasArray(model_application_velocity_name):
+            raise ValueError(f"Variable {model_application_velocity_name} not found in predictions results")
+
+        # Get the variables from the simulation results and convert to numpy arrays
+        simulation_h_array = simulation_mesh.GetCellData().GetArray(simulation_h_name)
+        simulation_velocity_array = simulation_mesh.GetCellData().GetArray(simulation_velocity_name)
+        simulation_velocity_magnitude_array = simulation_mesh.GetCellData().GetArray(simulation_velocity_magnitude_name)
+        
+        # Convert VTK arrays to numpy arrays
+        simulation_h = vtk_to_numpy(simulation_h_array)
+        simulation_velocity = vtk_to_numpy(simulation_velocity_array)  # Shape: (n_cells, n_components)
+        simulation_velocity_magnitude = vtk_to_numpy(simulation_velocity_magnitude_array)
+
+        #make the z component of the simulation velocity array to be 0
+        simulation_velocity[:, 2] = 0
+        
+        # Extract u and v components from simulation velocity vector
+        # Simulation velocity may have 2 or 3 components (x, y, [z])
+        if simulation_velocity.shape[1] >= 2:
+            simulation_u = simulation_velocity[:, 0]
+            simulation_v = simulation_velocity[:, 1]
+        else:
+            raise ValueError(f"Simulation velocity array has unexpected shape: {simulation_velocity.shape}")
+
+        # Get the variables from the predictions results and convert to numpy arrays
+        predictions_h_array = predictions_mesh.GetCellData().GetArray(model_application_h_name)
+        predictions_u_array = predictions_mesh.GetCellData().GetArray(model_application_u_name)
+        predictions_v_array = predictions_mesh.GetCellData().GetArray(model_application_v_name)
+        predictions_velocity_array = predictions_mesh.GetCellData().GetArray(model_application_velocity_name)
+
+        # Convert VTK arrays to numpy arrays
+        predictions_h = vtk_to_numpy(predictions_h_array)
+        predictions_u = vtk_to_numpy(predictions_u_array)
+        predictions_v = vtk_to_numpy(predictions_v_array)
+        predictions_velocity = vtk_to_numpy(predictions_velocity_array)  # Shape: (n_cells, 3)
+
+        #make the z component of the predictions velocity array to be 0
+        predictions_velocity[:, 2] = 0
+
+        #print(f"predictions_velocity.shape: {predictions_velocity.shape}")
+        #print(f"simulation_velocity.shape: {simulation_velocity.shape}")
+        
+        # Compute velocity magnitude from predictions if not available
+        # predictions_velocity has shape (n_cells, 3) with components [u, v, 0]
+        predictions_velocity_magnitude = np.sqrt(predictions_u**2 + predictions_v**2)
+
+        # compute the normalized variables for both simulation and predictions
+        if output_normalization_method == 'z-score':
+            predictions_h_normalized = (predictions_h - h_mean) / h_std
+            predictions_u_normalized = (predictions_u - u_mean) / u_std
+            predictions_v_normalized = (predictions_v - v_mean) / v_std
+            predictions_velocity_magnitude_normalized = (predictions_velocity_magnitude - velocity_magnitude_mean) / velocity_magnitude_std
+
+            simulation_h_normalized = (simulation_h - h_mean) / h_std
+            simulation_u_normalized = (simulation_u - u_mean) / u_std
+            simulation_v_normalized = (simulation_v - v_mean) / v_std
+            simulation_velocity_magnitude_normalized = (simulation_velocity_magnitude - velocity_magnitude_mean) / velocity_magnitude_std
+        else:
+            raise ValueError(f"Invalid output normalization method: {output_normalization_method}")
+
+        # Compute the difference between the simulation and predictions
+        diff_h = predictions_h - simulation_h
+        diff_u = predictions_u - simulation_u
+        diff_v = predictions_v - simulation_v
+        diff_velocity_magnitude = predictions_velocity_magnitude - simulation_velocity_magnitude
+
+        # Compute the normalized difference between the simulation and predictions
+        diff_h_normalized = predictions_h_normalized - simulation_h_normalized
+        diff_u_normalized = predictions_u_normalized - simulation_u_normalized
+        diff_v_normalized = predictions_v_normalized - simulation_v_normalized
+        diff_velocity_magnitude_normalized = predictions_velocity_magnitude_normalized - simulation_velocity_magnitude_normalized
+
+        # Compute the MSE of the difference
+        diff_h_mse = np.mean(diff_h**2)
+        diff_u_mse = np.mean(diff_u**2)
+        diff_v_mse = np.mean(diff_v**2)
+        diff_velocity_magnitude_mse = np.mean(diff_velocity_magnitude**2)
+
+        diff_h_normalized_mse = np.mean(diff_h_normalized**2)
+        diff_u_normalized_mse = np.mean(diff_u_normalized**2)
+        diff_v_normalized_mse = np.mean(diff_v_normalized**2)
+        diff_velocity_magnitude_normalized_mse = np.mean(diff_velocity_magnitude_normalized**2)
+
+        diff_h_mse_list.append(float(diff_h_mse))
+        diff_u_mse_list.append(float(diff_u_mse))
+        diff_v_mse_list.append(float(diff_v_mse))
+        diff_velocity_magnitude_mse_list.append(float(diff_velocity_magnitude_mse))
+
+        diff_h_normalized_mse_list.append(float(diff_h_normalized_mse))
+        diff_u_normalized_mse_list.append(float(diff_u_normalized_mse))
+        diff_v_normalized_mse_list.append(float(diff_v_normalized_mse))
+        diff_velocity_magnitude_normalized_mse_list.append(float(diff_velocity_magnitude_normalized_mse))
+
+        # Create a new vtk file which contains the difference between the simulation and predictions
+        # Create a new unstructured grid and deep copy the mesh structure from simulation
+        difference_mesh = vtk.vtkUnstructuredGrid()
+        difference_mesh.DeepCopy(simulation_mesh)
+        
+        # Clear the cell data (we'll add difference arrays instead)
+        difference_mesh.GetCellData().Initialize()
+        
+        # Compute velocity difference vector
+        diff_velocity = np.column_stack((diff_u, diff_v, np.zeros_like(diff_u)))  # Add z-component as 0
+        
+        # Add the difference arrays to the cell data
+        diff_h_array = numpy_to_vtk(diff_h, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_h_array.SetName("Diff_Water_Depth")
+        difference_mesh.GetCellData().AddArray(diff_h_array)
+        
+        diff_u_array = numpy_to_vtk(diff_u, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_u_array.SetName("Diff_X_Velocity")
+        difference_mesh.GetCellData().AddArray(diff_u_array)
+        
+        diff_v_array = numpy_to_vtk(diff_v, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_v_array.SetName("Diff_Y_Velocity")
+        difference_mesh.GetCellData().AddArray(diff_v_array)
+
+        diff_velocity_array = numpy_to_vtk(diff_velocity, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_velocity_array.SetNumberOfComponents(3)
+        diff_velocity_array.SetName("Diff_Velocity")
+        difference_mesh.GetCellData().AddArray(diff_velocity_array)
+
+        diff_velocity_magnitude_array = numpy_to_vtk(diff_velocity_magnitude, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_velocity_magnitude_array.SetName("Diff_Velocity_Magnitude")
+        difference_mesh.GetCellData().AddArray(diff_velocity_magnitude_array)
+
+        # add the normalized difference arrays to the difference mesh
+        diff_h_normalized_array = numpy_to_vtk(diff_h_normalized, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_h_normalized_array.SetName("Diff_Water_Depth_Normalized")
+        difference_mesh.GetCellData().AddArray(diff_h_normalized_array)
+        
+        diff_u_normalized_array = numpy_to_vtk(diff_u_normalized, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_u_normalized_array.SetName("Diff_X_Velocity_Normalized")
+        difference_mesh.GetCellData().AddArray(diff_u_normalized_array)
+        
+        diff_v_normalized_array = numpy_to_vtk(diff_v_normalized, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_v_normalized_array.SetName("Diff_Y_Velocity_Normalized")
+        difference_mesh.GetCellData().AddArray(diff_v_normalized_array)
+        
+        diff_velocity_magnitude_normalized_array = numpy_to_vtk(diff_velocity_magnitude_normalized, deep=True, array_type=vtk.VTK_FLOAT)
+        diff_velocity_magnitude_normalized_array.SetName("Diff_Velocity_Magnitude_Normalized")
+        difference_mesh.GetCellData().AddArray(diff_velocity_magnitude_normalized_array)
+
+        # Add the prediction arrays to the difference mesh
+        predictions_h_array = numpy_to_vtk(predictions_h, deep=True, array_type=vtk.VTK_FLOAT)
+        predictions_h_array.SetName("Pred_Water_Depth")
+        difference_mesh.GetCellData().AddArray(predictions_h_array)
+        
+        predictions_u_array = numpy_to_vtk(predictions_u, deep=True, array_type=vtk.VTK_FLOAT)
+        predictions_u_array.SetName("Pred_X_Velocity")
+        difference_mesh.GetCellData().AddArray(predictions_u_array)
+        
+        predictions_v_array = numpy_to_vtk(predictions_v, deep=True, array_type=vtk.VTK_FLOAT)
+        predictions_v_array.SetName("Pred_Y_Velocity")
+        difference_mesh.GetCellData().AddArray(predictions_v_array)
+        
+        predictions_velocity_array = numpy_to_vtk(predictions_velocity, deep=True, array_type=vtk.VTK_FLOAT)
+        predictions_velocity_array.SetNumberOfComponents(3)
+        predictions_velocity_array.SetName("Pred_Velocity")
+        difference_mesh.GetCellData().AddArray(predictions_velocity_array)
+        
+        predictions_velocity_magnitude_array = numpy_to_vtk(predictions_velocity_magnitude, deep=True, array_type=vtk.VTK_FLOAT)
+        predictions_velocity_magnitude_array.SetName("Pred_Velocity_Magnitude")
+        difference_mesh.GetCellData().AddArray(predictions_velocity_magnitude_array)
+
+        # Add the simulation arrays to the difference mesh
+        simulation_h_array = numpy_to_vtk(simulation_h, deep=True, array_type=vtk.VTK_FLOAT)
+        simulation_h_array.SetName("Sim_Water_Depth")
+        difference_mesh.GetCellData().AddArray(simulation_h_array)
+        
+        simulation_velocity_array = numpy_to_vtk(simulation_velocity, deep=True, array_type=vtk.VTK_FLOAT)
+        simulation_velocity_array.SetName("Sim_Velocity")
+        difference_mesh.GetCellData().AddArray(simulation_velocity_array)
+        
+        simulation_velocity_magnitude_array = numpy_to_vtk(simulation_velocity_magnitude, deep=True, array_type=vtk.VTK_FLOAT)
+        simulation_velocity_magnitude_array.SetName("Sim_Velocity_Magnitude")
+        difference_mesh.GetCellData().AddArray(simulation_velocity_magnitude_array)
+        
+        #create a writer
+        difference_writer = vtk.vtkUnstructuredGridWriter()
+        difference_writer.SetFileName(os.path.join(application_dir, "diff_vtks", f'case_{case_idx + 1}_diff.vtk'))
+        difference_writer.SetInputData(difference_mesh)
+        difference_writer.Write()   
+
+    print(f"Diff_h_mse_list: {diff_h_mse_list}")
+    print(f"Diff_u_mse_list: {diff_u_mse_list}")
+    print(f"Diff_v_mse_list: {diff_v_mse_list}")
+    print(f"Diff_velocity_magnitude_mse_list: {diff_velocity_magnitude_mse_list}")
+
+    print(f"Diff_h_normalized_mse_list: {diff_h_normalized_mse_list}")
+    print(f"Diff_u_normalized_mse_list: {diff_u_normalized_mse_list}")
+    print(f"Diff_v_normalized_mse_list: {diff_v_normalized_mse_list}")
+    print(f"Diff_velocity_magnitude_normalized_mse_list: {diff_velocity_magnitude_normalized_mse_list}")
+ 
+    # Save both the original and normalized difference lists to a json file
+    with open(os.path.join(application_dir, "diff_lists.json"), "w") as f:
+        json.dump({"diff_h_mse_list": diff_h_mse_list, "diff_h_normalized_mse_list": diff_h_normalized_mse_list, "diff_u_mse_list": diff_u_mse_list, "diff_u_normalized_mse_list": diff_u_normalized_mse_list, "diff_v_mse_list": diff_v_mse_list, "diff_v_normalized_mse_list": diff_v_normalized_mse_list, "diff_velocity_magnitude_mse_list": diff_velocity_magnitude_mse_list, "diff_velocity_magnitude_normalized_mse_list": diff_velocity_magnitude_normalized_mse_list}, f, indent=4)
+    print(f"Both original and normalized diff lists saved to {os.path.join(application_dir, 'diff_lists.json')}")
+
+def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(config):
+    """
+    Plot the difference metrics against the parameter distance from the training data.
+
+    The distance is in file wasserstein_distance_results.json.
+    The difference metrics are in file diff_lists.json.
+    """
+
+    # Get the application directory
+    application_dir = config['application']['application_dir']
+
+    # Load the difference lists from the json file
+    with open(os.path.join(application_dir, "diff_lists.json"), "r") as f:
+        diff_lists = json.load(f)
+
+    case_indices = list(range(1, len(diff_lists["diff_h_mse_list"]) + 1))
+    
+    # Extract the data (only the normalized difference lists)
+    diff_h_normalized_mse_list = diff_lists["diff_h_normalized_mse_list"]
+    diff_u_normalized_mse_list = diff_lists["diff_u_normalized_mse_list"]
+    diff_v_normalized_mse_list = diff_lists["diff_v_normalized_mse_list"]
+    diff_velocity_magnitude_normalized_mse_list = diff_lists["diff_velocity_magnitude_normalized_mse_list"]
+
+    # Load the distance from the json file
+    with open(os.path.join(application_dir, "wasserstein_distance_results.json"), "r") as f:
+        wasserstein_distance_results = json.load(f)
+    distance_list = wasserstein_distance_results["wasserstein_distance_per_case"]
+
+    #diff value lists and distance list should have the same length
+    if len(diff_h_normalized_mse_list) != len(distance_list):
+        raise ValueError("The length of diff_h_normalized_mse_list and distance_list should be the same")
+    if len(diff_velocity_magnitude_normalized_mse_list) != len(distance_list):
+        raise ValueError("The length of diff_velocity_magnitude_normalized_mse_list and distance_list should be the same")
+
+    # Order the diff value lists and distance list by the distance
+    diff_h_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_h_normalized_mse_list))]
+    diff_u_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_u_normalized_mse_list))]
+    diff_v_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_v_normalized_mse_list))]
+    diff_velocity_magnitude_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_velocity_magnitude_normalized_mse_list))]
+    distance_list = sorted(distance_list)
+
+    # Plot (scatter) the difference lists (h, u, v and velocity magnitude in four subplots; the top three subplots share the same x axis as the bottom subplot)
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
+
+    scatter_size = 40
+    
+    # Plot water depth MSE
+    ax1.scatter(distance_list, diff_h_normalized_mse_list, color='blue', marker='o', s=scatter_size, label='Water Depth MSE')
+    #ax1.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Normalized MSE', fontsize=18)
+    #ax1.set_title('Water Depth Prediction Error (MSE)', fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3, linestyle='--')
+    ax1.legend(fontsize=16)
+    #ax1.set_xlim(0, max(distance_list))
+    ax1.tick_params(axis='both', labelsize=16)
+
+    # Plot x velocity MSE
+    ax2.scatter(distance_list, diff_u_normalized_mse_list, color='green', marker='o', s=scatter_size, label='X Velocity MSE')
+    #ax2.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Normalized MSE', fontsize=18)
+    #ax2.set_title('X Velocity Prediction Error (MSE)', fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3, linestyle='--')
+    ax2.legend(fontsize=16)
+    #ax2.set_xlim(0, max(distance_list))
+    ax2.tick_params(axis='both', labelsize=16)
+
+    # Plot y velocity MSE
+    ax3.scatter(distance_list, diff_v_normalized_mse_list, color='red', marker='o', s=scatter_size, label='Y Velocity MSE')
+    #ax3.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Normalized MSE', fontsize=18)
+    #ax3.set_title('Y Velocity Prediction Error (MSE)', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3, linestyle='--')
+    ax3.legend(fontsize=16)
+    #ax3.set_xlim(0, max(distance_list))
+    ax3.tick_params(axis='both', labelsize=16)
+    
+    # Plot velocity magnitude MSE
+    ax4.scatter(distance_list, diff_velocity_magnitude_normalized_mse_list, color='purple', marker='o', s=scatter_size, label='Velocity Magnitude MSE')
+    ax4.set_xlabel('Wasserstein Distance', fontsize=18)
+    ax4.set_ylabel('Normalized MSE', fontsize=18)
+    #ax4.set_title('Velocity Magnitude Prediction Error (MSE)', fontsize=14, fontweight='bold')
+    ax4.grid(True, alpha=0.3, linestyle='--')
+    ax4.legend(fontsize=16)
+    ax4.set_xlim(0, max(distance_list))
+    ax4.tick_params(axis='both', labelsize=16)
+    
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    
+    # Save the figure
+    output_file = os.path.join(application_dir, 'difference_metrics_against_parameter_distance.png')
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"Plot saved to {output_file}")
+    
+    # Show the plot
+    #plt.show()
 

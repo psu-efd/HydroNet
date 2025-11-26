@@ -1,4 +1,7 @@
 # Project specific ignores
+*.slurm.o*
+*.slurm.e*
+examples/PI_DeepONet/SacramentoRiver_steady/SacramentoRiver_steady_PI_DeepONet_*
 *.xlsx
 examples/PI_DeepONet/block_in_channel_steady/data_generation/
 examples/PI_DeepONet/SacramentoRiver_steady/data_generation/

@@ -608,8 +608,9 @@ class PI_SWE_DeepONetTrainer:
         """
         self.model.eval()
         
-        # Sample a few batches
-        num_samples = min(5, len(train_loader))
+        
+        #num_samples = min(5, len(train_loader)) #only use the first 5 samples to compute the initial loss magnitudes
+        num_samples = len(train_loader)   # Use all the samples to compute the initial loss magnitudes
         data_losses = []
         pde_losses = []
         pde_continuity_losses = []
