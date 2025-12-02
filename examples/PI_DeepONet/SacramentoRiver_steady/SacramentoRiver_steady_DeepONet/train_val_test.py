@@ -73,7 +73,7 @@ if __name__ == "__main__":
     #pi_deeponet_train(config)
 
     # Plot training history
-    pi_deeponet_plot_training_history('./history_20251124_185944.json')
+    pi_deeponet_plot_training_history('./history_20251130_171428.json')
 
     # Test the model with the best model and save the test results to vtk files
     pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)

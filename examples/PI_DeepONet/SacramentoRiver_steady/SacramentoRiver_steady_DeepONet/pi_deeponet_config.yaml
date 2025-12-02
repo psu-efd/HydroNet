@@ -10,12 +10,12 @@ model:
   name: "PI_SWE_DeepONet"
   use_physics_loss: false  # Whether to enable physics-informed loss computation
   branch_net:
-    hidden_layers: [64, 128, 256, 128, 64]
+    hidden_layers: [64, 128, 256, 256, 128, 64]
     activation: "relu"
     dropout_rate: 0.0
     branch_input_dim: 3  # Number of sensors (input functions)
   trunk_net:
-    hidden_layers: [64, 128, 256, 128, 64]
+    hidden_layers: [64, 128, 256, 256, 128, 64]
     activation: "relu"
     dropout_rate: 0.0
     trunk_input_dim: 2  # (x, y) coordinates
@@ -36,7 +36,7 @@ physics:
 # Training parameters
 training:
   batch_size: 16384
-  epochs: 200
+  epochs: 1000
   save_freq: 10
   learning_rate: 0.001
   weight_decay: 1e-5
@@ -55,7 +55,7 @@ training:
     # Set to true to enable automatic balancing based on initial loss magnitudes
     # When enabled, the base weights below are multiplied by balancing factors
     use_adaptive_balancing: true  # Recommended: true for better training stability
-    use_adaptive_pde_component_balancing: true  # Balance continuity vs momentum losses (recommended: true)
+    use_adaptive_pde_component_balancing: false  # Balance continuity vs momentum losses (recommended: true)
     adaptive_balancing_frequency: 10  # Update weights every N epochs throughout training (recommended: 10)
     # If adaptive_balancing_frequency is not specified, uses old behavior:
     # adaptive_balancing_epochs: 10  # Only update weights during first N epochs (deprecated, use frequency instead)

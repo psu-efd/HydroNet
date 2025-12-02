@@ -279,7 +279,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     
     # Evaluate model on test dataset
     model.eval()  # Set model to evaluation mode
-    total_loss = 0.0
+    total_loss = 0.0    
     all_predictions = []
     all_targets = []
     
@@ -299,7 +299,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
             # Calculate loss
             loss = trainer.loss_fn(output, target)
             total_loss += loss.item()
-            
+
             # Store predictions and targets for analysis
             all_predictions.append(output.cpu().numpy())
             all_targets.append(target.cpu().numpy())
@@ -610,7 +610,7 @@ def _pi_deeponet_plot_training_history_training_loss_and_validation_loss(train_l
     plt.ylabel('Loss', fontsize=14)
 
     # Make y axis in log scale (optional, uncomment if needed)
-    # plt.yscale('log')
+    plt.yscale('log')
 
     # Axis ticks format
     plt.xticks(fontsize=12)
@@ -669,6 +669,12 @@ def _pi_deeponet_plot_training_component_loss_history_data_loss_and_pinn_loss(de
     ax1.set_title('Component Losses (Unweighted)', fontsize=14, fontweight='bold')
 
     # Bottom subplot: Losses with adaptive weights
+    # Need to deal with the case of resuming training from a checkpoint. In this case, the length of the adaptive weights list is shorter than the length of the losses list. In this case, we need to pad the adaptive weights list on the front with zero values.
+    if len(adaptive_weight_deeponet_data_loss) < len(deeponet_data_loss):
+        adaptive_weight_deeponet_data_loss = np.concatenate([np.zeros(len(deeponet_data_loss) - len(adaptive_weight_deeponet_data_loss)), adaptive_weight_deeponet_data_loss])
+    if len(adaptive_weight_pinn_pde_loss) < len(pinn_pde_loss):
+        adaptive_weight_pinn_pde_loss = np.concatenate([np.zeros(len(pinn_pde_loss) - len(adaptive_weight_pinn_pde_loss)), adaptive_weight_pinn_pde_loss])
+
     ax2.plot(epochs, deeponet_data_loss * adaptive_weight_deeponet_data_loss, label='DeepONet Data Loss (Weighted)', linewidth=2)
     ax2.plot(epochs, pinn_pde_loss * adaptive_weight_pinn_pde_loss, label='PINN PDE Loss (Weighted)', linewidth=2)
     ax2.set_xlabel('Epoch', fontsize=14)
@@ -733,6 +739,14 @@ def _pi_deeponet_plot_training_component_loss_history_pde_loss_continuity_and_mo
     ax1.set_title('PDE Component Losses (Unweighted)', fontsize=14, fontweight='bold')
 
     # Bottom subplot: PDE component losses with adaptive weights
+    # Need to deal with the case of resuming training from a checkpoint. In this case, the length of the adaptive weights list is shorter than the length of the losses list. In this case, we need to pad the adaptive weights list on the front with zero values.
+    if len(adaptive_weight_pde_continuity) < len(pinn_pde_loss_cty):
+        adaptive_weight_pde_continuity = np.concatenate([np.zeros(len(pinn_pde_loss_cty) - len(adaptive_weight_pde_continuity)), adaptive_weight_pde_continuity])
+    if len(adaptive_weight_pde_momentum_x) < len(pinn_pde_loss_mom_x):
+        adaptive_weight_pde_momentum_x = np.concatenate([np.zeros(len(pinn_pde_loss_mom_x) - len(adaptive_weight_pde_momentum_x)), adaptive_weight_pde_momentum_x])
+    if len(adaptive_weight_pde_momentum_y) < len(pinn_pde_loss_mom_y):
+        adaptive_weight_pde_momentum_y = np.concatenate([np.zeros(len(pinn_pde_loss_mom_y) - len(adaptive_weight_pde_momentum_y)), adaptive_weight_pde_momentum_y])
+        
     ax2.plot(epochs, pinn_pde_loss_cty * adaptive_weight_pde_continuity, label='PINN PDE Loss Continuity (Weighted)', linewidth=2)
     ax2.plot(epochs, pinn_pde_loss_mom_x * adaptive_weight_pde_momentum_x, label='PINN PDE Loss Momentum X (Weighted)', linewidth=2)
     ax2.plot(epochs, pinn_pde_loss_mom_y * adaptive_weight_pde_momentum_y, label='PINN PDE Loss Momentum Y (Weighted)', linewidth=2)

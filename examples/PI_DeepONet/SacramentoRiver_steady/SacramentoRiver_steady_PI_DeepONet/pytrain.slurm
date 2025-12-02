@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=4G     #using 12*4=48GB ram
-#SBATCH --time=12:00:00      #1 hours, general format:DD-HHH:MM:SS
+#SBATCH --time=48:00:00      #1 hours, general format:DD-HHH:MM:SS
 #SBATCH --job-name=pytrain  #change this for each job to keep track
 #SBATCH --account=xzl123_cr_usgs
 #SBATCH --partition=standard     #partition
