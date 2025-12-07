@@ -1,12 +1,12 @@
 # How to View TensorBoard Results
 
-After training your DeepONet model, TensorBoard logs are automatically saved. Here's how to view them:
+After training your ML model, TensorBoard logs are automatically saved. Here's how to view them:
 
 ## Step 1: Navigate to the Project Directory
 
-Open a terminal/PowerShell and navigate to the project directory:
+Open a terminal/PowerShell and navigate to the example directory, .e.g., for the Sacramento River steady example:
 ```bash
-cd "C:\Users\xzl123\Dropbox\PycharmProjects\HydroNet\examples\DeepONet\SacramentoRiver_small_steady"
+cd "path\to\HydroNet\examples\PI_DeepONet\SacramentoRiver_steady"
 ```
 
 ## Step 2: Launch TensorBoard
@@ -14,7 +14,7 @@ cd "C:\Users\xzl123\Dropbox\PycharmProjects\HydroNet\examples\DeepONet\Sacrament
 You have two options:
 
 ### Option A: View the Latest Training Run (Recommended)
-The training script creates timestamped log directories like `logs/swe_deeponet_YYYYMMDD-HHMMSS/`. To view the most recent run:
+The training script creates timestamped log directories in `logs/tensorboard/`. To view the most recent run:
 
 ```bash
 tensorboard --logdir=logs

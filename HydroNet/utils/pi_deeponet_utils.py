@@ -300,7 +300,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
             loss = trainer.loss_fn(output, target)
             total_loss += loss.item()
 
-            # Store predictions and targets for analysis
+            # Store predictions and targets for analysis    
             all_predictions.append(output.cpu().numpy())
             all_targets.append(target.cpu().numpy())
             
@@ -308,7 +308,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
             sample_count += len(branch_input)
 
     # Calculate average test loss
-    avg_test_loss = total_loss / len(test_loader)
+    avg_test_loss = np.sqrt(total_loss / len(test_loader))
     print(f"\nTest Loss (average) on test dataset (normalized): {avg_test_loss:.6f}")
     
     # Concatenate all predictions and targets
@@ -316,8 +316,8 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     all_targets = np.vstack(all_targets)
     
     # Calculate additional metrics (e.g., MSE for each output dimension)
-    mse_per_dim = np.mean((all_predictions - all_targets) ** 2, axis=0)
-    print(f"\nMSE per output dimension (normalized): {mse_per_dim}")
+    rmse_per_dim = np.sqrt(np.mean((all_predictions - all_targets) ** 2, axis=0))
+    print(f"\nRMSE per output dimension (normalized): {rmse_per_dim}")
 
     # Denormalize the predictions and targets
     # Assuming the outputs are normalized as (x - mean) / std
@@ -325,19 +325,19 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     denorm_targets = all_targets * output_std + output_mean
     
     # Calculate metrics on denormalized values
-    denorm_mse_per_dim = np.mean((denorm_predictions - denorm_targets) ** 2, axis=0)
-    print(f"MSE per output dimension (denormalized): {denorm_mse_per_dim}\n")
+    denorm_rmse_per_dim = np.sqrt(np.mean((denorm_predictions - denorm_targets) ** 2, axis=0))
+    print(f"RMSE per output dimension (denormalized): {denorm_rmse_per_dim}\n")
 
     # Save the denormalized predictions and targets to a npz file
     np.savez(f'{test_data_path}/test_results.npz', denorm_predictions=denorm_predictions, denorm_targets=denorm_targets)
 
     results_summary = {
-        'test_loss': avg_test_loss,
+        'test_loss_rmse': avg_test_loss,
         'normalized': {
-           'mse_per_dim': mse_per_dim.tolist(),
+           'rmse_per_dim': rmse_per_dim.tolist(),
        },
        'denormalized': {
-           'mse_per_dim': denorm_mse_per_dim.tolist(),
+           'rmse_per_dim': denorm_rmse_per_dim.tolist(),
        },
         'samples': {
             'num_samples': sample_count,
@@ -1322,7 +1322,8 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
     The simulation results are stored in the "application/simulated_vtks" directory.
     The model application results are stored in the "application/predictions_vtks" directory.
 
-    The results (both simulation and model application) are in vtk unstructured grid format. The function will read the results and compute the difference.
+    The results (both simulation and model application) are in vtk unstructured grid format. 
+    The function will read the results and compute the difference.
 
     Args:
         config: The configuration object.
@@ -1381,6 +1382,7 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
     # Get the normalization statistics from the json file
     with open(os.path.join(application_dir, config['application']['train_val_test_stats_path']), "r") as f:
         normalization_stats = json.load(f)
+
     normalization_method = normalization_stats["all_DeepONet_branch_trunk_outputs_stats"]["normalization_method"]
     output_normalization_method = normalization_method["outputs"]
     h_mean = normalization_stats["all_data_stats"]["h_mean"]
@@ -1392,15 +1394,15 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
     velocity_magnitude_mean = normalization_stats["all_data_stats"]["Umag_mean"]
     velocity_magnitude_std = normalization_stats["all_data_stats"]["Umag_std"]
 
-    diff_h_mse_list = []
-    diff_u_mse_list = []
-    diff_v_mse_list = []
-    diff_velocity_magnitude_mse_list = []
+    diff_h_rmse_list = []
+    diff_u_rmse_list = []
+    diff_v_rmse_list = []
+    diff_velocity_magnitude_rmse_list = []
 
-    diff_h_normalized_mse_list = []
-    diff_u_normalized_mse_list = []
-    diff_v_normalized_mse_list = []
-    diff_velocity_magnitude_normalized_mse_list = []
+    diff_h_normalized_rmse_list = []
+    diff_u_normalized_rmse_list = []
+    diff_v_normalized_rmse_list = []
+    diff_velocity_magnitude_normalized_rmse_list = []
 
     # Get the simulation results directory
     simulation_results_dir = os.path.join(config['application']['application_dir'], 'simulated_vtks')
@@ -1409,6 +1411,8 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
 
     # Loop over all cases 
     for case_idx in range(n_cases):
+        print(f"Processing case {case_idx + 1} of {n_cases}")
+
         # Get the simulation results
         simulation_results = os.path.join(simulation_results_dir, f'case_{str(case_idx + 1).zfill(6)}.vtk')
 
@@ -1514,26 +1518,26 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
         diff_v_normalized = predictions_v_normalized - simulation_v_normalized
         diff_velocity_magnitude_normalized = predictions_velocity_magnitude_normalized - simulation_velocity_magnitude_normalized
 
-        # Compute the MSE of the difference
-        diff_h_mse = np.mean(diff_h**2)
-        diff_u_mse = np.mean(diff_u**2)
-        diff_v_mse = np.mean(diff_v**2)
-        diff_velocity_magnitude_mse = np.mean(diff_velocity_magnitude**2)
+        # Compute the RMSE of the difference
+        diff_h_rmse = np.sqrt(np.mean(diff_h**2))   
+        diff_u_rmse = np.sqrt(np.mean(diff_u**2))
+        diff_v_rmse = np.sqrt(np.mean(diff_v**2))
+        diff_velocity_magnitude_rmse = np.sqrt(np.mean(diff_velocity_magnitude**2))
 
-        diff_h_normalized_mse = np.mean(diff_h_normalized**2)
-        diff_u_normalized_mse = np.mean(diff_u_normalized**2)
-        diff_v_normalized_mse = np.mean(diff_v_normalized**2)
-        diff_velocity_magnitude_normalized_mse = np.mean(diff_velocity_magnitude_normalized**2)
+        diff_h_normalized_rmse = np.sqrt(np.mean(diff_h_normalized**2))
+        diff_u_normalized_rmse = np.sqrt(np.mean(diff_u_normalized**2))
+        diff_v_normalized_rmse = np.sqrt(np.mean(diff_v_normalized**2))
+        diff_velocity_magnitude_normalized_rmse = np.sqrt(np.mean(diff_velocity_magnitude_normalized**2))
 
-        diff_h_mse_list.append(float(diff_h_mse))
-        diff_u_mse_list.append(float(diff_u_mse))
-        diff_v_mse_list.append(float(diff_v_mse))
-        diff_velocity_magnitude_mse_list.append(float(diff_velocity_magnitude_mse))
+        diff_h_rmse_list.append(float(diff_h_rmse))
+        diff_u_rmse_list.append(float(diff_u_rmse))
+        diff_v_rmse_list.append(float(diff_v_rmse))
+        diff_velocity_magnitude_rmse_list.append(float(diff_velocity_magnitude_rmse))
 
-        diff_h_normalized_mse_list.append(float(diff_h_normalized_mse))
-        diff_u_normalized_mse_list.append(float(diff_u_normalized_mse))
-        diff_v_normalized_mse_list.append(float(diff_v_normalized_mse))
-        diff_velocity_magnitude_normalized_mse_list.append(float(diff_velocity_magnitude_normalized_mse))
+        diff_h_normalized_rmse_list.append(float(diff_h_normalized_rmse))
+        diff_u_normalized_rmse_list.append(float(diff_u_normalized_rmse))
+        diff_v_normalized_rmse_list.append(float(diff_v_normalized_rmse))
+        diff_velocity_magnitude_normalized_rmse_list.append(float(diff_velocity_magnitude_normalized_rmse))
 
         # Create a new vtk file which contains the difference between the simulation and predictions
         # Create a new unstructured grid and deep copy the mesh structure from simulation
@@ -1626,19 +1630,19 @@ def pi_deeponet_application_compare_model_application_results_with_simulation_re
         difference_writer.SetInputData(difference_mesh)
         difference_writer.Write()   
 
-    print(f"Diff_h_mse_list: {diff_h_mse_list}")
-    print(f"Diff_u_mse_list: {diff_u_mse_list}")
-    print(f"Diff_v_mse_list: {diff_v_mse_list}")
-    print(f"Diff_velocity_magnitude_mse_list: {diff_velocity_magnitude_mse_list}")
+    print(f"Diff_h_rmse_list: {diff_h_rmse_list}")
+    print(f"Diff_u_rmse_list: {diff_u_rmse_list}")
+    print(f"Diff_v_rmse_list: {diff_v_rmse_list}")
+    print(f"Diff_velocity_magnitude_rmse_list: {diff_velocity_magnitude_rmse_list}")
 
-    print(f"Diff_h_normalized_mse_list: {diff_h_normalized_mse_list}")
-    print(f"Diff_u_normalized_mse_list: {diff_u_normalized_mse_list}")
-    print(f"Diff_v_normalized_mse_list: {diff_v_normalized_mse_list}")
-    print(f"Diff_velocity_magnitude_normalized_mse_list: {diff_velocity_magnitude_normalized_mse_list}")
+    print(f"Diff_h_normalized_rmse_list: {diff_h_normalized_rmse_list}")
+    print(f"Diff_u_normalized_rmse_list: {diff_u_normalized_rmse_list}")
+    print(f"Diff_v_normalized_rmse_list: {diff_v_normalized_rmse_list}")
+    print(f"Diff_velocity_magnitude_normalized_rmse_list: {diff_velocity_magnitude_normalized_rmse_list}")
  
     # Save both the original and normalized difference lists to a json file
     with open(os.path.join(application_dir, "diff_lists.json"), "w") as f:
-        json.dump({"diff_h_mse_list": diff_h_mse_list, "diff_h_normalized_mse_list": diff_h_normalized_mse_list, "diff_u_mse_list": diff_u_mse_list, "diff_u_normalized_mse_list": diff_u_normalized_mse_list, "diff_v_mse_list": diff_v_mse_list, "diff_v_normalized_mse_list": diff_v_normalized_mse_list, "diff_velocity_magnitude_mse_list": diff_velocity_magnitude_mse_list, "diff_velocity_magnitude_normalized_mse_list": diff_velocity_magnitude_normalized_mse_list}, f, indent=4)
+        json.dump({"diff_h_rmse_list": diff_h_rmse_list, "diff_h_normalized_rmse_list": diff_h_normalized_rmse_list, "diff_u_rmse_list": diff_u_rmse_list, "diff_u_normalized_rmse_list": diff_u_normalized_rmse_list, "diff_v_rmse_list": diff_v_rmse_list, "diff_v_normalized_rmse_list": diff_v_normalized_rmse_list, "diff_velocity_magnitude_rmse_list": diff_velocity_magnitude_rmse_list, "diff_velocity_magnitude_normalized_rmse_list": diff_velocity_magnitude_normalized_rmse_list}, f, indent=4)
     print(f"Both original and normalized diff lists saved to {os.path.join(application_dir, 'diff_lists.json')}")
 
 def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(config):
@@ -1649,6 +1653,8 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     The difference metrics are in file diff_lists.json.
     """
 
+    print("Plotting the difference metrics against the parameter distance from the training data...")
+
     # Get the application directory
     application_dir = config['application']['application_dir']
 
@@ -1656,13 +1662,13 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     with open(os.path.join(application_dir, "diff_lists.json"), "r") as f:
         diff_lists = json.load(f)
 
-    case_indices = list(range(1, len(diff_lists["diff_h_mse_list"]) + 1))
+    case_indices = list(range(1, len(diff_lists["diff_h_rmse_list"]) + 1))
     
     # Extract the data (only the normalized difference lists)
-    diff_h_normalized_mse_list = diff_lists["diff_h_normalized_mse_list"]
-    diff_u_normalized_mse_list = diff_lists["diff_u_normalized_mse_list"]
-    diff_v_normalized_mse_list = diff_lists["diff_v_normalized_mse_list"]
-    diff_velocity_magnitude_normalized_mse_list = diff_lists["diff_velocity_magnitude_normalized_mse_list"]
+    diff_h_normalized_rmse_list = diff_lists["diff_h_normalized_rmse_list"]
+    diff_u_normalized_rmse_list = diff_lists["diff_u_normalized_rmse_list"]
+    diff_v_normalized_rmse_list = diff_lists["diff_v_normalized_rmse_list"]
+    diff_velocity_magnitude_normalized_rmse_list = diff_lists["diff_velocity_magnitude_normalized_rmse_list"]
 
     # Load the distance from the json file
     with open(os.path.join(application_dir, "wasserstein_distance_results.json"), "r") as f:
@@ -1670,16 +1676,16 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     distance_list = wasserstein_distance_results["wasserstein_distance_per_case"]
 
     #diff value lists and distance list should have the same length
-    if len(diff_h_normalized_mse_list) != len(distance_list):
-        raise ValueError("The length of diff_h_normalized_mse_list and distance_list should be the same")
-    if len(diff_velocity_magnitude_normalized_mse_list) != len(distance_list):
-        raise ValueError("The length of diff_velocity_magnitude_normalized_mse_list and distance_list should be the same")
+    if len(diff_h_normalized_rmse_list) != len(distance_list):
+        raise ValueError("The length of diff_h_normalized_rmse_list and distance_list should be the same")
+    if len(diff_velocity_magnitude_normalized_rmse_list) != len(distance_list):
+        raise ValueError("The length of diff_velocity_magnitude_normalized_rmse_list and distance_list should be the same")
 
     # Order the diff value lists and distance list by the distance
-    diff_h_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_h_normalized_mse_list))]
-    diff_u_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_u_normalized_mse_list))]
-    diff_v_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_v_normalized_mse_list))]
-    diff_velocity_magnitude_normalized_mse_list = [x for _, x in sorted(zip(distance_list, diff_velocity_magnitude_normalized_mse_list))]
+    diff_h_normalized_rmse_list = [x for _, x in sorted(zip(distance_list, diff_h_normalized_rmse_list))]
+    diff_u_normalized_rmse_list = [x for _, x in sorted(zip(distance_list, diff_u_normalized_rmse_list))]
+    diff_v_normalized_rmse_list = [x for _, x in sorted(zip(distance_list, diff_v_normalized_rmse_list))]
+    diff_velocity_magnitude_normalized_rmse_list = [x for _, x in sorted(zip(distance_list, diff_velocity_magnitude_normalized_rmse_list))]
     distance_list = sorted(distance_list)
 
     # Plot (scatter) the difference lists (h, u, v and velocity magnitude in four subplots; the top three subplots share the same x axis as the bottom subplot)
@@ -1688,9 +1694,9 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     scatter_size = 40
     
     # Plot water depth MSE
-    ax1.scatter(distance_list, diff_h_normalized_mse_list, color='blue', marker='o', s=scatter_size, label='Water Depth MSE')
+    ax1.scatter(distance_list, diff_h_normalized_rmse_list, color='blue', marker='o', s=scatter_size, label='Water Depth RMSE')
     #ax1.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('Normalized MSE', fontsize=18)
+    ax1.set_ylabel('Normalized RMSE', fontsize=18)
     #ax1.set_title('Water Depth Prediction Error (MSE)', fontsize=14, fontweight='bold')
     ax1.grid(True, alpha=0.3, linestyle='--')
     ax1.legend(fontsize=16)
@@ -1698,9 +1704,9 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     ax1.tick_params(axis='both', labelsize=16)
 
     # Plot x velocity MSE
-    ax2.scatter(distance_list, diff_u_normalized_mse_list, color='green', marker='o', s=scatter_size, label='X Velocity MSE')
+    ax2.scatter(distance_list, diff_u_normalized_rmse_list, color='green', marker='o', s=scatter_size, label='X Velocity RMSE')
     #ax2.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('Normalized MSE', fontsize=18)
+    ax2.set_ylabel('Normalized RMSE', fontsize=18)
     #ax2.set_title('X Velocity Prediction Error (MSE)', fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3, linestyle='--')
     ax2.legend(fontsize=16)
@@ -1708,9 +1714,9 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     ax2.tick_params(axis='both', labelsize=16)
 
     # Plot y velocity MSE
-    ax3.scatter(distance_list, diff_v_normalized_mse_list, color='red', marker='o', s=scatter_size, label='Y Velocity MSE')
+    ax3.scatter(distance_list, diff_v_normalized_rmse_list, color='red', marker='o', s=scatter_size, label='Y Velocity RMSE')
     #ax3.set_xlabel('Wasserstein Distance', fontsize=12, fontweight='bold')
-    ax3.set_ylabel('Normalized MSE', fontsize=18)
+    ax3.set_ylabel('Normalized RMSE', fontsize=18)
     #ax3.set_title('Y Velocity Prediction Error (MSE)', fontsize=14, fontweight='bold')
     ax3.grid(True, alpha=0.3, linestyle='--')
     ax3.legend(fontsize=16)
@@ -1718,9 +1724,9 @@ def pi_deeponet_application_plot_difference_metrics_against_parameter_distance(c
     ax3.tick_params(axis='both', labelsize=16)
     
     # Plot velocity magnitude MSE
-    ax4.scatter(distance_list, diff_velocity_magnitude_normalized_mse_list, color='purple', marker='o', s=scatter_size, label='Velocity Magnitude MSE')
+    ax4.scatter(distance_list, diff_velocity_magnitude_normalized_rmse_list, color='purple', marker='o', s=scatter_size, label='Velocity Magnitude RMSE')
     ax4.set_xlabel('Wasserstein Distance', fontsize=18)
-    ax4.set_ylabel('Normalized MSE', fontsize=18)
+    ax4.set_ylabel('Normalized RMSE', fontsize=18)
     #ax4.set_title('Velocity Magnitude Prediction Error (MSE)', fontsize=14, fontweight='bold')
     ax4.grid(True, alpha=0.3, linestyle='--')
     ax4.legend(fontsize=16)

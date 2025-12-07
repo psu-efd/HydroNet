@@ -89,7 +89,7 @@ data:
     train_data_path: "data/DeepONet/train"
     val_data_path: "data/DeepONet/val"
     test_data_path: "data/DeepONet/test"  
-    train_val_test_stats_path: "data/DeepONet/train_val_test_stats.h5"  # Path to the dataset mean and std file (for normalization/denormalization purposes)
+    train_val_test_stats_path: "data/DeepONet/all_DeepONet_stats.json"  # Path to the dataset mean and std file (for normalization/denormalization purposes)
   nCells: 5036  # Number of cells in the SRH-2D cases
   template_vtk_file: "data/case.vtk"  # Template vtk file for the data generation (test cases)
 

@@ -1,8 +1,9 @@
-#This script plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the test cases.
-# All results are in vtk files. Each vtk file contains the results for a test case and it also has the SRH-2D simulation results for the same test case.
+#This script plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the application cases.
+# All results are in vtk files. Each vtk file contains the results for an application case and it also has the SRH-2D simulation results for the same application case.
 # It produces two figures. 
 # 1. For Figure 1, it plots 3 rows and 4 columns of subplots. Each row is for SRH-2D simulation, SWE-DeepONet, and PI-SWE-DeepONet, respectively. Columns are fro h, u, v, and velocity vector plots, respectively.
 # 2. For Figure 2, it plots the difference between DeepONet and SRH-2D simulation, and PI-SWE-DeepONet and SRH-2D simulation, respectively. This figure has 2 rows and 4 columns. The first row is for the difference between DeepONet and SRH-2D simulation, and the second row is for the difference between PI-SWE-DeepONet and SRH-2D simulation. Columns are for difference in h, u, v, and velocity magnitude plots, respectively.
+# Remove axis labels and titles from the subplots.
 
 import os
 import numpy as np
@@ -98,28 +99,28 @@ def extract_boundary_outline(vtk_fileName):
     else:
         return np.array([]).reshape(0, 2)
 
-def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_deeponet_result_dir):
+def plot_compare_application_case_results(application_case_indices, deeponet_result_dir, pi_deeponet_result_dir):
     """
-    Plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the test cases.
+    Plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the application cases.
 
-    The figures ar saved as png files in the current directory. The figure names are 'compare_test_case_results_{case_id}.png' and 'compare_test_case_diff_2_{case_id}.png'.
+    The figures ar saved as png files in the current directory. The figure names are 'compare_application_case_results_{case_id}.png' and 'compare_application_case_diff_2_{case_id}.png'.
 
     Args:
-        test_case_indices: The indices of the test cases to plot.
+        application_case_indices: The indices of the application cases to plot.
         deeponet_result_dir: The directory of the DeepONet result files.
         pi_deeponet_result_dir: The directory of the PI-DeepONet result files.
     Returns:
         None
     """
 
-    # Loop through the test case indices
-    for test_case_index in test_case_indices:
+    # Loop through the application case indices
+    for application_case_index in application_case_indices:
         # Get the result files - check file naming convention
-        deeponet_result_file = os.path.join(deeponet_result_dir, f'case_{test_case_index}_test_results.vtk')
+        deeponet_result_file = os.path.join(deeponet_result_dir, f'case_{application_case_index}_diff.vtk')
         if not os.path.exists(deeponet_result_file):
             raise FileNotFoundError(f"DeepONet result file not found: {deeponet_result_file}")
         
-        pi_deeponet_result_file = os.path.join(pi_deeponet_result_dir, f'case_{test_case_index}_test_results.vtk')
+        pi_deeponet_result_file = os.path.join(pi_deeponet_result_dir, f'case_{application_case_index}_diff.vtk')
         if not os.path.exists(pi_deeponet_result_file):
             raise FileNotFoundError(f"PI-DeepONet result file not found: {pi_deeponet_result_file}")        
 
@@ -207,23 +208,23 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
         
         # Extract data from DeepONet results
         deeponet_cell_data = deeponet_result.cell_data
-        deeponet_h_pred = extract_cell_data_array(deeponet_cell_data, 'Water_Depth_Pred')
-        deeponet_u_pred = extract_cell_data_array(deeponet_cell_data, 'X_Velocity_Pred')
-        deeponet_v_pred = extract_cell_data_array(deeponet_cell_data, 'Y_Velocity_Pred')
-        deeponet_vel_pred = extract_cell_data_vector(deeponet_cell_data, 'Velocity_Pred', 3)[:, :2]  # x, y components
+        deeponet_h_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_Water_Depth')
+        deeponet_u_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_X_Velocity')
+        deeponet_v_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_Y_Velocity')
+        deeponet_vel_pred = extract_cell_data_vector(deeponet_cell_data, 'Pred_Velocity', 3)[:, :2]  # x, y components
         
         # Extract SRH-2D simulation data (from DeepONet file - same mesh)
-        sim_h = extract_cell_data_array(deeponet_cell_data, 'Water_Depth_Target')
-        sim_u = extract_cell_data_array(deeponet_cell_data, 'X_Velocity_Target')
-        sim_v = extract_cell_data_array(deeponet_cell_data, 'Y_Velocity_Target')
-        sim_vel = extract_cell_data_vector(deeponet_cell_data, 'Velocity_Target', 3)[:, :2]
+        sim_h = extract_cell_data_array(deeponet_cell_data, 'Sim_Water_Depth')
+        sim_u = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, 0]
+        sim_v = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, 1]
+        sim_vel = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, :2]
         
         # Extract data from PI-DeepONet results
         pi_cell_data = pi_deeponet_result.cell_data
-        pi_h_pred = extract_cell_data_array(pi_cell_data, 'Water_Depth_Pred')
-        pi_u_pred = extract_cell_data_array(pi_cell_data, 'X_Velocity_Pred')
-        pi_v_pred = extract_cell_data_array(pi_cell_data, 'Y_Velocity_Pred')
-        pi_vel_pred = extract_cell_data_vector(pi_cell_data, 'Velocity_Pred', 3)[:, :2]
+        pi_h_pred = extract_cell_data_array(pi_cell_data, 'Pred_Water_Depth')
+        pi_u_pred = extract_cell_data_array(pi_cell_data, 'Pred_X_Velocity')
+        pi_v_pred = extract_cell_data_array(pi_cell_data, 'Pred_Y_Velocity')
+        pi_vel_pred = extract_cell_data_vector(pi_cell_data, 'Pred_Velocity', 3)[:, :2]
         
         # Build cell list for interpolation (need original cells, not triangulated)
         original_cells = []
@@ -276,49 +277,57 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             diff_pi_vel_mag_pt = cell_to_point_data(diff_pi_vel_mag, original_cells, orig_cell_data_indices, n_points)
         
         # Figure 1: Results comparison (3 rows, 4 columns)
-        fig1, axs1 = plt.subplots(3, 4, figsize=(20, 14), facecolor='w')
+        fig1, axs1 = plt.subplots(3, 4, figsize=(22, 14), facecolor='w')
         
         # Row 0: SRH-2D simulation
         if triangles is not None:
             # h
             cf = axs1[0, 0].tricontourf(points[:, 0], points[:, 1], triangles, sim_h_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[0, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[0, 0].set_title('SRH-2D: $h$', fontsize=14)
-            axs1[0, 0].set_ylabel('$y$ (m)', fontsize=16)
-            axs1[0, 0].tick_params(axis='both', which='major', labelsize=14)
+            axs1[0, 0].set_title('SRH-2D: $h$', fontsize=28)
+            axs1[0, 0].set_xticks([])
+            axs1[0, 0].set_yticks([])
+            #axs1[0, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 0].tick_params(axis='both', which='major', labelsize=22)
             axs1[0, 0].set_aspect('equal')
             axs1[0, 0].set_xlim([xl, xh])
             axs1[0, 0].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[0, 0], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[0, 0].text(-0.15, 1.1, '(a)', fontsize=18, fontweight='bold', transform=axs1[0, 0].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[0, 0].text(-0.15, 1.1, '(a)', fontsize=18, fontweight='bold', transform=axs1[0, 0].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # u
             cf = axs1[0, 1].tricontourf(points[:, 0], points[:, 1], triangles, sim_u_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[0, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[0, 1].set_title('SRH-2D: $u$', fontsize=14)
-            axs1[0, 1].tick_params(axis='both', which='major', labelsize=14)
+            axs1[0, 1].set_title('SRH-2D: $u$', fontsize=28)
+            axs1[0, 1].set_xticks([])
+            axs1[0, 1].set_yticks([])
+            #axs1[0, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 1].tick_params(axis='both', which='major', labelsize=22)
             axs1[0, 1].set_aspect('equal')
             axs1[0, 1].set_xlim([xl, xh])
             axs1[0, 1].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[0, 1], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[0, 1].text(-0.15, 1.1, '(b)', fontsize=18, fontweight='bold', transform=axs1[0, 1].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[0, 1].text(-0.15, 1.1, '(b)', fontsize=18, fontweight='bold', transform=axs1[0, 1].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # v
             cf = axs1[0, 2].tricontourf(points[:, 0], points[:, 1], triangles, sim_v_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[0, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[0, 2].set_title('SRH-2D: $v$', fontsize=14)
-            axs1[0, 2].tick_params(axis='both', which='major', labelsize=14)
+            axs1[0, 2].set_title('SRH-2D: $v$', fontsize=28)
+            axs1[0, 2].set_xticks([])
+            axs1[0, 2].set_yticks([])
+            #axs1[0, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 2].tick_params(axis='both', which='major', labelsize=22)
             axs1[0, 2].set_aspect('equal')
             axs1[0, 2].set_xlim([xl, xh])
             axs1[0, 2].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[0, 2], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[0, 2].text(-0.15, 1.1, '(c)', fontsize=18, fontweight='bold', transform=axs1[0, 2].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[0, 2].text(-0.15, 1.1, '(c)', fontsize=18, fontweight='bold', transform=axs1[0, 2].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # Velocity vector (quiver plot on contour of magnitude)
             vel_mag_sim = np.sqrt(sim_u_pt**2 + sim_v_pt**2)
@@ -330,57 +339,68 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
                              sim_u_pt[::step], sim_v_pt[::step], 
                              scale=10, width=0.002, color='white', alpha=0.6)
             axs1[0, 3].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[0, 3].set_title('SRH-2D: Velocity', fontsize=14)
-            axs1[0, 3].tick_params(axis='both', which='major', labelsize=14)
+            axs1[0, 3].set_title('SRH-2D: Velocity', fontsize=28)
+            axs1[0, 3].set_xticks([])
+            axs1[0, 3].set_yticks([])
+            #axs1[0, 3].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 3].tick_params(axis='both', which='major', labelsize=22)
             axs1[0, 3].set_aspect('equal')
             axs1[0, 3].set_xlim([18500, 21240])
             axs1[0, 3].set_ylim([-7036, -5358])
             cbar = plt.colorbar(cf, ax=axs1[0, 3], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[0, 3].text(-0.15, 1.1, '(d)', fontsize=18, fontweight='bold', transform=axs1[0, 3].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[0, 3].text(-0.15, 1.1, '(d)', fontsize=18, fontweight='bold', transform=axs1[0, 3].transAxes, horizontalalignment='left', verticalalignment='top')
         
         # Row 1: SWE-DeepONet
         if triangles is not None:
             # h
             cf = axs1[1, 0].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_h_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[1, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[1, 0].set_title('SWE-DeepONet: $h$', fontsize=14)
-            axs1[1, 0].set_ylabel('$y$ (m)', fontsize=16)
-            axs1[1, 0].tick_params(axis='both', which='major', labelsize=14)
+            axs1[1, 0].set_title('SWE-DeepONet: $h$', fontsize=28)
+            axs1[1, 0].set_xticks([])
+            axs1[1, 0].set_yticks([])
+            #axs1[1, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 0].tick_params(axis='both', which='major', labelsize=22)
             axs1[1, 0].set_aspect('equal')
             axs1[1, 0].set_xlim([xl, xh])
             axs1[1, 0].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[1, 0], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[1, 0].text(-0.15, 1.1, '(e)', fontsize=18, fontweight='bold', transform=axs1[1, 0].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[1, 0].text(-0.15, 1.1, '(e)', fontsize=18, fontweight='bold', transform=axs1[1, 0].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # u
             cf = axs1[1, 1].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_u_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[1, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[1, 1].set_title('SWE-DeepONet: $u$', fontsize=14)
-            axs1[1, 1].tick_params(axis='both', which='major', labelsize=14)
+            axs1[1, 1].set_title('SWE-DeepONet: $u$', fontsize=28)
+            axs1[1, 1].set_xticks([])
+            axs1[1, 1].set_yticks([])
+            #axs1[1, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 1].tick_params(axis='both', which='major', labelsize=22)
             axs1[1, 1].set_aspect('equal')
             axs1[1, 1].set_xlim([xl, xh])
             axs1[1, 1].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[1, 1], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[1, 1].text(-0.15, 1.1, '(f)', fontsize=18, fontweight='bold', transform=axs1[1, 1].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[1, 1].text(-0.15, 1.1, '(f)', fontsize=18, fontweight='bold', transform=axs1[1, 1].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # v
             cf = axs1[1, 2].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_v_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[1, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[1, 2].set_title('SWE-DeepONet: $v$', fontsize=14)
-            axs1[1, 2].tick_params(axis='both', which='major', labelsize=14)
+            axs1[1, 2].set_title('SWE-DeepONet: $v$', fontsize=28)
+            axs1[1, 2].set_xticks([])
+            axs1[1, 2].set_yticks([])
+            #axs1[1, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 2].tick_params(axis='both', which='major', labelsize=22)
             axs1[1, 2].set_aspect('equal')
             axs1[1, 2].set_xlim([xl, xh])
             axs1[1, 2].set_ylim([yl, yh])
             cbar = plt.colorbar(cf, ax=axs1[1, 2], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[1, 2].text(-0.15, 1.1, '(g)', fontsize=18, fontweight='bold', transform=axs1[1, 2].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[1, 2].text(-0.15, 1.1, '(g)', fontsize=18, fontweight='bold', transform=axs1[1, 2].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # Velocity vector
             vel_mag_deeponet = np.sqrt(deeponet_u_pt**2 + deeponet_v_pt**2)
@@ -389,60 +409,72 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
                              deeponet_u_pt[::step], deeponet_v_pt[::step], 
                              scale=10, width=0.002, color='white', alpha=0.6)
             axs1[1, 3].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[1, 3].set_title('SWE-DeepONet: Velocity', fontsize=14)
-            axs1[1, 3].tick_params(axis='both', which='major', labelsize=14)
+            axs1[1, 3].set_title('SWE-DeepONet: Velocity', fontsize=28)
+            axs1[1, 3].set_xticks([])
+            axs1[1, 3].set_yticks([])
+            #axs1[1, 3].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 3].tick_params(axis='both', which='major', labelsize=22)
             axs1[1, 3].set_aspect('equal')
             axs1[1, 3].set_xlim([18500, 21240])
             axs1[1, 3].set_ylim([-7036, -5358])
             cbar = plt.colorbar(cf, ax=axs1[1, 3], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[1, 3].text(-0.15, 1.1, '(h)', fontsize=18, fontweight='bold', transform=axs1[1, 3].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[1, 3].text(-0.15, 1.1, '(h)', fontsize=18, fontweight='bold', transform=axs1[1, 3].transAxes, horizontalalignment='left', verticalalignment='top')
         
         # Row 2: PI-SWE-DeepONet
         if triangles is not None:
             # h
             cf = axs1[2, 0].tricontourf(points[:, 0], points[:, 1], triangles, pi_h_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[2, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[2, 0].set_title('PI-SWE-DeepONet: $h$', fontsize=14)
-            axs1[2, 0].tick_params(axis='both', which='major', labelsize=14)
+            axs1[2, 0].set_title('PI-SWE-DeepONet: $h$', fontsize=28)
+            axs1[2, 0].set_xticks([])
+            axs1[2, 0].set_yticks([])
+            #axs1[2, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 0].tick_params(axis='both', which='major', labelsize=22)
             axs1[2, 0].set_aspect('equal')
             axs1[2, 0].set_xlim([xl, xh])
             axs1[2, 0].set_ylim([yl, yh])
-            axs1[2, 0].set_xlabel('$x$ (m)', fontsize=16)
-            axs1[2, 0].set_ylabel('$y$ (m)', fontsize=16)
+            #axs1[2, 0].set_xlabel('$x$ (m)', fontsize=16)
+            #axs1[2, 0].set_ylabel('$y$ (m)', fontsize=16)
             cbar = plt.colorbar(cf, ax=axs1[2, 0], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[2, 0].text(-0.15, 1.1, '(i)', fontsize=18, fontweight='bold', transform=axs1[2, 0].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[2, 0].text(-0.15, 1.1, '(i)', fontsize=18, fontweight='bold', transform=axs1[2, 0].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # u
             cf = axs1[2, 1].tricontourf(points[:, 0], points[:, 1], triangles, pi_u_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[2, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[2, 1].set_title('PI-SWE-DeepONet: $u$', fontsize=14)
-            axs1[2, 1].tick_params(axis='both', which='major', labelsize=14)
+            axs1[2, 1].set_title('PI-SWE-DeepONet: $u$', fontsize=28)
+            axs1[2, 1].set_xticks([])
+            axs1[2, 1].set_yticks([])
+            #axs1[2, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 1].tick_params(axis='both', which='major', labelsize=22)
             axs1[2, 1].set_aspect('equal')
             axs1[2, 1].set_xlim([xl, xh])
             axs1[2, 1].set_ylim([yl, yh])
-            axs1[2, 1].set_xlabel('$x$ (m)', fontsize=16)
+            #axs1[2, 1].set_xlabel('$x$ (m)', fontsize=16)
             cbar = plt.colorbar(cf, ax=axs1[2, 1], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[2, 1].text(-0.15, 1.1, '(j)', fontsize=18, fontweight='bold', transform=axs1[2, 1].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[2, 1].text(-0.15, 1.1, '(j)', fontsize=18, fontweight='bold', transform=axs1[2, 1].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # v
             cf = axs1[2, 2].tricontourf(points[:, 0], points[:, 1], triangles, pi_v_pt, levels=20, cmap=plt.cm.RdBu_r)
             axs1[2, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[2, 2].set_title('PI-SWE-DeepONet: $v$', fontsize=14)
-            axs1[2, 2].tick_params(axis='both', which='major', labelsize=14)
+            axs1[2, 2].set_title('PI-SWE-DeepONet: $v$', fontsize=28)
+            axs1[2, 2].set_xticks([])
+            axs1[2, 2].set_yticks([])
+            #axs1[2, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 2].tick_params(axis='both', which='major', labelsize=22)
             axs1[2, 2].set_aspect('equal')
             axs1[2, 2].set_xlim([xl, xh])
             axs1[2, 2].set_ylim([yl, yh])
-            axs1[2, 2].set_xlabel('$x$ (m)', fontsize=16)
+            #axs1[2, 2].set_xlabel('$x$ (m)', fontsize=16)
             cbar = plt.colorbar(cf, ax=axs1[2, 2], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[2, 2].text(-0.15, 1.1, '(k)', fontsize=18, fontweight='bold', transform=axs1[2, 2].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[2, 2].text(-0.15, 1.1, '(k)', fontsize=18, fontweight='bold', transform=axs1[2, 2].transAxes, horizontalalignment='left', verticalalignment='top')
             
             # Velocity vector
             vel_mag_pi = np.sqrt(pi_u_pt**2 + pi_v_pt**2)
@@ -451,20 +483,24 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
                              pi_u_pt[::step], pi_v_pt[::step], 
                              scale=10, width=0.002, color='white', alpha=0.6)
             axs1[2, 3].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs1[2, 3].set_title('PI-SWE-DeepONet: Velocity', fontsize=14)
-            axs1[2, 3].tick_params(axis='both', which='major', labelsize=14)
+            axs1[2, 3].set_title('PI-SWE-DeepONet: Velocity', fontsize=28)
+            axs1[2, 3].set_xticks([])
+            axs1[2, 3].set_yticks([])
+            #axs1[2, 3].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 3].tick_params(axis='both', which='major', labelsize=22)
             axs1[2, 3].set_aspect('equal')
             axs1[2, 3].set_xlim([18500, 21240])
             axs1[2, 3].set_ylim([-7036, -5358])
-            axs1[2, 3].set_xlabel('$x$ (m)', fontsize=16)
+            #axs1[2, 3].set_xlabel('$x$ (m)', fontsize=16)
             cbar = plt.colorbar(cf, ax=axs1[2, 3], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
-            axs1[2, 3].text(-0.15, 1.1, '(l)', fontsize=18, fontweight='bold', transform=axs1[2, 3].transAxes, horizontalalignment='left', verticalalignment='top')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            #axs1[2, 3].text(-0.15, 1.1, '(l)', fontsize=18, fontweight='bold', transform=axs1[2, 3].transAxes, horizontalalignment='left', verticalalignment='top')
         
         plt.tight_layout()
-        plt.savefig(f'compare_test_case_results_{test_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
+        plt.savefig(f'compare_application_case_results_{application_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
         plt.close()
+        #exit()
         
         # Figure 2: Differences (2 rows, 4 columns)
         fig2, axs2 = plt.subplots(2, 4, figsize=(20, 10), facecolor='w')
@@ -481,18 +517,19 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[0, 0].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_h_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[0, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[0, 0].set_title('SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=14)
-            axs2[0, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs2[0, 0].set_title('SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=20)
+            axs2[0, 0].set_xticks([])
+            axs2[0, 0].set_yticks([])
             #set tick labels font size 
-            axs2[0, 0].tick_params(axis='both', which='major', labelsize=14)
+            axs2[0, 0].tick_params(axis='both', which='major', labelsize=22)
             axs2[0, 0].set_aspect('equal')
             axs2[0, 0].set_xlim([xl, xh])
             axs2[0, 0].set_ylim([yl, yh])
             #text for RMSE, Min and Max (in three lines)
-            axs2[0, 0].text(0.6, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=14, transform=axs2[0, 0].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[0, 0].text(0.45, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=22, transform=axs2[0, 0].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[0, 0], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (a) on the top left corner of the subfigure
             #axs2[0, 0].text(-0.15, 1.1, '(a)', fontsize=18, fontweight='bold', transform=axs2[0, 0].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -507,15 +544,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[0, 1].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_u_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[0, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[0, 1].set_title('SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=14)
-            axs2[0, 1].tick_params(axis='both', which='major', labelsize=14)
+            axs2[0, 1].set_title('SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=20)
+            axs2[0, 1].set_xticks([])
+            axs2[0, 1].set_yticks([])
+            axs2[0, 1].tick_params(axis='both', which='major', labelsize=22)
             axs2[0, 1].set_aspect('equal')
             axs2[0, 1].set_xlim([xl, xh])
             axs2[0, 1].set_ylim([yl, yh])
-            axs2[0, 1].text(0.55, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[0, 1].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[0, 1].text(0.38, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[0, 1].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[0, 1], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
 
             #add subfigure caption (b) on the top left corner of the subfigure
@@ -531,15 +570,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[0, 2].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_v_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[0, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[0, 2].set_title('SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=14)
-            axs2[0, 2].tick_params(axis='both', which='major', labelsize=14)
+            axs2[0, 2].set_title('SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=20)
+            axs2[0, 2].set_xticks([])
+            axs2[0, 2].set_yticks([])
+            axs2[0, 2].tick_params(axis='both', which='major', labelsize=22)
             axs2[0, 2].set_aspect('equal')
             axs2[0, 2].set_xlim([xl, xh])
             axs2[0, 2].set_ylim([yl, yh])
-            axs2[0, 2].text(0.55, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[0, 2].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[0, 2].text(0.38, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[0, 2].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[0, 2], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (c) on the top left corner of the subfigure
             #axs2[0, 2].text(-0.15, 1.1, '(c)', fontsize=18, fontweight='bold', transform=axs2[0, 2].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -554,15 +595,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[0, 3].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_vel_mag_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[0, 3].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[0, 3].set_title('SWE-DeepONet - SRH-2D: $\\Delta |\\mathbf{u}|$', fontsize=14)
-            axs2[0, 3].tick_params(axis='both', which='major', labelsize=14)
+            axs2[0, 3].set_title('SWE-DeepONet - SRH-2D: $\\Delta |\\mathbf{u}|$', fontsize=20)
+            axs2[0, 3].set_xticks([])
+            axs2[0, 3].set_yticks([])
+            axs2[0, 3].tick_params(axis='both', which='major', labelsize=22)
             axs2[0, 3].set_aspect('equal')
             axs2[0, 3].set_xlim([xl, xh])
             axs2[0, 3].set_ylim([yl, yh])
-            axs2[0, 3].text(0.55, 0.9, f'RMSE: {rmse_vel_mag:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[0, 3].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[0, 3].text(0.38, 0.9, f'RMSE: {rmse_vel_mag:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[0, 3].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[0, 3], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (d) on the top left corner of the subfigure
             #axs2[0, 3].text(-0.15, 1.1, '(d)', fontsize=18, fontweight='bold', transform=axs2[0, 3].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -579,17 +622,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[1, 0].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_h_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[1, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[1, 0].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=14)
-            axs2[1, 0].tick_params(axis='both', which='major', labelsize=14)
+            axs2[1, 0].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=20)
+            axs2[1, 0].set_xticks([])
+            axs2[1, 0].set_yticks([])
+            axs2[1, 0].tick_params(axis='both', which='major', labelsize=22)
             axs2[1, 0].set_aspect('equal')
             axs2[1, 0].set_xlim([xl, xh])
             axs2[1, 0].set_ylim([yl, yh])
-            axs2[1, 0].set_xlabel('$x$ (m)', fontsize=16)
-            axs2[1, 0].set_ylabel('$y$ (m)', fontsize=16)
-            axs2[1, 0].text(0.6, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=14, transform=axs2[1, 0].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[1, 0].text(0.45, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=22, transform=axs2[1, 0].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[1, 0], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (e) on the top left corner of the subfigure
             #axs2[1, 0].text(-0.15, 1.1, '(e)', fontsize=18, fontweight='bold', transform=axs2[1, 0].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -604,16 +647,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[1, 1].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_u_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[1, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[1, 1].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=14)
-            axs2[1, 1].tick_params(axis='both', which='major', labelsize=14)
+            axs2[1, 1].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=20)
+            axs2[1, 1].set_xticks([])
+            axs2[1, 1].set_yticks([])
+            axs2[1, 1].tick_params(axis='both', which='major', labelsize=22)
             axs2[1, 1].set_aspect('equal')
             axs2[1, 1].set_xlim([xl, xh])
             axs2[1, 1].set_ylim([yl, yh])
-            axs2[1, 1].set_xlabel('$x$ (m)', fontsize=16)            
-            axs2[1, 1].text(0.55, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[1, 1].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[1, 1].text(0.38, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[1, 1].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[1, 1], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (f) on the top left corner of the subfigure
             #axs2[1, 1].text(-0.15, 1.1, '(f)', fontsize=18, fontweight='bold', transform=axs2[1, 1].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -628,16 +672,17 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[1, 2].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_v_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[1, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[1, 2].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=14)
-            axs2[1, 2].tick_params(axis='both', which='major', labelsize=14)
+            axs2[1, 2].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=20)
+            axs2[1, 2].set_xticks([])
+            axs2[1, 2].set_yticks([])
+            axs2[1, 2].tick_params(axis='both', which='major', labelsize=22)
             axs2[1, 2].set_aspect('equal')
             axs2[1, 2].set_xlim([xl, xh])
             axs2[1, 2].set_ylim([yl, yh])
-            axs2[1, 2].set_xlabel('$x$ (m)', fontsize=16)
-            axs2[1, 2].text(0.55, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[1, 2].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[1, 2].text(0.38, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[1, 2].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[1, 2], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (g) on the top left corner of the subfigure
             #axs2[1, 2].text(-0.15, 1.1, '(g)', fontsize=18, fontweight='bold', transform=axs2[1, 2].transAxes, horizontalalignment='left', verticalalignment='top')
@@ -652,35 +697,39 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs2[1, 3].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_vel_mag_pt, 
                                        levels=20, cmap=plt.cm.RdBu_r, vmin=vmin, vmax=vmax)
             axs2[1, 3].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
-            axs2[1, 3].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta |\\mathbf{u}|$', fontsize=14)
-            axs2[1, 3].tick_params(axis='both', which='major', labelsize=14)
+            axs2[1, 3].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta |\\mathbf{u}|$', fontsize=20)
+            axs2[1, 3].set_xticks([])
+            axs2[1, 3].set_yticks([])
+            axs2[1, 3].tick_params(axis='both', which='major', labelsize=22)
             axs2[1, 3].set_aspect('equal')
             axs2[1, 3].set_xlim([xl, xh])
             axs2[1, 3].set_ylim([yl, yh])
-            axs2[1, 3].set_xlabel('$x$ (m)', fontsize=16)
-            axs2[1, 3].text(0.55, 0.9, f'RMSE: {rmse_vel_mag:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=14, transform=axs2[1, 3].transAxes, verticalalignment='top', horizontalalignment='left')
+            axs2[1, 3].text(0.38, 0.9, f'RMSE: {rmse_vel_mag:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[1, 3].transAxes, verticalalignment='top', horizontalalignment='left')
             cbar = plt.colorbar(cf, ax=axs2[1, 3], fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=14)
-            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=14, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
             #cbar.set_ticks(np.linspace(vmin, vmax, 5))
             #add subfigure caption (h) on the top left corner of the subfigure
             #axs2[1, 3].text(-0.15, 1.1, '(h)', fontsize=18, fontweight='bold', transform=axs2[1, 3].transAxes, horizontalalignment='left', verticalalignment='top')
         
         plt.tight_layout()
-        plt.savefig(f'compare_test_case_diff_{test_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
+        #increase the column spacing 
+        plt.subplots_adjust(wspace=0.4)
+        plt.savefig(f'compare_application_case_diff_{application_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
         plt.close()
     
 
 if __name__ == "__main__":
 
-    # Test case indices
-    test_case_indices = [11]
+    # Application case indices: 1 (average distance), 70 (minimum distance), 73 (maximum distance)
+    #application_case_indices = [1, 70, 73]
+    application_case_indices = [1]
 
-    # Test case result directories
-    deeponet_result_dir = '../../SacramentoRiver_steady_DeepONet/data/DeepONet/test'
-    pi_deeponet_result_dir = '../../SacramentoRiver_steady_PI_DeepONet/data/DeepONet/test'
+    # Application case result directories
+    deeponet_result_dir = '../../SacramentoRiver_steady_DeepONet/application/diff_vtks'
+    pi_deeponet_result_dir = '../../SacramentoRiver_steady_PI_DeepONet/application/diff_vtks'
     
 
-    plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_deeponet_result_dir)
+    plot_compare_application_case_results(application_case_indices, deeponet_result_dir, pi_deeponet_result_dir)
 
-    print("Plotting comparison of test case results completed.")
+    print("Plotting comparison of application case results completed.")

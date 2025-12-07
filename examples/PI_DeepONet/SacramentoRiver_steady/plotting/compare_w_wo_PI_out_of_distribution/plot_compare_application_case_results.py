@@ -673,8 +673,8 @@ def plot_compare_application_case_results(application_case_indices, deeponet_res
 
 if __name__ == "__main__":
 
-    # Application case indices
-    application_case_indices = [1]
+    # Application case indices: 1 (average distance), 70 (minimum distance), 73 (maximum distance)
+    application_case_indices = [1, 70, 73]
 
     # Application case result directories
     deeponet_result_dir = '../../SacramentoRiver_steady_DeepONet/application/diff_vtks'

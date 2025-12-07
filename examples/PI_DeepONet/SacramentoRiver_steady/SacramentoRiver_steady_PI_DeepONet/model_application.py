@@ -60,10 +60,10 @@ if __name__ == "__main__":
     mp.set_start_method('spawn', force=True)
 
     # Compute the distance between the application data and the training data
-    pi_deeponet_application_compute_distance_between_application_and_training_data(config)
+    #pi_deeponet_application_compute_distance_between_application_and_training_data(config)
    
     # Run the model with the best model and save the predictions results to vtk files
-    pi_deeponet_application_run_model_application(config)
+    #pi_deeponet_application_run_model_application(config)
 
     # Compare the model application results with the simulation results
     pi_deeponet_application_compare_model_application_results_with_simulation_results(config, system_name)

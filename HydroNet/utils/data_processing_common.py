@@ -788,7 +788,7 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     y_mean = np.mean(train_val_test_data_trunk_inputs[:, 1])
     y_std = np.std(train_val_test_data_trunk_inputs[:, 1])
 
-    #this case is for steady case, thus time t is not relevant. But for completeness, we save it in all_points_stats
+    #Currently, only support steady case, thus time t is not relevant. But for completeness, we save it in all_points_stats
     t_min = 0.0
     t_max = 0.0
     t_mean = 0.0
