@@ -239,14 +239,16 @@ def plot_training_history(history_file):
     plt.savefig('plots/total_loss_components.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Plot PDE/BC/IC/Data losses
+    # Plot PDE/BC/IC/Data losses if they exist
     plt.figure(figsize=(12, 8))
-    plt.plot(history['component_loss_history']['pde_loss_components']['continuity_loss'], label='PDE (continuity) Loss', linewidth=2)
-    plt.plot(history['component_loss_history']['pde_loss_components']['momentum_x_loss'], label='PDE (x-momentum) Loss', linewidth=2)
-    plt.plot(history['component_loss_history']['pde_loss_components']['momentum_y_loss'], label='PDE (y-momentum) Loss', linewidth=2)
-    #plt.plot(history['initial_condition_loss'], label='IC Loss', linewidth=2)
-    plt.plot(history['component_loss_history']['loss_components']['boundary_loss'], label='BC Loss', linewidth=2)
-    plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='Data Loss', linewidth=2)
+    if 'continuity_loss' in history['component_loss_history']['pde_loss_components']:
+        plt.plot(history['component_loss_history']['pde_loss_components']['continuity_loss'], label='PDE (continuity) Loss', linewidth=2)
+        plt.plot(history['component_loss_history']['pde_loss_components']['momentum_x_loss'], label='PDE (x-momentum) Loss', linewidth=2)
+        plt.plot(history['component_loss_history']['pde_loss_components']['momentum_y_loss'], label='PDE (y-momentum) Loss', linewidth=2)
+    if 'boundary_loss' in history['component_loss_history']:
+        plt.plot(history['component_loss_history']['loss_components']['boundary_loss'], label='BC Loss', linewidth=2)
+    if 'data_loss' in history['component_loss_history']:
+        plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='Data Loss', linewidth=2)
     plt.yscale('log')
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
@@ -257,12 +259,18 @@ def plot_training_history(history_file):
     plt.savefig('plots/component_losses_detailed.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # Plot data loss components
+    # Plot data loss components if they exist
     plt.figure(figsize=(12, 8))
-    plt.plot(history['component_loss_history']['data_loss_components']['total_data_loss'], label='Total Data Loss', linewidth=2)
-    plt.plot(history['component_loss_history']['data_loss_components']['data_h_loss'], label='Data Loss (h)', linewidth=2)
-    plt.plot(history['component_loss_history']['data_loss_components']['data_u_loss'], label='Data Loss (u)', linewidth=2)
-    plt.plot(history['component_loss_history']['data_loss_components']['data_v_loss'], label='Data Loss (v)', linewidth=2)
+    
+    if 'total_data_loss' in history['component_loss_history']['data_loss_components']:
+        plt.plot(history['component_loss_history']['data_loss_components']['total_data_loss'], label='Total Data Loss', linewidth=2)
+    if 'data_h_loss' in history['component_loss_history']['data_loss_components']:
+        plt.plot(history['component_loss_history']['data_loss_components']['data_h_loss'], label='Data Loss (h)', linewidth=2)
+    if 'data_u_loss' in history['component_loss_history']['data_loss_components']:
+        plt.plot(history['component_loss_history']['data_loss_components']['data_u_loss'], label='Data Loss (u)', linewidth=2)
+    if 'data_v_loss' in history['component_loss_history']['data_loss_components']:
+        plt.plot(history['component_loss_history']['data_loss_components']['data_v_loss'], label='Data Loss (v)', linewidth=2)
+
     plt.yscale('log')
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
@@ -361,11 +369,7 @@ def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, pred
     #num_time_steps = config.sampling.num_time_steps
 
     # Create time steps
-    #time_points = np.linspace(t_start, t_end, num_time_steps, dtype=np.float32)
-
-    # Get normalization parameters
-    bNormalize = model.get_bNormalize()
-    normalization_method = model.get_normalization_method()
+    #time_points = np.linspace(t_start, t_end, num_time_steps, dtype=np.float32)    
     
     with torch.no_grad():
         # Loop over time steps
@@ -376,10 +380,7 @@ def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, pred
         else:
             vtkFileSaveName = f'{output_dir}/solution_cell_centered.vtk'
 
-        predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal, 
-                              bNormalize=bNormalize, normalization_method=normalization_method,
-                              mesh_stats=mesh_stats, data_stats=data_stats,
-                              device=device)
+        predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal, mesh_stats=mesh_stats, data_stats=data_stats, device=device)
               
         
 
@@ -398,9 +399,9 @@ if __name__ == "__main__":
     
     # Load dataset
     print("\nLoading dataset...")    
-    dataset = PINNDataset(config, model)
+    dataset = PINNDataset(config)
 
-    dataset.print_stats()
+    #dataset.print_stats()
 
     #exit()
 

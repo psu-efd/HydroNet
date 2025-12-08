@@ -80,6 +80,50 @@ class Config:
             return torch.device(f'cuda:{device_index}')
         else:
             return torch.device('cpu')
+    
+    def get_required_config(self, key: str):
+        """
+        Get a required configuration value, raising an error if it's missing.
+        
+        Args:
+            key: Configuration key (e.g., "model.branch_net.hidden_layers")
+            
+        Returns:
+            The configuration value
+            
+        Raises:
+            ValueError: If the configuration key is missing
+        """
+        value = self.get(key, None)
+        if value is None:
+            raise ValueError(f"Required configuration parameter '{key}' is missing from config.")
+        return value
+    
+    def require_positive(self, key: str, default: float, use_physics_loss: bool = False) -> float:
+        """
+        Get a configuration value that must be positive, with optional validation.
+        
+        Args:
+            key: Configuration key (e.g., "physics.scales.length")
+            default: Default value to return if the key is missing or invalid
+            use_physics_loss: If True, raises an error when physics loss is enabled and value is missing or non-positive
+            
+        Returns:
+            The configuration value (as float), or default if missing/invalid and validation is not enforced
+            
+        Raises:
+            ValueError: If use_physics_loss is True and the value is missing or non-positive
+        """
+        value = self.get(key, None)
+        if value is None:
+            if use_physics_loss:
+                raise ValueError(f"{key} must be provided when physics-informed loss is enabled.")
+            return default
+        if value <= 0:
+            if use_physics_loss:
+                raise ValueError(f"{key} must be positive.")
+            return default
+        return float(value)
             
     def __getitem__(self, key):
         """

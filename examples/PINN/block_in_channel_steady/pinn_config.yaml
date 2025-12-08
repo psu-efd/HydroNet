@@ -2,75 +2,84 @@
 
 # Device configuration
 device:
-  use_gpu: true
-  device_id: 0
+  type: "cuda"  # Set which device to use, "cuda" for GPU, "cpu" for CPU
+  index: 0   # Specify which GPU to use if multiple GPUs are available
 
 # Architecture
 model:
   name: "SWE_PINN"
-  bNormalize: true         #whether to normalize the training data (x,y,t,h,u,v,zb,Sx,Sy,ManningN, etc) and the PDEs
-  normalization_method: "z-score" #"min-max" or "z-score"
   loss_flags:    
     bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
-    bBoundary_loss: true   #whether to use boundary conditions in the loss function    
-    bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
-  hidden_layers: [32, 64, 64, 64, 64, 32]  # Network architecture
-  activation: "relu"  # tanh, relu, leaky_relu
+    bBoundary_loss: false   #whether to use boundary conditions in the loss function    
+    bData_loss: false       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
+  hidden_layers: [32, 64, 32]  # Network architecture
+  activation: "relu"  # tanh, relu, leaky_relu  
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
   initialization: "xavier_normal"
 
 # Physics parameters
 physics:
-  bSteady: true           #whether the problem is steady or transient. It is equal to bInitial_loss (internal variable), i.e., whether to include initial conditions mismatch in the loss function. For unsteady problems, bSteady is false and the initial conditions mismatch is included in the loss function.
+  unit: "SI"  # Unit, SI or EN. It should be the same as the output unit.
+  bSteady: true           #whether the problem is steady or transient.
   gravity: 9.81  # Gravitational acceleration (m/s^2)  
 
   scales:        #physical scales for normalizing the PDEs
     length: 0.4  # Length scale (e.g., averaged water depth)
     velocity: 0.25  # Velocity scale (e.g., averaged velocity)
-    
-  # Loss weights for different terms (initial values; will be adjusted by the loss weight scheduler)
-  loss_weights:    
-    pde: 1.0
-    initial_condition: 1.0
-    boundary_condition: 1.0
-    data_points: 10.0  # If you have measurement data
-    
-  # Loss weight scheduler settings
-  loss_weight_scheduler:
-    type: manual  # Options: constant, manual, gradnorm, softadapt
-    schedule:
-      - epoch: 1000       #epochs to start the scheduler
-        pde: 10.0
-        initial_condition: 1.0
-        boundary_condition: 10.0
-        data_points: 1.0
-      - epoch: 8000       #epochs to start the scheduler
-        pde: 2.0
-        initial_condition: 1.0
-        boundary_condition: 2.0
-        data_points: 1.0
-    # Settings for GradNorm scheduler
-    alpha: 1.0  # Balancing factor, e.g., 1.5 (the higher the alpha, the more weight is given to the components with higher gradients)
-    learning_rate: 0.001  # Learning rate for weight updates
 
 # Training parameters
 training:
-  optimizers: ["Adam"] #["Adam", "LBFGS"]
-  epochs: [10000]  # PINNs often need more epochs
-  learning_rates: [0.001]
-  weight_decay: 1.0e-5
+  batch_size: 64     #currently not used
+  epochs: 1000
+  save_freq: 10
+  learning_rate: 0.001
+  weight_decay: 1e-5
   scheduler:
     use_scheduler: true
     scheduler_type: "ReduceLROnPlateau"
-    patience: 1000
+    patience: 10
     factor: 0.5
-    min_lr: 1.0e-6
+    min_lr: 1e-6
   early_stopping:
     use_early_stopping: true
-    patience: 2000
-    min_delta: 1.0e-6
-  save_freq: 1  # Save checkpoint every N epochs
-  print_freq: 100  # Print progress every N epochs
+    patience: 30
+    min_delta: 1e-5
+  loss_weights:
+    # Adaptive loss balancing: automatically adjust weights to balance loss scales
+    # Set to true to enable automatic balancing based on initial loss magnitudes
+    # When enabled, the base weights below are multiplied by balancing factors
+    use_adaptive_balancing: false  # Recommended: true for better training stability
+    use_adaptive_pde_component_balancing: false  # Balance continuity vs momentum losses (recommended: true)
+    adaptive_balancing_frequency: 10  # Update weights every N epochs throughout training (recommended: 10)
+    # If adaptive_balancing_frequency is not specified, uses old behavior:
+    # adaptive_balancing_epochs: 10  # Only update weights during first N epochs (deprecated, use frequency instead)
+
+    pde_tolerance: 1e-4                    # Tolerance below which PDE is considered satisfied
+    pde_weight_decay_factor: 0.9           # Factor to multiply weight by when decaying (every N epochs)
+    pde_weight_decay_frequency: 5          # Decay weight every N epochs when frozen
+    pde_weight_moderation_factor: 0.5      # Moderation factor when PDE loss > tolerance (0.0-1.0)
+    
+    # Base loss weights (before adaptive balancing)
+    # Note: If adaptive balancing is enabled, these are starting weights that will be adjusted
+    # If adaptive balancing is disabled, these are the final weights used throughout training
+    pinn:
+      data_loss: 1.0
+      pde_loss: 1.0
+      boundary_loss: 1.0
+      initial_loss: 1.0
+    # Weights for individual PDE component losses (continuity, momentum_x, momentum_y)
+    # These are balanced automatically if use_adaptive_pde_component_balancing is true
+    pde:
+      continuity: 1.0     # Weight for continuity equation loss
+      momentum_x: 1.0     # Weight for x-momentum equation loss
+      momentum_y: 1.0     # Weight for y-momentum equation loss
+  logging:
+    tensorboard_log_dir: "./logs/tensorboard" # Save tensorboard logs to this directory
+    save_freq: 100           # Save checkpoint every N epochs
+    checkpoint_dir: "./checkpoints" # Save checkpoint to this directory
+    print_freq: 1            # Print progress every N epochs
+
+      
 
 # Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)
 boundary_conditions:
@@ -91,6 +100,8 @@ boundary_conditions:
 
 # Data paths
 data:
-  points_dir: "pinn_points"  # Directory containing the numpy point files
-  checkpoint_dir: "checkpoints"  # Directory to save model checkpoints
-  plot_dir: "plots"  # Directory to save plots
+  pinn: 
+    points_dir: "data/PINN"    #for the physics part of the PI-DeepONet
+    train_val_test_stats_path: "all_PINN_stats.json"  # Path to the dataset mean and 
+  nCells: 1326  # Number of cells in the SRH-2D cases
+  template_vtk_file: "data/case.vtk"  # Template vtk file for the data generation (test cases)

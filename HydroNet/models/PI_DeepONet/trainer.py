@@ -9,6 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
 import time
+import shutil
 
 from ...utils.config import Config
 from ...models.PINN.data import PINNDataset
@@ -48,10 +49,10 @@ class PI_SWE_DeepONetTrainer:
         print(f"Device: {self.device}")
         
         # Training parameters
-        self.batch_size = self.config.get('training.batch_size', 32)
-        self.epochs = self.config.get('training.epochs', 2000)
-        self.learning_rate = float(self.config.get('training.learning_rate', 0.001))
-        self.weight_decay = float(self.config.get('training.weight_decay', 1e-5))
+        self.batch_size = self.config.get_required_config('training.batch_size')
+        self.epochs = self.config.get_required_config('training.epochs')
+        self.learning_rate = float(self.config.get_required_config('training.learning_rate'))
+        self.weight_decay = float(self.config.get_required_config('training.weight_decay'))
         
         # Loss function (for simple data loss computation)
         # Note: Full training uses model.compute_total_loss() which includes physics constraints
@@ -65,13 +66,13 @@ class PI_SWE_DeepONetTrainer:
         )
         
         # Learning rate scheduler
-        use_scheduler = self.config.get('training.scheduler.use_scheduler', False)
+        use_scheduler = self.config.get_required_config('training.scheduler.use_scheduler')
         if use_scheduler:
-            scheduler_type = self.config.get('training.scheduler.scheduler_type', 'ReduceLROnPlateau')
+            scheduler_type = self.config.get_required_config('training.scheduler.scheduler_type')
             if scheduler_type == 'ReduceLROnPlateau':
-                patience = int(self.config.get('training.scheduler.patience', 20))
-                factor = float(self.config.get('training.scheduler.factor', 0.5))
-                min_lr = float(self.config.get('training.scheduler.min_lr', 1e-6))
+                patience = int(self.config.get_required_config('training.scheduler.patience'))
+                factor = float(self.config.get_required_config('training.scheduler.factor'))
+                min_lr = float(self.config.get_required_config('training.scheduler.min_lr'))
                 self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     self.optimizer,
                     mode='min',
@@ -80,19 +81,21 @@ class PI_SWE_DeepONetTrainer:
                     min_lr=min_lr
                 )
             elif scheduler_type == 'ExponentialLR':
-                gamma = self.config.get('training.scheduler.gamma', 0.999)
+                gamma = self.config.get_required_config('training.scheduler.gamma')
                 self.scheduler = optim.lr_scheduler.ExponentialLR(
                     self.optimizer,
                     gamma=gamma
                 )
+            else:
+                raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
         else:
             self.scheduler = None
             
         # Early stopping
-        use_early_stopping = self.config.get('training.early_stopping.use_early_stopping', True)
+        use_early_stopping = self.config.get_required_config('training.early_stopping.use_early_stopping')
         if use_early_stopping:
-            patience = int(self.config.get('training.early_stopping.patience', 50))
-            min_delta = float(self.config.get('training.early_stopping.min_delta', 1e-5))
+            patience = int(self.config.get_required_config('training.early_stopping.patience'))
+            min_delta = float(self.config.get_required_config('training.early_stopping.min_delta'))
             self.early_stopping = EarlyStopping(patience, min_delta)
         else:
             self.early_stopping = None
@@ -103,7 +106,7 @@ class PI_SWE_DeepONetTrainer:
         
         # Checkpointing
         self.checkpoint_dir = self.config.get('paths.checkpoint_dir', './checkpoints')
-        self.save_freq = self.config.get('logging.save_freq', 10)
+        self.save_freq = self.config.get('logging.save_freq', 1)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         
         # Training and validation history
@@ -123,13 +126,12 @@ class PI_SWE_DeepONetTrainer:
         }
         
         # Adaptive loss balancing
-        self.use_adaptive_loss_balancing = self.config.get('training.loss_weights.use_adaptive_balancing', False)
-        self.use_adaptive_pde_component_balancing = self.config.get('training.loss_weights.use_adaptive_pde_component_balancing', False)
+        self.use_adaptive_loss_balancing = self.config.get_required_config('training.loss_weights.use_adaptive_balancing')
+        self.use_adaptive_pde_component_balancing = self.config.get_required_config('training.loss_weights.use_adaptive_pde_component_balancing')
         
         # Adaptive balancing frequency: update weights every N epochs throughout training
         # If not specified, falls back to old behavior (only first N epochs)
-        self.adaptive_balancing_frequency = self.config.get('training.loss_weights.adaptive_balancing_frequency', None)
-        self.adaptive_balancing_epochs = self.config.get('training.loss_weights.adaptive_balancing_epochs', 10)
+        self.adaptive_balancing_frequency = self.config.get_required_config('training.loss_weights.adaptive_balancing_frequency')
         
         # If frequency is not specified, use old behavior (only first N epochs)
         if self.adaptive_balancing_frequency is None:
@@ -269,8 +271,7 @@ class PI_SWE_DeepONetTrainer:
                     # New behavior: update every N epochs throughout training
                     should_update_weights = (epoch % self.adaptive_balancing_frequency == 0)
                 else:
-                    # Old behavior: only update during first N epochs
-                    should_update_weights = (epoch < self.adaptive_balancing_epochs)
+                    print("adaptive_balancing_frequency is negative or zero, so weights will not be updated")
             
             if should_update_weights:
                 self._update_adaptive_loss_weights(loss_components, epoch)
@@ -529,8 +530,66 @@ class PI_SWE_DeepONetTrainer:
         
         if self.scheduler is not None:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
+        # On Windows, if the file exists and is locked (e.g., by antivirus or file explorer),
+        # we need to handle this gracefully. Use a temporary file and atomic rename.
+        temp_path = checkpoint_path + '.tmp'
+        
+        try:
+            # Save to a temporary file first
+            torch.save(checkpoint, temp_path)
             
-        torch.save(checkpoint, checkpoint_path)
+            # If the target file exists, try to remove it first
+            if os.path.exists(checkpoint_path):
+                try:
+                    os.remove(checkpoint_path)
+                except (OSError, PermissionError):
+                    # File is locked - we'll try to overwrite it directly below
+                    pass
+            
+            # Try atomic rename (works on Windows if target doesn't exist or was removed)
+            try:
+                os.rename(temp_path, checkpoint_path)
+            except (OSError, PermissionError):
+                # If rename fails (target file is locked), try to overwrite directly
+                # This might work in some cases even if the file appears locked
+                try:
+                    shutil.copy2(temp_path, checkpoint_path)
+                    os.remove(temp_path)
+                except (OSError, PermissionError) as copy_error:
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                    raise RuntimeError(
+                        f"Cannot save checkpoint to {checkpoint_path}. "
+                        f"The file may be locked by another process (antivirus, file explorer, etc.). "
+                        f"Error: {copy_error}"
+                    )
+                
+        except Exception as e:
+            # Clean up temp file if it exists
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            
+            # If temp file approach failed, try direct save as last resort
+            if not isinstance(e, RuntimeError):
+                try:
+                    torch.save(checkpoint, checkpoint_path)
+                except Exception as save_error:
+                    raise RuntimeError(
+                        f"Cannot save checkpoint to {checkpoint_path}. "
+                        f"Original error: {e}. Direct save error: {save_error}. "
+                        f"This may be due to file locking by antivirus or another process. "
+                        f"Try closing file explorer windows or temporarily disabling antivirus."
+                    )
+            else:
+                raise
+            
         print(f"Checkpoint saved to {checkpoint_path}")
         
     def load_checkpoint(self, checkpoint_path):

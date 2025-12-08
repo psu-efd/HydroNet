@@ -46,7 +46,7 @@ class PI_SWE_DeepONetDataset(Dataset):
         self.config = config
         
         # Determine if physics dataset should be used from config
-        self.use_physics_dataset = config.get("model.use_physics_loss", False)
+        self.use_physics_dataset = config.get_required_config("model.use_physics_loss")
 
         # Dimension of the branch input, trunk input, and output of the data
         self.branch_dim = 0

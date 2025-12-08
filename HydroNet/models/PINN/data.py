@@ -25,21 +25,21 @@ class PINNDataset(Dataset):
 
         # Get loss flags from config
         try:
-            self.bPDE_loss = bool(self.config.get('model.pinn_loss_flags.bPDE_loss', False))
+            self.bPDE_loss = bool(self.config.get_required_config('model.loss_flags.bPDE_loss'))
             if self.bPDE_loss is None:
-                raise ValueError("model.pinn_loss_flags.bPDE_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bPDE_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.pinn_loss_flags.bPDE_loss must be a boolean value in config file")
+            raise ValueError("model.loss_flags.bPDE_loss must be a boolean value in config file")
             
         try:
-            self.bBoundary_loss = bool(self.config.get('model.pinn_loss_flags.bBoundary_loss', False))
+            self.bBoundary_loss = bool(self.config.get_required_config('model.loss_flags.bBoundary_loss'))
             if self.bBoundary_loss is None:
-                raise ValueError("model.pinn_loss_flags.bBoundary_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bBoundary_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.pinn_loss_flags.bBoundary_loss must be a boolean value in config file")
+            raise ValueError("model.loss_flags.bBoundary_loss must be a boolean value in config file")
             
         try:
-            self.bSteady = bool(self.config.get('physics.bSteady', False))
+            self.bSteady = bool(self.config.get_required_config('physics.bSteady'))
             if self.bSteady is None:
                 raise ValueError("physics.bSteady must be specified in config file")
         except (TypeError, ValueError):
@@ -49,11 +49,11 @@ class PINNDataset(Dataset):
         self.bInitial_loss = not self.bSteady  # for unsteady problems, bSteady is false and initial conditions are included
             
         try:
-            self.bData_loss = bool(self.config.get('model.pinn_loss_flags.bData_loss', False))
+            self.bData_loss = bool(self.config.get_required_config('model.loss_flags.bData_loss'))
             if self.bData_loss is None:
-                raise ValueError("model.pinn_loss_flags.bData_loss must be specified in config file")
+                raise ValueError("model.loss_flags.bData_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.pinn_loss_flags.bData_loss must be a boolean value in config file")       
+            raise ValueError("model.loss_flags.bData_loss must be a boolean value in config file")       
 
         #debug: print out all the flags
         debug = False 
@@ -68,8 +68,8 @@ class PINNDataset(Dataset):
             print("\n\n")
 
         # Get device from config
-        device_type = self.config.get('device.type', 'cuda')
-        device_index = self.config.get('device.index', 0)
+        device_type = self.config.get_required_config('device.type')
+        device_index = self.config.get_required_config('device.index')
         
         if device_type == 'cuda' and torch.cuda.is_available():
             self.device = torch.device(f'cuda:{device_index}')
@@ -103,7 +103,7 @@ class PINNDataset(Dataset):
         - Data flags indicate which variables (h, u, v) are available for each point
         """
         
-        data_dir = self.config.get('data.pinn.points_dir')
+        data_dir = self.config.get_required_config('data.pinn.points_dir')
         
         # Load PDE points if bPDE_loss is true
         if self.bPDE_loss:
@@ -128,6 +128,7 @@ class PINNDataset(Dataset):
                 raise FileNotFoundError(f"PDE points file not found: {pde_points_file}")
         else:
             self.interior_points = None
+            self.pde_data = None
 
         # Load boundary points and info if bBoundary_loss is true
         if self.bBoundary_loss:
@@ -194,103 +195,64 @@ class PINNDataset(Dataset):
             self.data_flags = None
 
         # read the statistics of all the PINN points (pde_points, boundary_points, and data_points)
-        all_PINN_points_stats_file = os.path.join(data_dir, 'all_PINN_points_stats.json')
-        if os.path.exists(all_PINN_points_stats_file):
-            with open(all_PINN_points_stats_file, 'r') as f:
-                self.all_PINN_points_stats = json.load(f)
-                self.PINN_normalization_specs = self.all_PINN_points_stats['PINN_normalization_specs']
+        all_PINN_stats_file = os.path.join(data_dir, 'all_PINN_stats.json')
+        if os.path.exists(all_PINN_stats_file):
+            with open(all_PINN_stats_file, 'r') as f:
+                self.all_PINN_stats = json.load(f)
+                self.PINN_normalization_specs = self.all_PINN_stats['PINN_normalization_specs']
 
                 #unpack the statistics into variables
-                self.mesh_x_min = self.all_PINN_points_stats['all_points_stats']['x_min']
-                self.mesh_x_max = self.all_PINN_points_stats['all_points_stats']['x_max']
-                self.mesh_x_mean = self.all_PINN_points_stats['all_points_stats']['x_mean']
-                self.mesh_x_std = self.all_PINN_points_stats['all_points_stats']['x_std']
-                self.mesh_y_min = self.all_PINN_points_stats['all_points_stats']['y_min']
-                self.mesh_y_max = self.all_PINN_points_stats['all_points_stats']['y_max']
-                self.mesh_y_mean = self.all_PINN_points_stats['all_points_stats']['y_mean']
-                self.mesh_y_std = self.all_PINN_points_stats['all_points_stats']['y_std']
-                self.mesh_t_min = self.all_PINN_points_stats['all_points_stats']['t_min']
-                self.mesh_t_max = self.all_PINN_points_stats['all_points_stats']['t_max']
-                self.mesh_t_mean = self.all_PINN_points_stats['all_points_stats']['t_mean']
-                self.mesh_t_std = self.all_PINN_points_stats['all_points_stats']['t_std']
-                self.mesh_zb_min = self.all_PINN_points_stats['all_points_stats']['zb_min']
-                self.mesh_zb_max = self.all_PINN_points_stats['all_points_stats']['zb_max']
-                self.mesh_zb_mean = self.all_PINN_points_stats['all_points_stats']['zb_mean']
-                self.mesh_zb_std = self.all_PINN_points_stats['all_points_stats']['zb_std']
-                self.mesh_Sx_min = self.all_PINN_points_stats['all_points_stats']['Sx_min']
-                self.mesh_Sx_max = self.all_PINN_points_stats['all_points_stats']['Sx_max']
-                self.mesh_Sx_mean = self.all_PINN_points_stats['all_points_stats']['Sx_mean']
-                self.mesh_Sx_std = self.all_PINN_points_stats['all_points_stats']['Sx_std']
-                self.mesh_Sy_min = self.all_PINN_points_stats['all_points_stats']['Sy_min']
-                self.mesh_Sy_max = self.all_PINN_points_stats['all_points_stats']['Sy_max']
-                self.mesh_Sy_mean = self.all_PINN_points_stats['all_points_stats']['Sy_mean']
-                self.mesh_Sy_std = self.all_PINN_points_stats['all_points_stats']['Sy_std']
-                self.ManningN_min = self.all_PINN_points_stats['all_points_stats']['ManningN_min']
-                self.ManningN_max = self.all_PINN_points_stats['all_points_stats']['ManningN_max']
-                self.ManningN_mean = self.all_PINN_points_stats['all_points_stats']['ManningN_mean']
-                self.ManningN_std = self.all_PINN_points_stats['all_points_stats']['ManningN_std']
+                self.mesh_x_min = self.all_PINN_stats['all_points_stats']['x_min']
+                self.mesh_x_max = self.all_PINN_stats['all_points_stats']['x_max']
+                self.mesh_x_mean = self.all_PINN_stats['all_points_stats']['x_mean']
+                self.mesh_x_std = self.all_PINN_stats['all_points_stats']['x_std']
+                self.mesh_y_min = self.all_PINN_stats['all_points_stats']['y_min']
+                self.mesh_y_max = self.all_PINN_stats['all_points_stats']['y_max']
+                self.mesh_y_mean = self.all_PINN_stats['all_points_stats']['y_mean']
+                self.mesh_y_std = self.all_PINN_stats['all_points_stats']['y_std']
+                self.mesh_t_min = self.all_PINN_stats['all_points_stats']['t_min']
+                self.mesh_t_max = self.all_PINN_stats['all_points_stats']['t_max']
+                self.mesh_t_mean = self.all_PINN_stats['all_points_stats']['t_mean']
+                self.mesh_t_std = self.all_PINN_stats['all_points_stats']['t_std']
+                self.mesh_zb_min = self.all_PINN_stats['all_points_stats']['zb_min']
+                self.mesh_zb_max = self.all_PINN_stats['all_points_stats']['zb_max']
+                self.mesh_zb_mean = self.all_PINN_stats['all_points_stats']['zb_mean']
+                self.mesh_zb_std = self.all_PINN_stats['all_points_stats']['zb_std']
+                self.mesh_Sx_min = self.all_PINN_stats['all_points_stats']['Sx_min']
+                self.mesh_Sx_max = self.all_PINN_stats['all_points_stats']['Sx_max']
+                self.mesh_Sx_mean = self.all_PINN_stats['all_points_stats']['Sx_mean']
+                self.mesh_Sx_std = self.all_PINN_stats['all_points_stats']['Sx_std']
+                self.mesh_Sy_min = self.all_PINN_stats['all_points_stats']['Sy_min']
+                self.mesh_Sy_max = self.all_PINN_stats['all_points_stats']['Sy_max']
+                self.mesh_Sy_mean = self.all_PINN_stats['all_points_stats']['Sy_mean']
+                self.mesh_Sy_std = self.all_PINN_stats['all_points_stats']['Sy_std']
+                self.ManningN_min = self.all_PINN_stats['all_points_stats']['ManningN_min']
+                self.ManningN_max = self.all_PINN_stats['all_points_stats']['ManningN_max']
+                self.ManningN_mean = self.all_PINN_stats['all_points_stats']['ManningN_mean']
+                self.ManningN_std = self.all_PINN_stats['all_points_stats']['ManningN_std']
 
-                # read the statistics of all the data points from all_PINN_points_stats.json if bData_loss is true
-                if self.bData_loss:
-                    self.data_x_min = self.all_PINN_points_stats['all_data_points_stats']['data_x_min']
-                    self.data_x_max = self.all_PINN_points_stats['all_data_points_stats']['data_x_max']
-                    self.data_x_mean = self.all_PINN_points_stats['all_data_points_stats']['data_x_mean']
-                    self.data_x_std = self.all_PINN_points_stats['all_data_points_stats']['data_x_std']
-                    self.data_y_min = self.all_PINN_points_stats['all_data_points_stats']['data_y_min']
-                    self.data_y_max = self.all_PINN_points_stats['all_data_points_stats']['data_y_max']
-                    self.data_y_mean = self.all_PINN_points_stats['all_data_points_stats']['data_y_mean']
-                    self.data_y_std = self.all_PINN_points_stats['all_data_points_stats']['data_y_std']
-                    self.data_t_min = self.all_PINN_points_stats['all_data_points_stats']['data_t_min']
-                    self.data_t_max = self.all_PINN_points_stats['all_data_points_stats']['data_t_max']
-                    self.data_t_mean = self.all_PINN_points_stats['all_data_points_stats']['data_t_mean']
-                    self.data_t_std = self.all_PINN_points_stats['all_data_points_stats']['data_t_std']
-                    self.data_h_min = self.all_PINN_points_stats['all_data_points_stats']['data_h_min']
-                    self.data_h_max = self.all_PINN_points_stats['all_data_points_stats']['data_h_max']
-                    self.data_h_mean = self.all_PINN_points_stats['all_data_points_stats']['data_h_mean']
-                    self.data_h_std = self.all_PINN_points_stats['all_data_points_stats']['data_h_std']
-                    self.data_u_min = self.all_PINN_points_stats['all_data_points_stats']['data_u_min']
-                    self.data_u_max = self.all_PINN_points_stats['all_data_points_stats']['data_u_max']
-                    self.data_u_mean = self.all_PINN_points_stats['all_data_points_stats']['data_u_mean']
-                    self.data_u_std = self.all_PINN_points_stats['all_data_points_stats']['data_u_std']
-                    self.data_v_min = self.all_PINN_points_stats['all_data_points_stats']['data_v_min']
-                    self.data_v_max = self.all_PINN_points_stats['all_data_points_stats']['data_v_max']
-                    self.data_v_mean = self.all_PINN_points_stats['all_data_points_stats']['data_v_mean']
-                    self.data_v_std = self.all_PINN_points_stats['all_data_points_stats']['data_v_std']
-                    self.data_Umag_min = self.all_PINN_points_stats['all_data_points_stats']['data_Umag_min']
-                    self.data_Umag_max = self.all_PINN_points_stats['all_data_points_stats']['data_Umag_max']
-                    self.data_Umag_mean = self.all_PINN_points_stats['all_data_points_stats']['data_Umag_mean']
-                    self.data_Umag_std = self.all_PINN_points_stats['all_data_points_stats']['data_Umag_std']
-                else:
-                    self.data_x_min = 0.0
-                    self.data_x_max = 1.0
-                    self.data_x_mean = 0.5
-                    self.data_x_std = 1.0
-                    self.data_y_min = 0.0
-                    self.data_y_max = 1.0
-                    self.data_y_mean = 0.5
-                    self.data_y_std = 1.0
-                    self.data_t_min = 0.0  
-                    self.data_t_max = 1.0
-                    self.data_t_mean = 0.5
-                    self.data_t_std = 1.0
-                    self.data_h_min = 0.0
-                    self.data_h_max = 1.0
-                    self.data_h_mean = 0.5
-                    self.data_h_std = 1.0
-                    self.data_u_min = 0.0
-                    self.data_u_max = 1.0
-                    self.data_u_mean = 0.5
-                    self.data_u_std = 1.0
-                    self.data_v_min = 0.0
-                    self.data_v_max = 1.0
-                    self.data_v_mean = 0.5
-                    self.data_v_std = 1.0
-                    self.data_Umag_min = 0.0
-                    self.data_Umag_max = 1.0
-                    self.data_Umag_mean = 0.5
-                    self.data_Umag_std = 1.0
+                # Always read the statistics of all the data points from all_PINN_stats.json
+                # These statistics are needed for denormalizing model outputs when computing PDE residuals,
+                # regardless of whether data_loss is enabled. Using dummy values when bData_loss is false
+                # causes incorrect PDE residual computation and leads to wrong PDE loss magnitudes.
+                self.data_h_min = self.all_PINN_stats['all_data_stats']['h_min']
+                self.data_h_max = self.all_PINN_stats['all_data_stats']['h_max']
+                self.data_h_mean = self.all_PINN_stats['all_data_stats']['h_mean']
+                self.data_h_std = self.all_PINN_stats['all_data_stats']['h_std']
+                self.data_u_min = self.all_PINN_stats['all_data_stats']['u_min']
+                self.data_u_max = self.all_PINN_stats['all_data_stats']['u_max']
+                self.data_u_mean = self.all_PINN_stats['all_data_stats']['u_mean']
+                self.data_u_std = self.all_PINN_stats['all_data_stats']['u_std']
+                self.data_v_min = self.all_PINN_stats['all_data_stats']['v_min']
+                self.data_v_max = self.all_PINN_stats['all_data_stats']['v_max']
+                self.data_v_mean = self.all_PINN_stats['all_data_stats']['v_mean']
+                self.data_v_std = self.all_PINN_stats['all_data_stats']['v_std']
+                self.data_Umag_min = self.all_PINN_stats['all_data_stats']['Umag_min']
+                self.data_Umag_max = self.all_PINN_stats['all_data_stats']['Umag_max']
+                self.data_Umag_mean = self.all_PINN_stats['all_data_stats']['Umag_mean']
+                self.data_Umag_std = self.all_PINN_stats['all_data_stats']['Umag_std']
         else:
-            raise FileNotFoundError(f"All PINN points stats file not found: {all_PINN_points_stats_file}")
+            raise FileNotFoundError(f"All PINN stats file not found: {all_PINN_stats_file}")
 
         # Convert to PyTorch tensors and move to device
         if self.bPDE_loss and self.interior_points is not None:
@@ -386,18 +348,6 @@ class PINNDataset(Dataset):
         }
 
         # move the data points statistics to device
-        self.data_x_min = torch.tensor(self.data_x_min, dtype=torch.float32, device=self.device)
-        self.data_x_max = torch.tensor(self.data_x_max, dtype=torch.float32, device=self.device)
-        self.data_x_mean = torch.tensor(self.data_x_mean, dtype=torch.float32, device=self.device)
-        self.data_x_std = torch.tensor(self.data_x_std, dtype=torch.float32, device=self.device)
-        self.data_y_min = torch.tensor(self.data_y_min, dtype=torch.float32, device=self.device)
-        self.data_y_max = torch.tensor(self.data_y_max, dtype=torch.float32, device=self.device)
-        self.data_y_mean = torch.tensor(self.data_y_mean, dtype=torch.float32, device=self.device)
-        self.data_y_std = torch.tensor(self.data_y_std, dtype=torch.float32, device=self.device)
-        self.data_t_min = torch.tensor(self.data_t_min, dtype=torch.float32, device=self.device)
-        self.data_t_max = torch.tensor(self.data_t_max, dtype=torch.float32, device=self.device)
-        self.data_t_mean = torch.tensor(self.data_t_mean, dtype=torch.float32, device=self.device)
-        self.data_t_std = torch.tensor(self.data_t_std, dtype=torch.float32, device=self.device)
         self.data_h_min = torch.tensor(self.data_h_min, dtype=torch.float32, device=self.device)
         self.data_h_max = torch.tensor(self.data_h_max, dtype=torch.float32, device=self.device)    
         self.data_h_mean = torch.tensor(self.data_h_mean, dtype=torch.float32, device=self.device)
@@ -416,19 +366,7 @@ class PINNDataset(Dataset):
         self.data_Umag_std = torch.tensor(self.data_Umag_std, dtype=torch.float32, device=self.device) 
 
         #pack all data points stats into a dictionary
-        self.data_stats = {
-            'x_min': self.data_x_min,
-            'x_max': self.data_x_max,
-            'x_mean': self.data_x_mean, 
-            'x_std': self.data_x_std,
-            'y_min': self.data_y_min,
-            'y_max': self.data_y_max,
-            'y_mean': self.data_y_mean,
-            'y_std': self.data_y_std,
-            't_min': self.data_t_min,
-            't_max': self.data_t_max,
-            't_mean': self.data_t_mean,
-            't_std': self.data_t_std,
+        self.data_stats = {            
             'h_min': self.data_h_min,
             'h_max': self.data_h_max,
             'h_mean': self.data_h_mean,
@@ -447,8 +385,6 @@ class PINNDataset(Dataset):
             'Umag_std': self.data_Umag_std
         }
             
-       
-
     def __len__(self):
         """Return the total number of collocation points."""
         total = 0
@@ -545,8 +481,8 @@ class PINNDataset(Dataset):
             print(f"u_min: {self.data_values[:, 1].min()}, u_max: {self.data_values[:, 1].max()}, u_mean: {self.data_values[:, 1].mean()}, u_std: {self.data_values[:, 1].std()}")
             print(f"v_min: {self.data_values[:, 2].min()}, v_max: {self.data_values[:, 2].max()}, v_mean: {self.data_values[:, 2].mean()}, v_std: {self.data_values[:, 2].std()}")
 
-        #print all_PINN_points_stats
-        print(f"All PINN points stats: {self.all_PINN_points_stats}")
+        #print all_PINN_stats
+        print(f"All PINN stats: {self.all_PINN_stats}")
 
 
 
@@ -614,11 +550,11 @@ class PINNDataset(Dataset):
         """Get the statistics of the data."""
         return self.data_stats
 
-    def get_all_pinn_points_stats(self):
+    def get_all_pinn_stats(self):
         """
-        Get the all PINN points statistics for the PINN dataset.
+        Get the all PINN statistics for the PINN dataset.
         """
-        return self.all_PINN_points_stats
+        return self.all_PINN_stats
 
 
 def get_pinn_dataloader(dataset, batch_size, shuffle, num_workers):

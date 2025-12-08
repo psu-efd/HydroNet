@@ -79,6 +79,11 @@ training:
       continuity: 1.0     # Weight for continuity equation loss
       momentum_x: 1.0     # Weight for x-momentum equation loss
       momentum_y: 1.0     # Weight for y-momentum equation loss
+  logging:
+    tensorboard_log_dir: "./logs/tensorboard" # Save tensorboard logs to this directory
+    save_freq: 100           # Save checkpoint every N epochs
+    checkpoint_dir: "./checkpoints" # Save checkpoint to this directory
+    print_freq: 1            # Print progress every N epochs
     
 
 # Data parameters

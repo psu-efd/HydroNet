@@ -56,6 +56,7 @@ def pi_deeponet_train(config):
     
     try:
         # Create PI-DeepONet dataset and dataloader for training and validation
+        # Note: the physics dataset (PINN) is in train_dataset for DeepONet
         print("Loading training dataset...")
         train_dataset = PI_SWE_DeepONetDataset(
             data_path=config.get('data.deeponet.train_data_path'),
@@ -73,7 +74,7 @@ def pi_deeponet_train(config):
         
         # Create dataloaders
         # Note: On Windows, num_workers > 0 and pin_memory=True can cause issues with buffer variables
-        # Adjust these settings based on your platform and needs
+        # Adjust these settings based on your platform and needs        
         train_loader = DataLoader(
             train_dataset,
             batch_size=config.get('training.batch_size'),

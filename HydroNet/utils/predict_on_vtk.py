@@ -19,7 +19,6 @@ from vtk import vtkUnstructuredGridReader, vtkUnstructuredGrid
 from vtk.util import numpy_support as VN
 
 def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileName, bNodal, 
-                          bNormalize=None, normalization_method=None,
                           mesh_stats=None, data_stats=None,
                           time_pred=None, device=None):
     """Make prediction on a 2D unstructured vtk mesh.
@@ -36,10 +35,6 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
         Output VTK file name for saving predictions
     bNodal : bool
         If True, predict at nodes; if False, predict at cell centers
-    bNormalize : bool, optional
-        Whether the model takes normalized data as input
-    normalization_method : str, optional
-        Normalization method (e.g., 'min-max', 'z-score')
     mesh_stats : dict, optional
         Mesh statistics (x_mean, x_std, y_mean, y_std, t_mean, t_std, etc.)
     data_stats : dict, optional
@@ -73,36 +68,23 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
     prediction_coordinate_x = torch.from_numpy(prediction_coordinate_x).float()
     prediction_coordinate_y = torch.from_numpy(prediction_coordinate_y).float()
 
+
     #normalize the prediction coordinates
-    if bNormalize:
-        # Convert stats to tensors if they are not already and move to device
-        x_mean = mesh_stats['x_mean'] if isinstance(mesh_stats['x_mean'], torch.Tensor) else torch.tensor(mesh_stats['x_mean'], dtype=torch.float32)
-        x_std = mesh_stats['x_std'] if isinstance(mesh_stats['x_std'], torch.Tensor) else torch.tensor(mesh_stats['x_std'], dtype=torch.float32)
-        y_mean = mesh_stats['y_mean'] if isinstance(mesh_stats['y_mean'], torch.Tensor) else torch.tensor(mesh_stats['y_mean'], dtype=torch.float32)
-        y_std = mesh_stats['y_std'] if isinstance(mesh_stats['y_std'], torch.Tensor) else torch.tensor(mesh_stats['y_std'], dtype=torch.float32)
-        
-        # Move all tensors to the same device
-        x_mean = x_mean.to(device)
-        x_std = x_std.to(device)
-        y_mean = y_mean.to(device)
-        y_std = y_std.to(device)
-        prediction_coordinate_x = prediction_coordinate_x.to(device)
-        prediction_coordinate_y = prediction_coordinate_y.to(device)
-        
-        prediction_coordinate_x = (prediction_coordinate_x - x_mean) / x_std
-        prediction_coordinate_y = (prediction_coordinate_y - y_mean) / y_std
-        
-        if time_pred is not None:
-            t_mean = mesh_stats['t_mean'] if isinstance(mesh_stats['t_mean'], torch.Tensor) else torch.tensor(mesh_stats['t_mean'], dtype=torch.float32)
-            t_std = mesh_stats['t_std'] if isinstance(mesh_stats['t_std'], torch.Tensor) else torch.tensor(mesh_stats['t_std'], dtype=torch.float32)
-            time_pred = torch.tensor(time_pred, dtype=torch.float32)
-            
-            # Move time-related tensors to device
-            t_mean = t_mean.to(device)
-            t_std = t_std.to(device)
-            time_pred = time_pred.to(device)
-            
-            time_pred = (time_pred - t_mean) / t_std
+    # Convert stats to tensors if they are not already
+    def to_tensor(value):
+        if isinstance(value, torch.Tensor):
+            return value
+        else:
+            return torch.tensor(value, dtype=torch.float32)
+    
+    x_min = to_tensor(mesh_stats['x_min'])
+    x_max = to_tensor(mesh_stats['x_max'])
+    y_min = to_tensor(mesh_stats['y_min'])
+    y_max = to_tensor(mesh_stats['y_max'])
+    
+    if time_pred is not None:
+        t_min = to_tensor(mesh_stats['t_min'])
+        t_max = to_tensor(mesh_stats['t_max'])
 
     # Create input tensor
     if time_pred is not None:
@@ -117,32 +99,40 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
             prediction_coordinate_y
         ], dim=1)
 
-    # Move to device and make predictions
+    print(f"prediction_coordinates before normalization: {prediction_coordinates}")
+
+    # Move to device first, then normalize (ensures all tensors are on same device)
     prediction_coordinates = prediction_coordinates.to(device)
+    x_min = x_min.to(device)
+    x_max = x_max.to(device)
+    y_min = y_min.to(device)
+    y_max = y_max.to(device)
+    if time_pred is not None:
+        t_min = t_min.to(device)
+        t_max = t_max.to(device)
+
+    #normalize the prediction coordinates (min-max normalization)
+    prediction_coordinates[:, 0] = (prediction_coordinates[:, 0] - x_min) / (x_max - x_min)
+    prediction_coordinates[:, 1] = (prediction_coordinates[:, 1] - y_min) / (y_max - y_min)
+    if time_pred is not None:
+        prediction_coordinates[:, 2] = (prediction_coordinates[:, 2] - t_min) / (t_max - t_min)
+
+    print(f"prediction_coordinates after normalization: {prediction_coordinates}")
+
     with torch.no_grad():
         predictions = model(prediction_coordinates)
 
     #denormalize the predictions
-    if bNormalize:
-        # Convert stats to tensors if they are not already and move to device
-        h_mean = data_stats['h_mean'] if isinstance(data_stats['h_mean'], torch.Tensor) else torch.tensor(data_stats['h_mean'], dtype=torch.float32)
-        h_std = data_stats['h_std'] if isinstance(data_stats['h_std'], torch.Tensor) else torch.tensor(data_stats['h_std'], dtype=torch.float32)
-        u_mean = data_stats['u_mean'] if isinstance(data_stats['u_mean'], torch.Tensor) else torch.tensor(data_stats['u_mean'], dtype=torch.float32)
-        u_std = data_stats['u_std'] if isinstance(data_stats['u_std'], torch.Tensor) else torch.tensor(data_stats['u_std'], dtype=torch.float32)
-        v_mean = data_stats['v_mean'] if isinstance(data_stats['v_mean'], torch.Tensor) else torch.tensor(data_stats['v_mean'], dtype=torch.float32)
-        v_std = data_stats['v_std'] if isinstance(data_stats['v_std'], torch.Tensor) else torch.tensor(data_stats['v_std'], dtype=torch.float32)
-
-        # Move all tensors to device
-        h_mean = h_mean.to(device)
-        h_std = h_std.to(device)
-        u_mean = u_mean.to(device)
-        u_std = u_std.to(device)
-        v_mean = v_mean.to(device)
-        v_std = v_std.to(device)
-
-        predictions[:, 0] = predictions[:, 0] * h_std + h_mean
-        predictions[:, 1] = predictions[:, 1] * u_std + u_mean
-        predictions[:, 2] = predictions[:, 2] * v_std + v_mean
+    h_mean = data_stats['h_mean']
+    h_std = data_stats['h_std']
+    u_mean = data_stats['u_mean']
+    u_std = data_stats['u_std']
+    v_mean = data_stats['v_mean']
+    v_std = data_stats['v_std']
+    
+    predictions[:, 0] = predictions[:, 0] * h_std + h_mean
+    predictions[:, 1] = predictions[:, 1] * u_std + u_mean
+    predictions[:, 2] = predictions[:, 2] * v_std + v_mean
 
     # Convert predictions to numpy for VTK writing
     predictions = predictions.cpu().numpy()

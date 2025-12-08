@@ -8,14 +8,13 @@ import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 
-from pyHMT2D.Misc.SRH_to_PINN_points import srh_to_pinn_points
-
 import json
 import h5py
 
 # Import utility function for JSON serialization
 import os
 from .json_utils import convert_to_json_serializable
+from .SRH_to_PINN_points import srh_to_pinn_points
 
 def probeUnstructuredGridVTKOnPoints(pointVTK, readerUnstructuredGridVTK, varName,
                                          kernel="gaussian", radius=None, nullValue=None):
@@ -1102,19 +1101,28 @@ def plot_profile_results(case_index, variable_name, output_unit):
     #show the plot
     plt.show()
 
-def convert_mesh_points_for_PINN(postprocessing_specs):
+def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict):
     """
     Convert mesh points in a json file (mesh_points.json, derived from SRH-2D mesh file) to PINNDataset format.
     
     Parameters
     ----------
         postprocessing_specs (dict): The postprocessing specifications dictionary        
+        all_PINN_data_stats_dict (dict): The statistics of the PINN data (to be merged with the PINN points stats and saved to a JSON file)
 
     Returns
     -------
     dict
         Dictionary containing shapes of generated arrays
     """
+
+    #convert the SRH-2D mesh to points: create mesh_points.json file
+    srhcontrol_file = postprocessing_specs['PINN_points_specs']['srhcontrol_file']
+    refinement_pde = postprocessing_specs['PINN_points_specs']['refinement_pde']
+    refinement_bc = postprocessing_specs['PINN_points_specs']['refinement_bc']
+    srh_to_pinn_points(srhcontrol_file, refinement_pde, refinement_bc)
+
+    #convert the mesh_points.json file to npy files in "PINN" directory (to be loaded by PINNDataset)
 
     json_file = "mesh_points.json"
     output_dir = "data/PINN"
@@ -1289,30 +1297,25 @@ def convert_mesh_points_for_PINN(postprocessing_specs):
     x_normalization_method = PINN_normalization_specs['x']
     y_normalization_method = PINN_normalization_specs['y']
     t_normalization_method = PINN_normalization_specs['t']
+    h_normalization_method = PINN_normalization_specs['h']
+    u_normalization_method = PINN_normalization_specs['u']
+    v_normalization_method = PINN_normalization_specs['v']
+    Umag_normalization_method = PINN_normalization_specs['Umag']
     zb_normalization_method = PINN_normalization_specs['zb']
     Sx_normalization_method = PINN_normalization_specs['Sx']
     Sy_normalization_method = PINN_normalization_specs['Sy']
     ManningN_normalization_method = PINN_normalization_specs['ManningN']
 
+    #currently only min-max normalization is supported for x, y, and t
     if x_normalization_method == "min-max":
         pde_points[:, 0] = (pde_points[:, 0] - x_min) / (x_max - x_min)
         boundary_points[:, 0] = (boundary_points[:, 0] - x_min) / (x_max - x_min)
-    elif x_normalization_method == "z-score":
-        pde_points[:, 0] = (pde_points[:, 0] - x_mean) / x_std
-        boundary_points[:, 0] = (boundary_points[:, 0] - x_mean) / x_std
-    elif x_normalization_method == "none":
-        pass
     else:
         raise ValueError(f"Invalid x normalization method: {x_normalization_method}")
 
     if y_normalization_method == "min-max":
         pde_points[:, 1] = (pde_points[:, 1] - y_min) / (y_max - y_min)
         boundary_points[:, 1] = (boundary_points[:, 1] - y_min) / (y_max - y_min)
-    elif y_normalization_method == "z-score":
-        pde_points[:, 1] = (pde_points[:, 1] - y_mean) / y_std
-        boundary_points[:, 1] = (boundary_points[:, 1] - y_mean) / y_std
-    elif y_normalization_method == "none":
-        pass
     else:
         raise ValueError(f"Invalid y normalization method: {y_normalization_method}")
 
@@ -1320,45 +1323,26 @@ def convert_mesh_points_for_PINN(postprocessing_specs):
     if pde_points.shape[1] == 3:
         if t_normalization_method == "min-max":
             pde_points[:, 2] = (pde_points[:, 2] - t_min) / (t_max - t_min)
-        elif t_normalization_method == "z-score":
-            pde_points[:, 2] = (pde_points[:, 2] - t_mean) / t_std
-        elif t_normalization_method == "none":
-            pass
         else:
             raise ValueError(f"Invalid t normalization method: {t_normalization_method}")
 
-    if zb_normalization_method == "min-max":
-        pde_data[:, 0] = (pde_data[:, 0] - zb_min) / (zb_max - zb_min)
-    elif zb_normalization_method == "z-score":
-        pde_data[:, 0] = (pde_data[:, 0] - zb_mean) / zb_std
-    elif zb_normalization_method == "none":
+    #zb, Sx, Sy, ManningN are not normalized for now, as they are not used in the loss function
+    if zb_normalization_method == "none":
         pass
     else:
         raise ValueError(f"Invalid zb normalization method: {zb_normalization_method}")
 
-    if Sx_normalization_method == "min-max":
-        pde_data[:, 1] = (pde_data[:, 1] - Sx_min) / (Sx_max - Sx_min)
-    elif Sx_normalization_method == "z-score":
-        pde_data[:, 1] = (pde_data[:, 1] - Sx_mean) / Sx_std
-    elif Sx_normalization_method == "none":
+    if Sx_normalization_method == "none":
         pass
     else:
         raise ValueError(f"Invalid Sx normalization method: {Sx_normalization_method}")
 
-    if Sy_normalization_method == "min-max":
-        pde_data[:, 2] = (pde_data[:, 2] - Sy_min) / (Sy_max - Sy_min)
-    elif Sy_normalization_method == "z-score":
-        pde_data[:, 2] = (pde_data[:, 2] - Sy_mean) / Sy_std
-    elif Sy_normalization_method == "none":
+    if Sy_normalization_method == "none":
         pass
     else:
         raise ValueError(f"Invalid Sy normalization method: {Sy_normalization_method}")
 
-    if ManningN_normalization_method == "min-max":
-        pde_data[:, 3] = (pde_data[:, 3] - ManningN_min) / (ManningN_max - ManningN_min)
-    elif ManningN_normalization_method == "z-score":
-        pde_data[:, 3] = (pde_data[:, 3] - ManningN_mean) / ManningN_std
-    elif ManningN_normalization_method == "none":
+    if ManningN_normalization_method == "none":
         pass
     else:
         raise ValueError(f"Invalid ManningN normalization method: {ManningN_normalization_method}")
@@ -1417,11 +1401,12 @@ def convert_mesh_points_for_PINN(postprocessing_specs):
         'ManningN_std': float(ManningN_std)
     }
 
-    #added the PINN_normalization_specs to the all_points_stats_dict
+    #added the PINN_normalization_specs to the all_points_stats_dict; also add the all_PINN_data_stats_dict to the all_points_stats_dict
     all_points_stats_dict = {
         "PINN_normalization_specs": PINN_normalization_specs,
-        "all_points_stats": all_points_stats_dict
-        }
+        "all_points_stats": all_points_stats_dict,
+        "all_data_stats": all_PINN_data_stats_dict
+    }
 
     # Print summary
     print("\nPoints Summary:")
@@ -1459,8 +1444,9 @@ def convert_mesh_points_for_PINN(postprocessing_specs):
         print("all_points_stats_dict = ", all_points_stats_dict)
         
         #save the statistics of all the points as a json file
-        with open(os.path.join(output_dir, 'all_PINN_points_stats.json'), 'w') as f:
+        with open(os.path.join(output_dir, 'all_PINN_stats.json'), 'w') as f:
             json.dump(all_points_stats_dict, f, indent=4)
+
     except Exception as e:
         raise RuntimeError(f"Failed to save files: {e}")
     

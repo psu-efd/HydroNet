@@ -1,5 +1,5 @@
 """
-Physics-Informed SWE_DeepONet model for HydroNet.
+Physics-Informed SWE_DeepONet (PI-SWE-DeepONet) model (with the option of turning on/off the physics-informed loss) for HydroNet.
 """
 import torch
 import torch.nn as nn
@@ -116,31 +116,31 @@ class PI_SWE_DeepONetModel(nn.Module):
             raise ValueError("config must be a Config object.")
 
         self.config = config
-        self.bSteady = self.config.get("physics.bSteady", True)
-        self.use_physics_loss = self.config.get("model.use_physics_loss", False)
+        self.bSteady = self.config.get_required_config("physics.bSteady")
+        self.use_physics_loss = self.config.get_required_config("model.use_physics_loss")
 
-        device_type = self.config.get("device.type", None)
+        device_type = self.config.get_required_config("device.type")
         if device_type is not None:
-            device_index = self.config.get("device.index", 0)
+            device_index = self.config.get_required_config("device.index")
             if device_type == "cuda" and torch.cuda.is_available():
                 self.device = torch.device(f"cuda:{device_index}")
             else:
                 self.device = torch.device("cpu")
-        else:
-            self.device = self.config.get_device()
+        else:  #by default, the model will be on the CPU
+            self.device = torch.device("cpu")
 
         # Required model configuration parameters
-        branch_layers = self._get_required_config("model.branch_net.hidden_layers")
-        branch_activation = self._get_required_config("model.branch_net.activation")
-        branch_dropout = self._get_required_config("model.branch_net.dropout_rate")
+        branch_layers = self.config.get_required_config("model.branch_net.hidden_layers")
+        branch_activation = self.config.get_required_config("model.branch_net.activation")
+        branch_dropout = self.config.get_required_config("model.branch_net.dropout_rate")
 
-        trunk_layers = self._get_required_config("model.trunk_net.hidden_layers")
-        trunk_activation = self._get_required_config("model.trunk_net.activation")
-        trunk_dropout = self._get_required_config("model.trunk_net.dropout_rate")
+        trunk_layers = self.config.get_required_config("model.trunk_net.hidden_layers")
+        trunk_activation = self.config.get_required_config("model.trunk_net.activation")
+        trunk_dropout = self.config.get_required_config("model.trunk_net.dropout_rate")
 
-        self.branch_input_dim = self._get_required_config("model.branch_net.branch_input_dim")
-        self.trunk_input_dim = self._get_required_config("model.trunk_net.trunk_input_dim")
-        self.output_dim = self._get_required_config("model.output_dim")
+        self.branch_input_dim = self.config.get_required_config("model.branch_net.branch_input_dim")
+        self.trunk_input_dim = self.config.get_required_config("model.trunk_net.trunk_input_dim")
+        self.output_dim = self.config.get_required_config("model.output_dim")
 
         if branch_layers[-1] != trunk_layers[-1]:
             raise ValueError(
@@ -180,35 +180,6 @@ class PI_SWE_DeepONetModel(nn.Module):
         """
         self.use_physics_loss = bool(flag)
 
-    def _get_required_config(self, key: str):
-        """
-        Get a required configuration value, raising an error if it's missing.
-        
-        Args:
-            key: Configuration key (e.g., "model.branch_net.hidden_layers")
-            
-        Returns:
-            The configuration value
-            
-        Raises:
-            ValueError: If the configuration key is missing
-        """
-        value = self.config.get(key, None)
-        if value is None:
-            raise ValueError(f"Required configuration parameter '{key}' is missing from config.")
-        return value
-
-    def _require_positive(self, key: str, default: float) -> float:
-        value = self.config.get(key, None)
-        if value is None:
-            if self.use_physics_loss:
-                raise ValueError(f"{key} must be provided when physics-informed loss is enabled.")
-            return default
-        if value <= 0:
-            if self.use_physics_loss:
-                raise ValueError(f"{key} must be positive.")
-            return default
-        return float(value)
 
     def _init_physics_buffers(self):
         """
@@ -252,9 +223,9 @@ class PI_SWE_DeepONetModel(nn.Module):
 
         Buffers handle this automatically, which is why they're perfect for constants and configuration values that need to persist with the model.
         """
-        g_value = float(self.config.get("physics.gravity", 9.81))
-        length_scale_value = self._require_positive("physics.scales.length", 1.0)
-        velocity_scale_value = self._require_positive("physics.scales.velocity", 1.0)
+        g_value = float(self.config.get_required_config("physics.gravity"))
+        length_scale_value = self.config.require_positive("physics.scales.length", 1.0, self.use_physics_loss)
+        velocity_scale_value = self.config.require_positive("physics.scales.velocity", 1.0, self.use_physics_loss)
         
         # Create buffers without specifying device - they will be moved by self.to(device) later
         self.register_buffer("g", torch.tensor(g_value, dtype=torch.float32))
@@ -268,51 +239,51 @@ class PI_SWE_DeepONetModel(nn.Module):
         def to_tensor(val):
             return torch.tensor(float(val), dtype=torch.float32)
 
-        deeponet_data_loss_val = self.config.get("training.loss_weights.deeponet.data_loss", 1.0)
-        deeponet_pinn_loss_val = self.config.get("training.loss_weights.deeponet.pinn_loss", 1.0)
+        deeponet_data_loss_val = self.config.get_required_config("training.loss_weights.deeponet.data_loss")
+        deeponet_pinn_loss_val = self.config.get_required_config("training.loss_weights.deeponet.pinn_loss")
 
         self.register_buffer(
             "loss_weight_pinn_data_loss",
-            to_tensor(self.config.get("training.loss_weights.pinn.data_loss", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pinn.data_loss")),
         )
         self.register_buffer(
             "loss_weight_pinn_pde_loss",
-            to_tensor(self.config.get("training.loss_weights.pinn.pde_loss", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pinn.pde_loss")),
         )
         self.register_buffer(
             "loss_weight_pinn_boundary_loss",
-            to_tensor(self.config.get("training.loss_weights.pinn.boundary_loss", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pinn.boundary_loss")),
         )
 
         self.register_buffer("loss_weight_deeponet_data_loss", to_tensor(deeponet_data_loss_val))
         self.register_buffer("loss_weight_deeponet_pinn_loss", to_tensor(deeponet_pinn_loss_val))
         self.register_buffer(
             "loss_weight_deeponet_boundary_loss",
-            to_tensor(self.config.get("training.loss_weights.deeponet.boundary_loss", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.deeponet.boundary_loss")),
         )
         
         # Weights for individual PDE component losses (continuity, momentum_x, momentum_y)
         self.register_buffer(
             "loss_weight_pde_continuity",
-            to_tensor(self.config.get("training.loss_weights.pde.continuity", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pde.continuity")),
         )
         self.register_buffer(
             "loss_weight_pde_momentum_x",
-            to_tensor(self.config.get("training.loss_weights.pde.momentum_x", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pde.momentum_x")),
         )
         self.register_buffer(
             "loss_weight_pde_momentum_y",
-            to_tensor(self.config.get("training.loss_weights.pde.momentum_y", 1.0)),
+            to_tensor(self.config.get_required_config("training.loss_weights.pde.momentum_y")),
         )
 
         if not self.bSteady:
             self.register_buffer(
                 "loss_weight_pinn_initial_loss",
-                to_tensor(self.config.get("training.loss_weights.pinn.initial_loss", 1.0)),
+                to_tensor(self.config.get_required_config("training.loss_weights.pinn.initial_loss")),
             )
             self.register_buffer(
                 "loss_weight_deeponet_initial_loss",
-                to_tensor(self.config.get("training.loss_weights.deeponet.initial_loss", 1.0)),
+                to_tensor(self.config.get_required_config("training.loss_weights.deeponet.initial_loss")),
             )
 
     def load_state_dict(self, state_dict, strict=True):
@@ -407,9 +378,9 @@ class PI_SWE_DeepONetModel(nn.Module):
         self.branch_input_dim = dim
         
         # Get branch network parameters from config (required)
-        branch_layers = self._get_required_config('model.branch_net.hidden_layers')
-        branch_activation = self._get_required_config('model.branch_net.activation')
-        branch_dropout = self._get_required_config('model.branch_net.dropout_rate')
+        branch_layers = self.config.get_required_config('model.branch_net.hidden_layers')
+        branch_activation = self.config.get_required_config('model.branch_net.activation')
+        branch_dropout = self.config.get_required_config('model.branch_net.dropout_rate')
         
         # Recreate branch network with new input dimension
         self.branch_net = BranchNet(
@@ -477,9 +448,9 @@ class PI_SWE_DeepONetModel(nn.Module):
         sigma_v = deeponet_points_stats['all_data_stats']['v_std']        
         
         # Normalization stats for the coordinates (x, y, t) of PINN.
-        x_min = pinn_points_stats['all_points_stats']['x_mean']
+        x_min = pinn_points_stats['all_points_stats']['x_min']
         x_max = pinn_points_stats['all_points_stats']['x_max']
-        y_min = pinn_points_stats['all_points_stats']['y_mean']
+        y_min = pinn_points_stats['all_points_stats']['y_min']
         y_max = pinn_points_stats['all_points_stats']['y_max']
         if not self.bSteady:
             t_min = pinn_points_stats['all_points_stats']['t_min']
@@ -532,11 +503,11 @@ class PI_SWE_DeepONetModel(nn.Module):
             mass_residual = dh_dt + mass_residual
 
         # Momentum conservation equations
-        momentum_x_residual = u*du_dx + v*du_dy + self.g * dh_dx - self.g * Sx + self.g * ManningN**2 * u * u_mag / (h**(4/3) + 1e-8)
+        momentum_x_residual = u*du_dx + v*du_dy + self.g * dh_dx - self.g * Sx + self.g * ManningN**2 * u * u_mag / (h**(4.0/3.0) + 1e-8)
         if not self.bSteady:
             momentum_x_residual = du_dt + momentum_x_residual
 
-        momentum_y_residual = u*dv_dx + v*dv_dy + self.g * dh_dy - self.g * Sy + self.g * ManningN**2 * v * u_mag / (h**(4/3) + 1e-8)
+        momentum_y_residual = u*dv_dx + v*dv_dy + self.g * dh_dy - self.g * Sy + self.g * ManningN**2 * v * u_mag / (h**(4.0/3.0) + 1e-8)
         if not self.bSteady:
             momentum_y_residual = dv_dt + momentum_y_residual
 

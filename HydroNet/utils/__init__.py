@@ -10,6 +10,7 @@ from .pi_deeponet_utils import (
     pi_deeponet_plot_training_history,
     pi_deeponet_convert_test_results_to_vtk
 )
+from .SRH_to_PINN_points import *
 
 __all__ = [
     "gmsh2D_to_points", 
@@ -21,6 +22,7 @@ __all__ = [
     "pi_deeponet_train",
     "pi_deeponet_test",
     "pi_deeponet_plot_training_history",
-    "pi_deeponet_convert_test_results_to_vtk"
+    "pi_deeponet_convert_test_results_to_vtk",
+    "srh_to_pinn_points"
 ]
 
