@@ -20,8 +20,10 @@ model:
     dropout_rate: 0.0
     trunk_input_dim: 2  # (x, y) coordinates
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)  
-  pinn_loss_flags:         #loss flags for the physics part
-    bPDE_loss: true        #whether to include the PDEs loss in the loss function 
+  pinn_loss_flags:         #loss flags for the physics-informed part
+    bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
+    bBoundary_loss: false   #whether to use boundary conditions in the loss function    
+    bData_loss: false       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation). Note: this data loss is for PINN only. It is different from the data loss for DeepONet. In DeepONet models, this bData_loss should be set to false for most applications.
 
 # Physics parameters
 physics:
@@ -36,8 +38,7 @@ physics:
 # Training parameters
 training:
   batch_size: 16384
-  epochs: 1000
-  save_freq: 10
+  epochs: 1000  
   learning_rate: 0.001
   weight_decay: 1e-5
   scheduler:

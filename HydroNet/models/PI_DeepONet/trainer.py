@@ -215,7 +215,7 @@ class PI_SWE_DeepONetTrainer:
             else:
                 boundary_points = None
 
-            all_pinn_points_stats = physics_dataset.get_all_pinn_points_stats()
+            all_pinn_points_stats = physics_dataset.get_all_pinn_stats()
         else:
             pde_points = None
             pde_data = None

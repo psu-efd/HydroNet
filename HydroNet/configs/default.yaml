@@ -37,7 +37,6 @@ physics:
 training:
   batch_size: 16384
   epochs: 1000
-  save_freq: 10
   learning_rate: 0.001
   weight_decay: 1e-5
   scheduler:

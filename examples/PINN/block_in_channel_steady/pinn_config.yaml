@@ -8,7 +8,7 @@ device:
 # Architecture
 model:
   name: "SWE_PINN"
-  loss_flags:    
+  pinn_loss_flags:    
     bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
     bBoundary_loss: false   #whether to use boundary conditions in the loss function    
     bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
@@ -31,7 +31,6 @@ physics:
 training:
   batch_size: 64     #currently not used
   epochs: 1000
-  save_freq: 10
   learning_rate: 0.001
   weight_decay: 1e-5
   scheduler:

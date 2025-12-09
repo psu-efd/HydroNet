@@ -25,18 +25,18 @@ class PINNDataset(Dataset):
 
         # Get loss flags from config
         try:
-            self.bPDE_loss = bool(self.config.get_required_config('model.loss_flags.bPDE_loss'))
+            self.bPDE_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bPDE_loss'))
             if self.bPDE_loss is None:
-                raise ValueError("model.loss_flags.bPDE_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bPDE_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bPDE_loss must be a boolean value in config file")
+            raise ValueError("model.pinn_loss_flags.bPDE_loss must be a boolean value in config file")
             
         try:
-            self.bBoundary_loss = bool(self.config.get_required_config('model.loss_flags.bBoundary_loss'))
+            self.bBoundary_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bBoundary_loss'))
             if self.bBoundary_loss is None:
-                raise ValueError("model.loss_flags.bBoundary_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bBoundary_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bBoundary_loss must be a boolean value in config file")
+            raise ValueError("model.pinn_loss_flags.bBoundary_loss must be a boolean value in config file")
             
         try:
             self.bSteady = bool(self.config.get_required_config('physics.bSteady'))
@@ -49,11 +49,11 @@ class PINNDataset(Dataset):
         self.bInitial_loss = not self.bSteady  # for unsteady problems, bSteady is false and initial conditions are included
             
         try:
-            self.bData_loss = bool(self.config.get_required_config('model.loss_flags.bData_loss'))
+            self.bData_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bData_loss'))
             if self.bData_loss is None:
-                raise ValueError("model.loss_flags.bData_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bData_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bData_loss must be a boolean value in config file")       
+            raise ValueError("model.pinn_loss_flags.bData_loss must be a boolean value in config file")       
 
         #debug: print out all the flags
         debug = False 
@@ -232,9 +232,7 @@ class PINNDataset(Dataset):
                 self.ManningN_std = self.all_PINN_stats['all_points_stats']['ManningN_std']
 
                 # Always read the statistics of all the data points from all_PINN_stats.json
-                # These statistics are needed for denormalizing model outputs when computing PDE residuals,
-                # regardless of whether data_loss is enabled. Using dummy values when bData_loss is false
-                # causes incorrect PDE residual computation and leads to wrong PDE loss magnitudes.
+                # These statistics are needed for denormalizing model outputs when computing PDE residuals, regardless of whether data_loss is enabled. 
                 self.data_h_min = self.all_PINN_stats['all_data_stats']['h_min']
                 self.data_h_max = self.all_PINN_stats['all_data_stats']['h_max']
                 self.data_h_mean = self.all_PINN_stats['all_data_stats']['h_mean']
