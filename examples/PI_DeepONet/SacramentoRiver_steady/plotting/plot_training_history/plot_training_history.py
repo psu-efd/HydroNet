@@ -108,8 +108,8 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
 
 if __name__ == "__main__":
     # The file names of the training history files
-    deeponet_training_history_file = '../../SacramentoRiver_steady_DeepONet/history_20251130_171428.json'
-    pi_deeponet_training_history_file = '../../SacramentoRiver_steady_PI_DeepONet/history_20251127_235307.json'
+    deeponet_training_history_file = '../../SacramentoRiver_steady_DeepONet/history_20251210_192956.json'
+    pi_deeponet_training_history_file = '../../SacramentoRiver_steady_PI_DeepONet/history_20251210_213029.json'
 
     plot_training_history(deeponet_training_history_file, pi_deeponet_training_history_file)
 

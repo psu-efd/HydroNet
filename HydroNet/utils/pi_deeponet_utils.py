@@ -90,6 +90,9 @@ def pi_deeponet_train(config):
             num_workers=config.get('training.num_workers', 0),
             pin_memory=config.get('training.pin_memory', False)
         )
+
+        # Get the deeponet points stats
+        deeponet_points_stats = train_dataset.get_deeponet_stats()
         
         # Initialize model 
         print("Initializing model...")
@@ -124,7 +127,7 @@ def pi_deeponet_train(config):
             print_gpu_memory("GPU memory after data transfer")
             
             # Forward pass
-            output = model(branch_input, trunk_input)
+            output = model(branch_input, trunk_input, deeponet_points_stats)
             print_gpu_memory("GPU memory after forward pass")
             
             # Backward pass
@@ -295,7 +298,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
             target = target.to(trainer.device)
             
             # Forward pass
-            output = model(branch_input, trunk_input)
+            output = model(branch_input, trunk_input, all_DeepONet_stats)
             
             # Calculate loss
             loss = trainer.loss_fn(output, target)
@@ -772,7 +775,7 @@ def _pi_deeponet_plot_training_component_loss_history_pde_loss_continuity_and_mo
 def pi_deeponet_application_create_model_application_dataset(config):
     """
 
-    Create the model application dataset (PI_SWE_DeepONetDataset). The dataset is created from the application parameters and the application vtk file. In fact, only the DeepONet data is relevant for the model application. The PINN data is not needed.
+    Create the model application dataset (PI_SWE_DeepONetDataset). The dataset is created from the application parameters and the application vtk file. In fact, only the DeepONet data is relevant for the model application. The PINN data is not needed for the model application.
 
     Args:
         config: The configuration object.
@@ -899,24 +902,16 @@ def pi_deeponet_application_create_model_application_dataset(config):
     branch_stats = normalization_specs['branch_inputs']
     trunk_stats = normalization_specs['trunk_inputs']
     
-    # Normalize branch inputs
+    # Normalize branch inputs: only z-score is supported for branch inputs for now
     if branch_normalization_method == 'z-score':
         branch_mean = np.array(branch_stats['mean'])
         branch_std = np.array(branch_stats['std'])
-        branch_inputs = (branch_inputs - branch_mean) / branch_std
-    elif branch_normalization_method == 'min-max':
-        branch_min = np.array(branch_stats['min'])
-        branch_max = np.array(branch_stats['max'])
-        branch_inputs = (branch_inputs - branch_min) / (branch_max - branch_min)
+        branch_inputs = (branch_inputs - branch_mean) / branch_std    
     else:
         raise ValueError(f"Invalid branch inputs normalization method: {branch_normalization_method}")
     
-    # Normalize trunk inputs
-    if trunk_normalization_method == 'z-score':
-        trunk_mean = np.array(trunk_stats['mean'])
-        trunk_std = np.array(trunk_stats['std'])
-        trunk_inputs = (trunk_inputs - trunk_mean) / trunk_std
-    elif trunk_normalization_method == 'min-max':
+    # Normalize trunk inputs: only min-max is supported for trunk inputs for now
+    if trunk_normalization_method == 'min-max':
         trunk_min = np.array(trunk_stats['min'])
         trunk_max = np.array(trunk_stats['max'])
         trunk_inputs = (trunk_inputs - trunk_min) / (trunk_max - trunk_min)

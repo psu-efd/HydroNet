@@ -3,6 +3,10 @@
         "x": "min-max",
         "y": "min-max",
         "t": "min-max",
+        "h": "z-score",
+        "u": "z-score",
+        "v": "z-score",
+        "Umag": "z-score",
         "zb": "none",
         "Sx": "none",
         "Sy": "none",
@@ -38,7 +42,7 @@
         "ManningN_mean": 0.04501786828041077,
         "ManningN_std": 0.023841289803385735
     },
-	"all_data_stats": {
+    "all_data_stats": {
         "h_min": 0.0,
         "h_max": 20.224199295043945,
         "h_mean": 5.082669580820816,

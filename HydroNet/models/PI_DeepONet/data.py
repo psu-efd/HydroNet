@@ -57,13 +57,13 @@ class PI_SWE_DeepONetDataset(Dataset):
         self._load_data()
         
         # Get the normalization stats
-        # get the upper directory of the data_path
-        self.upper_data_path = os.path.dirname(self.data_path)
+        # Get the file name of the all_DeepONet_stats.json file
+        all_DeepONet_stats_file = config.get_required_config("data.deeponet.train_val_test_stats_path")
         
-        if not os.path.exists(os.path.join(self.upper_data_path, 'all_DeepONet_stats.json')):
-            raise FileNotFoundError(f"Required file all_DeepONet_stats.json not found in {self.upper_data_path}")
+        if not os.path.exists(all_DeepONet_stats_file):
+            raise FileNotFoundError(f"Required file {all_DeepONet_stats_file} not found")
         
-        with open(os.path.join(self.upper_data_path, 'all_DeepONet_stats.json'), 'r') as f:
+        with open(all_DeepONet_stats_file, 'r') as f:
             self.all_DeepONet_stats = json.load(f)
         
         #print("all_DeepONet_stats: ", self.all_DeepONet_stats)

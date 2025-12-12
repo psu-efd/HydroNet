@@ -101,12 +101,12 @@ class PI_SWE_DeepONetTrainer:
             self.early_stopping = None
             
         # Logging
-        log_dir = self.config.get('logging.tensorboard_log_dir', './logs/tensorboard')
+        log_dir = self.config.get_required_config('training.logging.tensorboard_log_dir')
         self.writer = SummaryWriter(log_dir)
         
         # Checkpointing
-        self.checkpoint_dir = self.config.get('paths.checkpoint_dir', './checkpoints')
-        self.save_freq = self.config.get('logging.save_freq', 1)
+        self.checkpoint_dir = self.config.get_required_config('training.logging.checkpoint_dir')
+        self.save_freq = self.config.get_required_config('training.logging.save_freq')
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         
         # Training and validation history
@@ -288,7 +288,7 @@ class PI_SWE_DeepONetTrainer:
                 self.training_component_loss_history[key].append(loss_components[key])
             
             # Validation step
-            val_loss = self._validate_epoch(val_loader)
+            val_loss = self._validate_epoch(val_loader, all_deeponet_points_stats)
             self.validation_loss_history.append(val_loss)
 
             # Update learning rate scheduler if needed
@@ -475,7 +475,7 @@ class PI_SWE_DeepONetTrainer:
         
         return avg_loss, avg_components
         
-    def _validate_epoch(self, val_loader):
+    def _validate_epoch(self, val_loader, all_deeponet_points_stats):
         """
         Validate for one epoch.
         
@@ -497,7 +497,7 @@ class PI_SWE_DeepONetTrainer:
                 target = target.to(self.device)
                 
                 # Forward pass
-                output = self.model(branch_input, trunk_input)
+                output = self.model(branch_input, trunk_input, all_deeponet_points_stats)
                 
                 # Compute loss (data loss only for validation)
                 loss = torch.mean((output - target)**2)
@@ -691,7 +691,7 @@ class PI_SWE_DeepONetTrainer:
             
             # Compute data loss (no gradients needed, but doesn't hurt)
             with torch.no_grad():
-                data_loss, _ = self.model.compute_deeponet_data_loss(branch_input, trunk_input, target)
+                data_loss, _ = self.model.compute_deeponet_data_loss(branch_input, trunk_input, target, all_deeponet_points_stats)
                 data_losses.append(data_loss.item())
             
             # Compute PDE loss if enabled (gradients needed for autograd.grad in compute_pde_residuals)

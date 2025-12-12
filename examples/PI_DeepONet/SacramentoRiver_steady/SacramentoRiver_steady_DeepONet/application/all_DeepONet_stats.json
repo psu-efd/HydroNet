@@ -4,7 +4,7 @@
             "branch_inputs": "z-score",
             "trunk_inputs": "min-max",
             "outputs": "z-score",
-            "static_fields": "z-score"
+            "static_fields": "none"
         },
         "branch_inputs": {
             "min": [

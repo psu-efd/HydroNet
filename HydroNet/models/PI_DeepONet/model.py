@@ -118,6 +118,10 @@ class PI_SWE_DeepONetModel(nn.Module):
         self.config = config
         self.bSteady = self.config.get_required_config("physics.bSteady")
         self.use_physics_loss = self.config.get_required_config("model.use_physics_loss")
+        self.SWE_form = self.config.get_required_config("model.SWE_form")
+
+        print(f"Use physics loss: {self.use_physics_loss}")
+        print(f"SWE form: {self.SWE_form}")
 
         device_type = self.config.get_required_config("device.type")
         if device_type is not None:
@@ -351,7 +355,7 @@ class PI_SWE_DeepONetModel(nn.Module):
             raise ValueError(f"Output dimension mismatch: {output_dim} != {self.output_dim}")
         #print("Model input and output dimensions are consistent with the specified configuration.")
 
-    def forward(self, branch_input, trunk_input):
+    def forward(self, branch_input, trunk_input, deeponet_points_stats):
         if self.branch_net is None:
             raise ValueError(
                 "Branch network not initialized. Set branch_input_dim first using set_branch_input_dim()."
@@ -359,12 +363,69 @@ class PI_SWE_DeepONetModel(nn.Module):
         branch_output = self.branch_net(branch_input)
         trunk_output = self.trunk_net(trunk_input)
 
+        #get the stats of the output
+        mu_h = deeponet_points_stats['all_data_stats']['h_mean']
+        sigma_h = deeponet_points_stats['all_data_stats']['h_std']
+        mu_u = deeponet_points_stats['all_data_stats']['u_mean']
+        sigma_u = deeponet_points_stats['all_data_stats']['u_std']
+        mu_v = deeponet_points_stats['all_data_stats']['v_mean']
+        sigma_v = deeponet_points_stats['all_data_stats']['v_std']
+
         outputs = []
+        
+        # Process all outputs first to get denormalized values
+        denormalized_outputs = []
         for i in range(self.output_dim):
             branch_i = branch_output[:, i :: self.output_dim]
             trunk_i = trunk_output[:, i :: self.output_dim]
             output_i = torch.sum(branch_i * trunk_i, dim=1, keepdim=True) + self.bias[i]
-            outputs.append(output_i)
+
+            #denormalize the output_i by the stats
+            if i == 0: #h
+                output_i_denormalized = output_i * sigma_h + mu_h
+            elif i == 1: #u
+                output_i_denormalized = output_i * sigma_u + mu_u
+            elif i == 2: #v
+                output_i_denormalized = output_i * sigma_v + mu_v
+            else:
+                raise ValueError(f"Invalid output index: {i}")
+            
+            denormalized_outputs.append(output_i_denormalized)
+        
+        # Check dry/wet points based on water depth (h, index 0)
+        # flag for water depth above a small threshold:
+        # if below, set the water depth to be the small threshold and the velocity to be zero
+        h_denormalized = denormalized_outputs[0]
+        b_h_positive = h_denormalized > 1e-3
+        
+        # Apply dry/wet corrections
+        for i in range(self.output_dim):
+            output_i_denormalized = denormalized_outputs[i]
+            
+            if i == 0: #h
+                # For dry points, set water depth to minimum threshold
+                output_i_denormalized[~b_h_positive] = 1e-3
+            elif i == 1: #u
+                # For dry points, set velocity to zero
+                output_i_denormalized[~b_h_positive] = 0.0
+            elif i == 2: #v
+                # For dry points, set velocity to zero
+                output_i_denormalized[~b_h_positive] = 0.0
+            else:
+                raise ValueError(f"Invalid output index: {i}")
+
+            #now normalize the output_i_denormalized by the stats
+            if i == 0: #h
+                output_i_normalized = (output_i_denormalized - mu_h) / sigma_h
+            elif i == 1: #u
+                output_i_normalized = (output_i_denormalized - mu_u) / sigma_u
+            elif i == 2: #v
+                output_i_normalized = (output_i_denormalized - mu_v) / sigma_v
+            else:
+                raise ValueError(f"Invalid output index: {i}")
+
+            outputs.append(output_i_normalized)
+
 
         return torch.cat(outputs, dim=1)
 
@@ -391,9 +452,9 @@ class PI_SWE_DeepONetModel(nn.Module):
             branch_dropout,
         ).to(self.device)
         
-    def compute_pde_residuals(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
+    def compute_pde_residuals_non_conservative(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
         """
-        Compute the residuals of the PDEs (shallow water equations).
+        Compute the residuals of the non-conservative form of the PDEs (shallow water equations).
         
         This method follows the same approach as PINN for computing PDE residuals,
         including bed elevation, bed slopes, and Manning's coefficient from pde_data.
@@ -414,7 +475,7 @@ class PI_SWE_DeepONetModel(nn.Module):
         trunk_input = trunk_input.clone().detach().requires_grad_(True)
         
         # Forward pass to get h, u, v
-        output = self.forward(branch_input, trunk_input)
+        output = self.forward(branch_input, trunk_input, deeponet_points_stats)
         h_hat, u_hat, v_hat = output[:, 0:1], output[:, 1:2], output[:, 2:3]
 
         # Compute all gradients at once (more efficient than separate calls)
@@ -547,7 +608,218 @@ class PI_SWE_DeepONetModel(nn.Module):
 
 
         return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
+
         
+    def compute_pde_residuals_conservative(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
+        """
+        Compute the residuals of the conservative form of the PDEs (shallow water equations).
+        
+        This method follows the same approach as PINN for computing PDE residuals,
+        including bed elevation, bed slopes, and Manning's coefficient from pde_data.
+        
+        Args:
+            branch_input (torch.Tensor): Input function for branch net [batch_size, branch_input_dim] (normalized)
+            trunk_input (torch.Tensor): Coordinates for trunk net [batch_size, trunk_input_dim] (normalized)
+            pde_data (torch.Tensor): PDE data containing (zb, Sx, Sy, ManningN) [batch_size, 4] (not normalized).
+            deeponet_points_stats (dict): Statistics of the DeepONet points for normalization.
+            pinn_points_stats (dict): Statistics of the PINN points for normalization.
+            
+        Returns:
+            tuple: (continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v)
+        """        
+        
+        
+        # Ensure that gradients are computed
+        trunk_input = trunk_input.clone().detach().requires_grad_(True)
+        
+        # Forward pass to get h, u, v
+        output = self.forward(branch_input, trunk_input, deeponet_points_stats)
+        h_hat, u_hat, v_hat = output[:, 0:1], output[:, 1:2], output[:, 2:3]
+
+        hu_hat = h_hat * u_hat        
+        hv_hat = h_hat * v_hat
+        huu_hat = hu_hat * u_hat
+        huv_hat = hu_hat * v_hat
+        hvv_hat = hv_hat * v_hat
+
+        # Compute all gradients at once (more efficient than separate calls)
+        h_hat_grad = torch.autograd.grad(h_hat, trunk_input, grad_outputs=torch.ones_like(h_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        u_hat_grad = torch.autograd.grad(u_hat, trunk_input, grad_outputs=torch.ones_like(u_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        v_hat_grad = torch.autograd.grad(v_hat, trunk_input, grad_outputs=torch.ones_like(v_hat),
+                                   create_graph=True, retain_graph=True)[0]
+
+        hu_hat_grad = torch.autograd.grad(hu_hat, trunk_input, grad_outputs=torch.ones_like(hu_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        hv_hat_grad = torch.autograd.grad(hv_hat, trunk_input, grad_outputs=torch.ones_like(hv_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        huu_hat_grad = torch.autograd.grad(huu_hat, trunk_input, grad_outputs=torch.ones_like(huu_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        huv_hat_grad = torch.autograd.grad(huv_hat, trunk_input, grad_outputs=torch.ones_like(huv_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        hvv_hat_grad = torch.autograd.grad(hvv_hat, trunk_input, grad_outputs=torch.ones_like(hvv_hat),
+                                   create_graph=True, retain_graph=True)[0]
+        
+        # Extract specific derivatives
+        dh_hat_dx_hat = h_hat_grad[:, 0:1]
+        dh_hat_dy_hat = h_hat_grad[:, 1:2]
+        du_hat_dx_hat = u_hat_grad[:, 0:1]
+        du_hat_dy_hat = u_hat_grad[:, 1:2]
+        dv_hat_dx_hat = v_hat_grad[:, 0:1]
+        dv_hat_dy_hat = v_hat_grad[:, 1:2]
+
+        dhu_hat_dx_hat = hu_hat_grad[:, 0:1]
+        #dhu_hat_dy_hat = hu_hat_grad[:, 1:2]
+        #dhv_hat_dx_hat = hv_hat_grad[:, 0:1]
+        dhv_hat_dy_hat = hv_hat_grad[:, 1:2]
+        dhuu_hat_dx_hat = huu_hat_grad[:, 0:1]
+        #dhuu_hat_dy_hat = huu_hat_grad[:, 1:2]
+        dhuv_hat_dx_hat = huv_hat_grad[:, 0:1]
+        dhuv_hat_dy_hat = huv_hat_grad[:, 1:2]
+        #dhvv_hat_dx_hat = hvv_hat_grad[:, 0:1]
+        dhvv_hat_dy_hat = hvv_hat_grad[:, 1:2]
+
+        if not self.bSteady:
+            dh_hat_dt_hat = h_hat_grad[:, 2:3]
+            du_hat_dt_hat = u_hat_grad[:, 2:3]
+            dv_hat_dt_hat = v_hat_grad[:, 2:3]
+
+            dhu_hat_dt_hat = hu_hat_grad[:, 2:3]
+            dhv_hat_dt_hat = hv_hat_grad[:, 2:3]
+
+        # Get normalization stats (note: the inputs and outputs are always normalized)
+        # Normalization stats for the output (h, u, v) of the DeepONet.
+        mu_h = deeponet_points_stats['all_data_stats']['h_mean']
+        sigma_h = deeponet_points_stats['all_data_stats']['h_std']
+        mu_u = deeponet_points_stats['all_data_stats']['u_mean']
+        sigma_u = deeponet_points_stats['all_data_stats']['u_std']
+        mu_v = deeponet_points_stats['all_data_stats']['v_mean']
+        sigma_v = deeponet_points_stats['all_data_stats']['v_std']        
+        
+        # Normalization stats for the coordinates (x, y, t) of PINN.
+        x_min = pinn_points_stats['all_points_stats']['x_min']
+        x_max = pinn_points_stats['all_points_stats']['x_max']
+        y_min = pinn_points_stats['all_points_stats']['y_min']
+        y_max = pinn_points_stats['all_points_stats']['y_max']
+        if not self.bSteady:
+            t_min = pinn_points_stats['all_points_stats']['t_min']
+            t_max = pinn_points_stats['all_points_stats']['t_max']
+
+        Lx = x_max - x_min
+        Ly = y_max - y_min
+        if not self.bSteady:
+            Lt = t_max - t_min
+
+        #denormalize the outputs (which are normalized with z-score)
+        h = h_hat * sigma_h + mu_h
+        u = u_hat * sigma_u + mu_u
+        v = v_hat * sigma_v + mu_v        
+
+        #create a flag for water depth above a small threshold: No need; moved to forward pass
+        # if below, set the water depth to be the small threshold and the velocity to be zero
+        b_h_wet = h > 1.1e-3     #wet points are defined as water depth slightly greater than the threshold 1e-3
+        #h[~b_h_positive] = 1e-3
+        #u[~b_h_positive] = 0.0
+        #v[~b_h_positive] = 0.0
+
+        #clip water depth to be positive
+        #h = torch.clamp(h, min=1e-3)
+        
+        #denormalize the coordinates (which are normalized with min-max) (NOT USED FOR NOW)
+        #x = x_hat * Lx + x_min
+        #y = y_hat * Ly + y_min
+        #if not self.bSteady:
+        #    t = t_hat * Lt + t_min
+        
+        # Extract PDE data (zb, Sx, Sy, ManningN, which are not normalized)
+        zb = pde_data[:, 0:1]
+        Sx = pde_data[:, 1:2]
+        Sy = pde_data[:, 2:3]
+        ManningN = pde_data[:, 3:4]
+        
+        # Compute velocity magnitude
+        u_mag = torch.sqrt(u*u + v*v + 1e-8)
+                
+        # Compute the derivatives in dimensional space
+        dhu_dx = dhu_hat_dx_hat * sigma_h * sigma_u / Lx
+        dhv_dy = dhv_hat_dy_hat * sigma_h * sigma_v / Ly
+        dhuu_dx = dhuu_hat_dx_hat * sigma_h * sigma_u**2 / Lx
+        dhuv_dx = dhuv_hat_dx_hat * sigma_h * sigma_u * sigma_v / Lx
+        dhuv_dy = dhuv_hat_dy_hat * sigma_h * sigma_u * sigma_v / Ly
+        dhvv_dy = dhvv_hat_dy_hat * sigma_h * sigma_v**2 / Ly
+
+        dh_dx = dh_hat_dx_hat * sigma_h / Lx
+        dh_dy = dh_hat_dy_hat * sigma_h / Ly
+        du_dx = du_hat_dx_hat * sigma_u / Lx
+        du_dy = du_hat_dy_hat * sigma_u / Ly
+        dv_dx = dv_hat_dx_hat * sigma_v / Lx
+        dv_dy = dv_hat_dy_hat * sigma_v / Ly
+
+        if not self.bSteady:
+            dh_dt = dh_hat_dt_hat * sigma_h / Lt
+            du_dt = du_hat_dt_hat * sigma_u / Lt
+            dv_dt = dv_hat_dt_hat * sigma_v / Lt
+            dhu_dt = dhu_hat_dt_hat * sigma_h * sigma_u / Lt
+            dhv_dt = dhv_hat_dt_hat * sigma_h * sigma_v / Lt
+        
+        # Mass conservation equation in dimensional space
+        mass_residual = dhu_dx + dhv_dy
+        if not self.bSteady:
+            mass_residual = dh_dt + mass_residual
+
+        # Momentum conservation equations
+        momentum_x_residual = dhuu_dx + dhuv_dy + self.g * h * dh_dx - self.g * h * Sx + self.g * ManningN**2 * u * u_mag / (h**(1.0/3.0) + 1e-8)
+        if not self.bSteady:
+            momentum_x_residual = dhu_dt + momentum_x_residual
+
+        momentum_y_residual = dhuv_dx + dhvv_dy + self.g * h * dh_dy - self.g * h * Sy + self.g * ManningN**2 * v * u_mag / (h**(1.0/3.0) + 1e-8)
+        if not self.bSteady:
+            momentum_y_residual = dhv_dt + momentum_y_residual
+
+        # Scale the residuals based on physics scales
+        mass_residual = mass_residual / self.velocity_scale
+        momentum_x_residual = momentum_x_residual / self.velocity_scale**2 * self.length_scale
+        momentum_y_residual = momentum_y_residual / self.velocity_scale**2 * self.length_scale
+
+        #set the residuals to zero for dry points
+        mass_residual[~b_h_wet] = 0.0
+        momentum_x_residual[~b_h_wet] = 0.0
+        momentum_y_residual[~b_h_wet] = 0.0
+
+        #debug print (all tensors are batched, so print first element and statistics)
+        bDebug = False
+        if bDebug:
+            #print(f"zb shape: {zb.shape}, first: {zb[0].item():.6f}, mean: {zb.mean().item():.6f}, min: {zb.min().item():.6f}, max: {zb.max().item():.6f}")
+            #print(f"Sx shape: {Sx.shape}, first: {Sx[0].item():.6f}, mean: {Sx.mean().item():.6f}, min: {Sx.min().item():.6f}, max: {Sx.max().item():.6f}")
+            #print(f"Sy shape: {Sy.shape}, first: {Sy[0].item():.6f}, mean: {Sy.mean().item():.6f}, min: {Sy.min().item():.6f}, max: {Sy.max().item():.6f}")
+            #print(f"ManningN shape: {ManningN.shape}, first: {ManningN[0].item():.6f}, mean: {ManningN.mean().item():.6f}, min: {ManningN.min().item():.6f}, max: {ManningN.max().item():.6f}")
+            print(f"h shape: {h.shape}, first: {h[0].item():.6f}, mean: {h.mean().item():.6f}, min: {h.min().item():.6f}, max: {h.max().item():.6f}")
+            print(f"u shape: {u.shape}, first: {u[0].item():.6f}, mean: {u.mean().item():.6f}, min: {u.min().item():.6f}, max: {u.max().item():.6f}")
+            print(f"v shape: {v.shape}, first: {v[0].item():.6f}, mean: {v.mean().item():.6f}, min: {v.min().item():.6f}, max: {v.max().item():.6f}")
+            print(f"mass_residual shape: {mass_residual.shape}, first: {mass_residual[0].item():.6f}, mean: {mass_residual.mean().item():.6f}, min: {mass_residual.min().item():.6f}, max: {mass_residual.max().item():.6f}")
+            print(f"momentum_x_residual shape: {momentum_x_residual.shape}, first: {momentum_x_residual[0].item():.6f}, mean: {momentum_x_residual.mean().item():.6f}, min: {momentum_x_residual.min().item():.6f}, max: {momentum_x_residual.max().item():.6f}")
+            print(f"momentum_y_residual shape: {momentum_y_residual.shape}, first: {momentum_y_residual[0].item():.6f}, mean: {momentum_y_residual.mean().item():.6f}, min: {momentum_y_residual.min().item():.6f}, max: {momentum_y_residual.max().item():.6f}")
+            print(f"dh_dx shape: {dh_dx.shape}, first: {dh_dx[0].item():.6f}, mean: {dh_dx.mean().item():.6f}")
+            print(f"dh_dy shape: {dh_dy.shape}, first: {dh_dy[0].item():.6f}, mean: {dh_dy.mean().item():.6f}")
+            print(f"du_dx shape: {du_dx.shape}, first: {du_dx[0].item():.6f}, mean: {du_dx.mean().item():.6f}")
+            print(f"du_dy shape: {du_dy.shape}, first: {du_dy[0].item():.6f}, mean: {du_dy.mean().item():.6f}")
+            print(f"dv_dx shape: {dv_dx.shape}, first: {dv_dx[0].item():.6f}, mean: {dv_dx.mean().item():.6f}")
+            print(f"dv_dy shape: {dv_dy.shape}, first: {dv_dy[0].item():.6f}, mean: {dv_dy.mean().item():.6f}")
+            if not self.bSteady:
+                print(f"dh_dt shape: {dh_dt.shape}, first: {dh_dt[0].item():.6f}, mean: {dh_dt.mean().item():.6f}")
+                print(f"du_dt shape: {du_dt.shape}, first: {du_dt[0].item():.6f}, mean: {du_dt.mean().item():.6f}")
+                print(f"dv_dt shape: {dv_dt.shape}, first: {dv_dt[0].item():.6f}, mean: {dv_dt.mean().item():.6f}")
+            # Lx, Ly, Lt, mu_*, sigma_* are Python floats from stats dict, not tensors
+            #print(f"Lx: {Lx}, Ly: {Ly}" + (f", Lt: {Lt}" if not self.bSteady else ""))
+            #print(f"sigma_h: {sigma_h}, sigma_u: {sigma_u}, sigma_v: {sigma_v}")
+            #print(f"mu_h: {mu_h}, mu_u: {mu_u}, mu_v: {mu_v}")
+            #exit()
+
+
+        return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
+        
+
     def compute_pde_loss(self, branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats):
         """
         Compute the PDE loss for the shallow water equations.
@@ -562,9 +834,19 @@ class PI_SWE_DeepONetModel(nn.Module):
         Returns:
             tuple: (pde_loss, pde_loss_components, h, u, v)
         """
-        mass_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(
-            branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats
-        )
+        # Compute the PDE residuals based on the SWE form
+        if self.SWE_form == "conservative":  #Not correct yet; the formulas are not correct
+            raise NotImplementedError("Conservative SWE form is not correctly implemented yet")
+
+            mass_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals_conservative(
+                branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats
+            )
+        elif self.SWE_form == "non-conservative":
+            mass_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals_non_conservative(
+                branch_input, trunk_input, pde_data, deeponet_points_stats, pinn_points_stats
+            )
+        else:
+            raise ValueError(f"Invalid SWE form: {self.SWE_form}")
         
         # Compute the loss for each equation
         continuity_loss = torch.mean(mass_residual**2)
@@ -587,7 +869,7 @@ class PI_SWE_DeepONetModel(nn.Module):
         
         return pde_loss, pde_loss_components, h, u, v
         
-    def compute_deeponet_data_loss(self, branch_input, trunk_input, target):
+    def compute_deeponet_data_loss(self, branch_input, trunk_input, target, deeponet_points_stats):
         """
         Compute the DeepONet data loss. The loss is the MSE loss of the predictions and the target.
 
@@ -602,7 +884,7 @@ class PI_SWE_DeepONetModel(nn.Module):
             tuple: (data_loss, loss_components)
         """
         # Get model predictions
-        predictions = self.forward(branch_input, trunk_input)
+        predictions = self.forward(branch_input, trunk_input, deeponet_points_stats)
         
         # Compute MSE loss
         eps = torch.tensor(1e-8, device=self.device)
@@ -713,7 +995,7 @@ class PI_SWE_DeepONetModel(nn.Module):
         
         # Compute DeepONet data loss if target is provided
         if target is not None:
-            deeponet_data_loss, deeponet_data_loss_components = self.compute_deeponet_data_loss(branch_input, trunk_input, target)
+            deeponet_data_loss, deeponet_data_loss_components = self.compute_deeponet_data_loss(branch_input, trunk_input, target, all_deeponet_points_stats)
             loss_components['deeponet_data_loss'] = deeponet_data_loss.item()
             
 

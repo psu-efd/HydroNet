@@ -604,6 +604,9 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         flow_variables (list): List of flow variables to sample in the order of (h, u, v), Bed_Elev, ManningN, Sx, Sy
         output_unit (str): Output unit, SI or EN
         postprocessing_specs (dict): Postprocessing specifications
+    
+    Returns:
+        dict: Dictionary of DeepONet statistics all_DeepONet_stats
     """
 
     # Unpack the postprocessing specifications
@@ -839,47 +842,36 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     test_data_trunk_inputs = test_data['trunk_inputs']
     test_data_outputs = test_data['outputs']
 
-    #normalize the data (train, validation and test)
+    #normalize the data (train, validation and test). 
+    #Note: currently, only z-score for branch inputs and outputs, and min-max for trunk inputs are supported.
     if branch_inputs_normalization_method == 'z-score':
-        train_val_data_branch_inputs = (train_val_data_branch_inputs - train_val_test_mean_branch_inputs) / train_val_test_std_branch_inputs
-    elif branch_inputs_normalization_method == 'min-max':
-        train_val_data_branch_inputs = (train_val_data_branch_inputs - train_val_test_min_branch_inputs) / (train_val_test_max_branch_inputs - train_val_test_min_branch_inputs)
+        train_val_data_branch_inputs = (train_val_data_branch_inputs - train_val_test_mean_branch_inputs) / train_val_test_std_branch_inputs    
     else:
         raise ValueError(f"Invalid branch inputs normalization method: {branch_inputs_normalization_method}")
 
-    if trunk_inputs_normalization_method == 'z-score':
-        train_val_data_trunk_inputs = (train_val_data_trunk_inputs - train_val_test_mean_trunk_inputs) / train_val_test_std_trunk_inputs
-    elif trunk_inputs_normalization_method == 'min-max':
+    if trunk_inputs_normalization_method == 'min-max':
         train_val_data_trunk_inputs = (train_val_data_trunk_inputs - train_val_test_min_trunk_inputs) / (train_val_test_max_trunk_inputs - train_val_test_min_trunk_inputs)
     else:
         raise ValueError(f"Invalid trunk inputs normalization method: {trunk_inputs_normalization_method}")
 
     if outputs_normalization_method == 'z-score':
         train_val_data_outputs = (train_val_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
-    elif outputs_normalization_method == 'min-max':
-        train_val_data_outputs = (train_val_data_outputs - train_val_test_min_outputs) / (train_val_test_max_outputs - train_val_test_min_outputs)
     else:
         raise ValueError(f"Invalid outputs normalization method: {outputs_normalization_method}")
 
     #normalize the test data
     if branch_inputs_normalization_method == 'z-score':
         test_data_branch_inputs = (test_data_branch_inputs - train_val_test_mean_branch_inputs) / train_val_test_std_branch_inputs
-    elif branch_inputs_normalization_method == 'min-max':
-        test_data_branch_inputs = (test_data_branch_inputs - train_val_test_min_branch_inputs) / (train_val_test_max_branch_inputs - train_val_test_min_branch_inputs)
     else:
         raise ValueError(f"Invalid test data branch inputs normalization method: {branch_inputs_normalization_method}")
 
-    if trunk_inputs_normalization_method == 'z-score':
-        test_data_trunk_inputs = (test_data_trunk_inputs - train_val_test_mean_trunk_inputs) / train_val_test_std_trunk_inputs
-    elif trunk_inputs_normalization_method == 'min-max':
+    if trunk_inputs_normalization_method == 'min-max':
         test_data_trunk_inputs = (test_data_trunk_inputs - train_val_test_min_trunk_inputs) / (train_val_test_max_trunk_inputs - train_val_test_min_trunk_inputs)
     else:
         raise ValueError(f"Invalid test data trunk inputs normalization method: {trunk_inputs_normalization_method}")
 
     if outputs_normalization_method == 'z-score':
         test_data_outputs = (test_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
-    elif outputs_normalization_method == 'min-max':
-        test_data_outputs = (test_data_outputs - train_val_test_min_outputs) / (train_val_test_max_outputs - train_val_test_min_outputs)
     else:
         raise ValueError(f"Invalid test data outputs normalization method: {outputs_normalization_method}")
 
@@ -927,18 +919,18 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     test_data['outputs'] = test_data_outputs
     
     #combine the stats dictionaries as sub-dictionaries and save them to a JSON file
-    all_stats = {
+    all_DeepONet_stats = {
         'all_DeepONet_branch_trunk_outputs_stats': all_DeepONet_branch_trunk_outputs_stats,
         'all_points_stats': all_points_stats, 
         'all_data_stats': all_data_stats
         }
 
     # Convert numpy arrays to lists for JSON serialization
-    all_stats_serializable = convert_to_json_serializable(all_stats)
+    all_DeepONet_stats_serializable = convert_to_json_serializable(all_DeepONet_stats)
 
     #save DeepONet-relatred stats to a JSON file
     with open('data/DeepONet/all_DeepONet_stats.json', 'w') as f:
-        json.dump(all_stats_serializable, f, indent=4)
+        json.dump(all_DeepONet_stats_serializable, f, indent=4)
     
     #close the train and validation HDF5 files
     train_data.close()
@@ -954,6 +946,8 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     #verify_data()
     
     print("Data postprocessing completed successfully!")
+
+    return all_DeepONet_stats
 
 def verify_data_for_DeepONet():
     """
