@@ -1190,7 +1190,7 @@ def pi_deeponet_application_run_model_application(config):
             target = target.to(trainer.device)
             
             # Forward pass
-            output = model(branch_input, trunk_input)           
+            output = model(branch_input, trunk_input, all_DeepONet_stats)           
             
             # Store predictions 
             all_predictions.append(output.cpu().numpy())

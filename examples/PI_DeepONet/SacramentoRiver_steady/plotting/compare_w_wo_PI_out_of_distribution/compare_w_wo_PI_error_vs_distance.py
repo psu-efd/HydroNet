@@ -433,13 +433,13 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
 if __name__ == "__main__":
 
     model_1_dir = '../../SacramentoRiver_steady_DeepONet/application'
-    model_2_dir = '../../SacramentoRiver_steady_PI_DeepONet/application'
+    model_2_dir = '../../SacramentoRiver_steady_PI_DeepONet_2/application'
     model_1_name = 'DeepONet'
     model_2_name = 'PI-DeepONet'
 
 
     # Special case indices: 1 (average distance), 70 (minimum distance), 73 (maximum distance)
-    special_case_indices = [1, 70, 73]
+    special_case_indices = [1]
 
     compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_dir, model_2_dir, model_1_name, model_2_name, special_case_indices)
 

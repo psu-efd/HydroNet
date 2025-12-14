@@ -359,80 +359,94 @@ class PI_SWE_DeepONetModel(nn.Module):
         """
         Forward pass of the model. 
 
-        This version of the forward pass also does the dry/wet correction for the water depth and velocity (which triggers early stopping too soon; don't know why).
+        Tried wet/dry points correction here, but the training stops earlier than no correction. More work is needed here.
         """
         if self.branch_net is None:
             raise ValueError(
                 "Branch network not initialized. Set branch_input_dim first using set_branch_input_dim()."
             )
+
         branch_output = self.branch_net(branch_input)
         trunk_output = self.trunk_net(trunk_input)
 
-        #get the stats of the output
-        mu_h = deeponet_points_stats['all_data_stats']['h_mean']
-        sigma_h = deeponet_points_stats['all_data_stats']['h_std']
-        mu_u = deeponet_points_stats['all_data_stats']['u_mean']
-        sigma_u = deeponet_points_stats['all_data_stats']['u_std']
-        mu_v = deeponet_points_stats['all_data_stats']['v_mean']
-        sigma_v = deeponet_points_stats['all_data_stats']['v_std']
-
         outputs = []
-        
-        # Process all outputs first to get denormalized values
-        denormalized_outputs = []
         for i in range(self.output_dim):
             branch_i = branch_output[:, i :: self.output_dim]
             trunk_i = trunk_output[:, i :: self.output_dim]
             output_i = torch.sum(branch_i * trunk_i, dim=1, keepdim=True) + self.bias[i]
-
-            #denormalize the output_i by the stats
-            if i == 0: #h
-                output_i_denormalized = output_i * sigma_h + mu_h
-            elif i == 1: #u
-                output_i_denormalized = output_i * sigma_u + mu_u
-            elif i == 2: #v
-                output_i_denormalized = output_i * sigma_v + mu_v
-            else:
-                raise ValueError(f"Invalid output index: {i}")
-            
-            denormalized_outputs.append(output_i_denormalized)
-        
-        # Check dry/wet points based on water depth (h, index 0)
-        # flag for water depth above a small threshold:
-        # if below, set the water depth to be the small threshold and the velocity to be zero
-        h_denormalized = denormalized_outputs[0]
-        b_h_positive = h_denormalized > 1e-3
-        
-        # Apply dry/wet corrections
-        for i in range(self.output_dim):
-            output_i_denormalized = denormalized_outputs[i]
-            
-            if i == 0: #h
-                # For dry points, set water depth to minimum threshold
-                output_i_denormalized[~b_h_positive] = 1e-3
-            elif i == 1: #u
-                # For dry points, set velocity to zero
-                output_i_denormalized[~b_h_positive] = 0.0
-            elif i == 2: #v
-                # For dry points, set velocity to zero
-                output_i_denormalized[~b_h_positive] = 0.0
-            else:
-                raise ValueError(f"Invalid output index: {i}")
-
-            #now normalize the output_i_denormalized by the stats
-            if i == 0: #h
-                output_i_normalized = (output_i_denormalized - mu_h) / sigma_h
-            elif i == 1: #u
-                output_i_normalized = (output_i_denormalized - mu_u) / sigma_u
-            elif i == 2: #v
-                output_i_normalized = (output_i_denormalized - mu_v) / sigma_v
-            else:
-                raise ValueError(f"Invalid output index: {i}")
-
-            outputs.append(output_i_normalized)
-
+            outputs.append(output_i)
 
         return torch.cat(outputs, dim=1)
+
+
+        # branch_output = self.branch_net(branch_input)
+        # trunk_output = self.trunk_net(trunk_input)
+
+        # #get the stats of the output
+        # mu_h = deeponet_points_stats['all_data_stats']['h_mean']
+        # sigma_h = deeponet_points_stats['all_data_stats']['h_std']
+        # mu_u = deeponet_points_stats['all_data_stats']['u_mean']
+        # sigma_u = deeponet_points_stats['all_data_stats']['u_std']
+        # mu_v = deeponet_points_stats['all_data_stats']['v_mean']
+        # sigma_v = deeponet_points_stats['all_data_stats']['v_std']
+
+        # outputs = []
+        
+        # # Process all outputs first to get denormalized values
+        # denormalized_outputs = []
+        # for i in range(self.output_dim):
+        #     branch_i = branch_output[:, i :: self.output_dim]
+        #     trunk_i = trunk_output[:, i :: self.output_dim]
+        #     output_i = torch.sum(branch_i * trunk_i, dim=1, keepdim=True) + self.bias[i]
+
+        #     #denormalize the output_i by the stats
+        #     if i == 0: #h
+        #         output_i_denormalized = output_i * sigma_h + mu_h
+        #     elif i == 1: #u
+        #         output_i_denormalized = output_i * sigma_u + mu_u
+        #     elif i == 2: #v
+        #         output_i_denormalized = output_i * sigma_v + mu_v
+        #     else:
+        #         raise ValueError(f"Invalid output index: {i}")
+            
+        #     denormalized_outputs.append(output_i_denormalized)
+        
+        # # Check dry/wet points based on water depth (h, index 0)
+        # # flag for water depth above a small threshold:
+        # # if below, set the water depth to be the small threshold and the velocity to be zero
+        # h_denormalized = denormalized_outputs[0]
+        # b_h_positive = h_denormalized > 1e-3
+        
+        # # Apply dry/wet corrections
+        # for i in range(self.output_dim):
+        #     output_i_denormalized = denormalized_outputs[i]
+            
+        #     if i == 0: #h
+        #         # For dry points, set water depth to minimum threshold
+        #         output_i_denormalized[~b_h_positive] = 1e-3
+        #     elif i == 1: #u
+        #         # For dry points, set velocity to zero
+        #         output_i_denormalized[~b_h_positive] = 0.0
+        #     elif i == 2: #v
+        #         # For dry points, set velocity to zero
+        #         output_i_denormalized[~b_h_positive] = 0.0
+        #     else:
+        #         raise ValueError(f"Invalid output index: {i}")
+
+        #     #now normalize the output_i_denormalized by the stats
+        #     if i == 0: #h
+        #         output_i_normalized = (output_i_denormalized - mu_h) / sigma_h
+        #     elif i == 1: #u
+        #         output_i_normalized = (output_i_denormalized - mu_u) / sigma_u
+        #     elif i == 2: #v
+        #         output_i_normalized = (output_i_denormalized - mu_v) / sigma_v
+        #     else:
+        #         raise ValueError(f"Invalid output index: {i}")
+
+        #     outputs.append(output_i_normalized)
+
+
+        # return torch.cat(outputs, dim=1)
 
     def set_branch_input_dim(self, dim):
         """
