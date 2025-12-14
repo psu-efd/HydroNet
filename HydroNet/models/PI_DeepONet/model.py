@@ -356,6 +356,11 @@ class PI_SWE_DeepONetModel(nn.Module):
         #print("Model input and output dimensions are consistent with the specified configuration.")
 
     def forward(self, branch_input, trunk_input, deeponet_points_stats):
+        """
+        Forward pass of the model. 
+
+        This version of the forward pass also does the dry/wet correction for the water depth and velocity (which triggers early stopping too soon; don't know why).
+        """
         if self.branch_net is None:
             raise ValueError(
                 "Branch network not initialized. Set branch_input_dim first using set_branch_input_dim()."
