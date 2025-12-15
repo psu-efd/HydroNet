@@ -433,7 +433,7 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
 if __name__ == "__main__":
 
     model_1_dir = '../../SacramentoRiver_steady_DeepONet/application'
-    model_2_dir = '../../SacramentoRiver_steady_PI_DeepONet_2/application'
+    model_2_dir = '../../SacramentoRiver_steady_PI_DeepONet/application'
     model_1_name = 'DeepONet'
     model_2_name = 'PI-DeepONet'
 

@@ -313,10 +313,10 @@ class PI_SWE_DeepONetTrainer:
             if boundary_points is not None:
                 print(f"  Boundary Loss: {loss_components.get('pinn_boundary_loss', 0.0):.6f}")
             
-            # Print loss weights if using adaptive balancing
-            if self.use_adaptive_loss_balancing:
-                print(f"  Loss Weights - Data: {self.model.loss_weight_deeponet_data_loss.item():.6f}, "
-                      f"PDE: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
+            # Print loss weights
+            #if self.use_adaptive_loss_balancing:
+            print(f"  Loss Weights - Data: {self.model.loss_weight_deeponet_data_loss.item():.6f}, "
+                f"PDE: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
                 
             # Log to TensorBoard
             self.writer.add_scalar('Loss/train', train_loss, epoch)
@@ -499,7 +499,7 @@ class PI_SWE_DeepONetTrainer:
                 # Forward pass
                 output = self.model(branch_input, trunk_input, all_deeponet_points_stats)
                 
-                # Compute loss (data loss only for validation)
+                # Compute data loss
                 loss = torch.mean((output - target)**2)
                 
                 # Update total loss
