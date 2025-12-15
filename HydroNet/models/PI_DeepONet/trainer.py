@@ -414,7 +414,15 @@ class PI_SWE_DeepONetTrainer:
                 # The copy inherits requires_grad from pde_points, but compute_pde_residuals
                 # will clone, detach, and set requires_grad=True anyway, so we don't need to
                 # explicitly set requires_grad here.
-                physics_indices = torch.randint(0, len(pde_points), (batch_size,))
+                # Handle case when batch_size > len(pde_points) by repeating indices
+                if batch_size > len(pde_points):
+                    # Repeat indices to match batch_size, then shuffle
+                    num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
+                    physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
+                    physics_indices = physics_indices[torch.randperm(len(physics_indices))]
+                else:
+                    # Sample without replacement if batch_size <= len(pde_points)
+                    physics_indices = torch.randperm(len(pde_points))[:batch_size]
                 physics_trunk_input = pde_points[physics_indices]
                 physics_pde_data = pde_data[physics_indices]
                 physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input, meaning the PDEs have to be satisfied for all the Branch inputs.
@@ -696,7 +704,16 @@ class PI_SWE_DeepONetTrainer:
             
             # Compute PDE loss if enabled (gradients needed for autograd.grad in compute_pde_residuals)
             if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
-                physics_indices = torch.randint(0, len(pde_points), (batch_size,))
+                #physics_indices = torch.randint(0, len(pde_points), (batch_size,))
+                # Handle case when batch_size > len(pde_points) by repeating indices
+                if batch_size > len(pde_points):
+                    # Repeat indices to match batch_size, then shuffle
+                    num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
+                    physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
+                    physics_indices = physics_indices[torch.randperm(len(physics_indices))]
+                else:
+                    # Sample without replacement if batch_size <= len(pde_points)
+                    physics_indices = torch.randperm(len(pde_points))[:batch_size]
                 physics_trunk_input = pde_points[physics_indices]
                 physics_pde_data = pde_data[physics_indices]
                 physics_branch_input = branch_input
