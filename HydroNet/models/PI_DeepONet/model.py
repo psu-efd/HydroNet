@@ -565,6 +565,11 @@ class PI_SWE_DeepONetModel(nn.Module):
         u = u_hat * sigma_u + mu_u
         v = v_hat * sigma_v + mu_v        
 
+        #flag dry points based on water depth: threshold is 1e-3 m
+        #flag = 1.0 for wet points, 0.0 for dry points
+        #flag value is used to exclude the pde residuals at dry points from the loss calculation
+        flag = torch.where(h > 1e-3, torch.ones_like(h), torch.zeros_like(h))
+
         #clip water depth to be positive
         h = torch.clamp(h, min=1e-3)
         
@@ -614,6 +619,11 @@ class PI_SWE_DeepONetModel(nn.Module):
         mass_residual = mass_residual / self.velocity_scale
         momentum_x_residual = momentum_x_residual / self.velocity_scale**2 * self.length_scale
         momentum_y_residual = momentum_y_residual / self.velocity_scale**2 * self.length_scale
+
+        #exclude the pde residuals at dry points from the loss calculation
+        mass_residual = mass_residual * flag
+        momentum_x_residual = momentum_x_residual * flag
+        momentum_y_residual = momentum_y_residual * flag
 
         #debug print (all tensors are batched, so print first element and statistics)
         bDebug = False

@@ -113,8 +113,20 @@ class PI_SWE_DeepONetTrainer:
         self.training_loss_history = []
         self.validation_loss_history = []
 
-        # Training component loss history (no validation component loss history because for validation, we only compute the DeepONet data loss)
+        # Training component loss history
         self.training_component_loss_history = {
+            'deeponet_data_loss': [],
+            'pinn_pde_loss': [],
+            'pinn_pde_loss_cty': [],
+            'pinn_pde_loss_mom_x': [],
+            'pinn_pde_loss_mom_y': [],
+            'pinn_initial_loss': [],
+            'pinn_boundary_loss': [],
+            'total_loss': []
+        }
+        
+        # Validation component loss history
+        self.validation_component_loss_history = {
             'deeponet_data_loss': [],
             'pinn_pde_loss': [],
             'pinn_pde_loss_cty': [],
@@ -288,8 +300,23 @@ class PI_SWE_DeepONetTrainer:
                 self.training_component_loss_history[key].append(loss_components[key])
             
             # Validation step
-            val_loss = self._validate_epoch(val_loader, all_deeponet_points_stats)
+            val_loss, val_loss_components = self._validate_epoch(
+                val_loader,
+                pde_points,
+                pde_data,
+                initial_points,
+                initial_values,
+                boundary_points,
+                all_deeponet_points_stats,
+                all_pinn_points_stats
+            )
             self.validation_loss_history.append(val_loss)
+            
+            # Update validation component loss history
+            for key in val_loss_components:
+                if key not in self.validation_component_loss_history:
+                    raise ValueError(f"Key {key} not found in validation_component_loss_history")
+                self.validation_component_loss_history[key].append(val_loss_components[key])
 
             # Update learning rate scheduler if needed
             if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
@@ -304,14 +331,23 @@ class PI_SWE_DeepONetTrainer:
             # Print progress
             print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
                 
-            # Print component losses
-            print(f"  Data Loss: {loss_components.get('deeponet_data_loss', 0.0):.6f}")
+            # Print training component losses
+            print(f"  Train - Data Loss: {loss_components.get('deeponet_data_loss', 0.0):.6f}")
             if self.model.use_physics_loss:
-                print(f"  PDE Loss: {loss_components.get('pinn_pde_loss', 0.0):.6f}")
+                print(f"  Train - PDE Loss: {loss_components.get('pinn_pde_loss', 0.0):.6f}")
             if initial_points is not None:
-                print(f"  Initial Loss: {loss_components.get('pinn_initial_loss', 0.0):.6f}")
+                print(f"  Train - Initial Loss: {loss_components.get('pinn_initial_loss', 0.0):.6f}")
             if boundary_points is not None:
-                print(f"  Boundary Loss: {loss_components.get('pinn_boundary_loss', 0.0):.6f}")
+                print(f"  Train - Boundary Loss: {loss_components.get('pinn_boundary_loss', 0.0):.6f}")
+            
+            # Print validation component losses
+            print(f"  Val - Data Loss: {val_loss_components.get('deeponet_data_loss', 0.0):.6f}")
+            if self.model.use_physics_loss:
+                print(f"  Val - PDE Loss: {val_loss_components.get('pinn_pde_loss', 0.0):.6f}")
+            if initial_points is not None:
+                print(f"  Val - Initial Loss: {val_loss_components.get('pinn_initial_loss', 0.0):.6f}")
+            if boundary_points is not None:
+                print(f"  Val - Boundary Loss: {val_loss_components.get('pinn_boundary_loss', 0.0):.6f}")
             
             # Print loss weights
             #if self.use_adaptive_loss_balancing:
@@ -322,13 +358,23 @@ class PI_SWE_DeepONetTrainer:
             self.writer.add_scalar('Loss/train', train_loss, epoch)
             self.writer.add_scalar('Loss/val', val_loss, epoch)
                 
-            self.writer.add_scalar('Loss/data', loss_components.get('deeponet_data_loss', 0.0), epoch)
+            # Log training component losses
+            self.writer.add_scalar('Loss/train_data', loss_components.get('deeponet_data_loss', 0.0), epoch)
             if self.model.use_physics_loss:
-                self.writer.add_scalar('Loss/pde', loss_components.get('pinn_pde_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/train_pde', loss_components.get('pinn_pde_loss', 0.0), epoch)
             if initial_points is not None:
-                self.writer.add_scalar('Loss/initial', loss_components.get('pinn_initial_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/train_initial', loss_components.get('pinn_initial_loss', 0.0), epoch)
             if boundary_points is not None:
-                self.writer.add_scalar('Loss/boundary', loss_components.get('pinn_boundary_loss', 0.0), epoch)
+                self.writer.add_scalar('Loss/train_boundary', loss_components.get('pinn_boundary_loss', 0.0), epoch)
+            
+            # Log validation component losses
+            self.writer.add_scalar('Loss/val_data', val_loss_components.get('deeponet_data_loss', 0.0), epoch)
+            if self.model.use_physics_loss:
+                self.writer.add_scalar('Loss/val_pde', val_loss_components.get('pinn_pde_loss', 0.0), epoch)
+            if initial_points is not None:
+                self.writer.add_scalar('Loss/val_initial', val_loss_components.get('pinn_initial_loss', 0.0), epoch)
+            if boundary_points is not None:
+                self.writer.add_scalar('Loss/val_boundary', val_loss_components.get('pinn_boundary_loss', 0.0), epoch)
                 
             # Save checkpoint
             if (epoch + 1) % self.save_freq == 0:
@@ -356,6 +402,7 @@ class PI_SWE_DeepONetTrainer:
             'training_loss_history': self.training_loss_history,
             'validation_loss_history': self.validation_loss_history,
             'training_component_loss_history': self.training_component_loss_history,
+            'validation_component_loss_history': self.validation_component_loss_history,
             'adaptive_weight_history': self.adaptive_weight_history
         }
         
@@ -483,40 +530,113 @@ class PI_SWE_DeepONetTrainer:
         
         return avg_loss, avg_components
         
-    def _validate_epoch(self, val_loader, all_deeponet_points_stats):
+    def _validate_epoch(self, val_loader, pde_points=None, pde_data=None,
+                    initial_points=None, initial_values=None,
+                    boundary_points=None, all_deeponet_points_stats=None, all_pinn_points_stats=None):
         """
         Validate for one epoch.
         
         Args:
             val_loader (DataLoader): Validation data loader.
+            pde_points (torch.Tensor, optional): Points inside the domain for physics constraints.
+            pde_data (torch.Tensor, optional): PDE data (zb, Sx, Sy, ManningN) for physics constraints.
+            initial_points (torch.Tensor, optional): Points at initial time.
+            initial_values (torch.Tensor, optional): Initial values at initial points.
+            boundary_points (torch.Tensor, optional): Points on the boundary.
+            all_deeponet_points_stats (dict, optional): Statistics of DeepONet points for normalization.
+            all_pinn_points_stats (dict, optional): Statistics of PINN points for normalization.
             
         Returns:
-            float: Average validation loss for the epoch.
+            tuple: (average_loss, loss_components)
         """
         self.model.eval()
-        total_loss = 0
         
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Validating", leave=False):
+        total_loss = 0
+        total_components = {
+            'deeponet_data_loss': 0.0,      # DeepONet loss
+            'pinn_pde_loss': 0.0,       # PINN loss (include PDE and BC/IC if applicable)
+            'pinn_pde_loss_cty': 0.0,
+            'pinn_pde_loss_mom_x': 0.0,
+            'pinn_pde_loss_mom_y': 0.0,
+            'pinn_initial_loss': 0.0,
+            'pinn_boundary_loss': 0.0,
+            'total_loss': 0.0
+        }
+        
+        # Note: We don't use torch.no_grad() here because PDE residual computation
+        # requires gradients even during validation. We're still in eval() mode and
+        # won't update parameters since we don't call backward() or optimizer.step()
+        for batch in tqdm(val_loader, desc="Validating", leave=False):
                 # Get batch data
                 branch_input, trunk_input, target = batch
                 branch_input = branch_input.to(self.device)
                 trunk_input = trunk_input.to(self.device)
                 target = target.to(self.device)
                 
-                # Forward pass
-                output = self.model(branch_input, trunk_input, all_deeponet_points_stats)
+                # Get the batch size for this batch
+                batch_size = branch_input.shape[0]
                 
-                # Compute data loss
-                loss = torch.mean((output - target)**2)
+                # Randomly sample PINN mesh points for PINN physics (PDEs: SWEs) constraints
+                physics_branch_input = None
+                physics_trunk_input = None
+                physics_pde_data = None
+                
+                if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
+                    # Sample random PDE points for this batch
+                    # Handle case when batch_size > len(pde_points) by repeating indices
+                    if batch_size > len(pde_points):
+                        # Repeat indices to match batch_size, then shuffle
+                        num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
+                        physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
+                        physics_indices = physics_indices[torch.randperm(len(physics_indices))]
+                    else:
+                        # Sample without replacement if batch_size <= len(pde_points)
+                        physics_indices = torch.randperm(len(pde_points))[:batch_size]
+                        
+                    physics_trunk_input = pde_points[physics_indices]
+                    physics_pde_data = pde_data[physics_indices]
+                    physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input
+                
+                # Sample initial points if provided
+                initial_trunk_input = None
+                initial_batch_values = None
+                if initial_points is not None and initial_values is not None:
+                    initial_indices = torch.randint(0, len(initial_points), (batch_size,))
+                    initial_trunk_input = initial_points[initial_indices]
+                    initial_batch_values = initial_values[initial_indices]
+                    
+                # Sample boundary points if provided
+                boundary_trunk_input = None
+                boundary_batch_values = None
+                if boundary_points is not None:
+                    boundary_indices = torch.randint(0, len(boundary_points), (batch_size,))
+                    boundary_trunk_input = boundary_points[boundary_indices]
+                
+                # Forward pass and compute loss
+                total_batch_loss, loss_components = self.model.compute_total_loss(
+                    branch_input,
+                    trunk_input,
+                    target=target,
+                    physics_branch_input=physics_branch_input,
+                    physics_trunk_input=physics_trunk_input,
+                    pde_data=physics_pde_data,
+                    all_deeponet_points_stats=all_deeponet_points_stats,
+                    all_pinn_points_stats=all_pinn_points_stats
+                )
                 
                 # Update total loss
-                total_loss += loss.item()
+                total_loss += total_batch_loss.item()
                 
-        # Compute average loss
+                # Update component losses
+                for key in total_components:
+                    if key in loss_components:
+                        total_components[key] += loss_components[key]
+                
+        # Compute average losses
         avg_loss = total_loss / len(val_loader)
+        avg_components = {key: total_components[key] / len(val_loader) for key in total_components}
         
-        return avg_loss
+        return avg_loss, avg_components
         
     def _save_checkpoint(self, epoch):
         """
@@ -533,6 +653,7 @@ class PI_SWE_DeepONetTrainer:
             'training_loss_history': self.training_loss_history,
             'validation_loss_history': self.validation_loss_history,
             'training_component_loss_history': self.training_component_loss_history,
+            'validation_component_loss_history': self.validation_component_loss_history,
             'epoch': epoch
         }
         
@@ -622,6 +743,16 @@ class PI_SWE_DeepONetTrainer:
         self.training_loss_history = checkpoint.get('training_loss_history', [])
         self.validation_loss_history = checkpoint.get('validation_loss_history', [])
         self.training_component_loss_history = checkpoint.get('training_component_loss_history', {
+            'deeponet_data_loss': [],
+            'pinn_pde_loss': [],
+            'pinn_pde_loss_cty': [],
+            'pinn_pde_loss_mom_x': [],
+            'pinn_pde_loss_mom_y': [],
+            'pinn_initial_loss': [],
+            'pinn_boundary_loss': [],
+            'total_loss': []
+        })
+        self.validation_component_loss_history = checkpoint.get('validation_component_loss_history', {
             'deeponet_data_loss': [],
             'pinn_pde_loss': [],
             'pinn_pde_loss_cty': [],
