@@ -70,13 +70,13 @@ if __name__ == "__main__":
     mp.set_start_method('spawn', force=True)
     
     # Train the model
-    #pi_deeponet_train(config)
+    pi_deeponet_train(config)
 
     # Plot training history
-    pi_deeponet_plot_training_history('./history_20251222_150256.json')
+    #pi_deeponet_plot_training_history('./history_20251222_150256.json')
 
     # Test the model with the best model and save the test results to vtk files
-    pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
+    #pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
     
     # Calculate and print the total execution time
     main_execution_time = time.time() - main_start_time

@@ -592,6 +592,13 @@ class PI_SWE_DeepONetModel(nn.Module):
         Sx = pde_data[:, 1:2]
         Sy = pde_data[:, 2:3]
         ManningN = pde_data[:, 3:4]
+
+        #print the statistics of the PDE data
+        print(f"zb shape: {zb.shape}, first: {zb[0].item():.6f}, mean: {zb.mean().item():.6f}, min: {zb.min().item():.6f}, max: {zb.max().item():.6f}")
+        print(f"Sx shape: {Sx.shape}, first: {Sx[0].item():.6f}, mean: {Sx.mean().item():.6f}, min: {Sx.min().item():.6f}, max: {Sx.max().item():.6f}")
+        print(f"Sy shape: {Sy.shape}, first: {Sy[0].item():.6f}, mean: {Sy.mean().item():.6f}, min: {Sy.min().item():.6f}, max: {Sy.max().item():.6f}")
+        print(f"ManningN shape: {ManningN.shape}, first: {ManningN[0].item():.6f}, mean: {ManningN.mean().item():.6f}, min: {ManningN.min().item():.6f}, max: {ManningN.max().item():.6f}")
+        exit()
         
         # Compute velocity magnitude
         u_mag = torch.sqrt(u*u + v*v + 1e-8)

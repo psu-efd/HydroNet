@@ -416,8 +416,7 @@ def sample_vtk_in_domain(vtk_file, flow_variables, output_unit):
     
     Args:
         vtk_file: VTK file path
-        flow_variables: List of flow variables to sample in the order of (h, u, v), also Bed_Elev and ManningN. Need to add bed slope
-        output_unit: Output unit, SI or EN
+        flow_variables: List of flow variables to sample in the order of (h, u, v), also Bed_Elev, ManningN, Sx, and Sy        output_unit: Output unit, SI or EN
         
     Returns:
         dict: Dictionary of sampled values
@@ -458,10 +457,10 @@ def sample_vtk_in_domain(vtk_file, flow_variables, output_unit):
     # Sample data for these cells   
     index_var = 0
     for var in flow_variables:       
-        #print("sampling ", var)
+        print("sampling ", var)
 
         #print("var = ", var)
-        #print("index_var = ", index_var)
+        print("index_var = ", index_var)
         #print("content of result_dict = ", result_dict.keys())
 
         # Sx and Sy are computed from the z-coordinates of the nodes
@@ -598,6 +597,8 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
 
     The split is done based on the successful simulations. First, the split (train, val, test) is based on cases, not samples (cell center data). Then, the train and validation cases are combined and then split based on shuffled samples (cell center data).
 
+    Note: this function only deals with the data for the DeepONet, not the PDE data. 
+
     Args:
         nSamples (int): Number of samples
         sampled_parameters (numpy array): Sampled parameters with shape (nSamples, n_features)
@@ -653,7 +654,7 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         n_features = sampled_parameters.shape[1]  # Number of branch input features
         n_coords = 2  # x, y coordinates for trunk inputs
         n_outputs = 3  # h, u, v for outputs
-        n_pde_data = 4  # Zb, ManningN, Sx, Sy for pde data (at cell centers for now, which are also used for computing PDE loss)
+        #n_pde_data = 4  # Zb, ManningN, Sx, Sy for pde data (at cell centers for now, which are also used for computing PDE loss)
         
         # Create datasets with chunking
         branch_inputs = h5_file.create_dataset(
@@ -677,12 +678,12 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
             dtype='float32'
         )
 
-        pde_data = h5_file.create_dataset(
-            'pde_data',
-            shape=(total_data_points, n_pde_data),
-            chunks=(chunk_size, n_pde_data),
-            dtype='float32'
-        )
+        #pde_data = h5_file.create_dataset(
+        #    'pde_data',
+        #    shape=(total_data_points, n_pde_data),
+        #    chunks=(chunk_size, n_pde_data),
+        #    dtype='float32'
+        #)
         
         # Process data 
         current_data_point = 0
@@ -702,13 +703,21 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
             case_branch_inputs = np.tile(sampled_parameters[case_idx-1, :], (n_cells_case, 1))  # -1 because indices are 1-based
             case_trunk_inputs = cell_centers[:, :2]  # Only need x,y coordinates
             case_outputs = results_array[:, :3]  # h, u, v
-            case_pde_data = results_array[:, 3:]  # Zb, ManningN, Sx, Sy
+            #case_pde_data = results_array[:, 3:]  # Zb, ManningN, Sx, Sy
+
+            #debug: print the statistics of case_pde_data 
+            #print("case_pde_data shape: ", case_pde_data.shape)
+            #print("case_pde_data first: ", case_pde_data[0])
+            #print("case_pde_data mean: ", np.mean(case_pde_data, axis=0))
+            #print("case_pde_data min: ", np.min(case_pde_data, axis=0))
+            #print("case_pde_data max: ", np.max(case_pde_data, axis=0))
+            #exit()
             
             # Write this case's data to the HDF5 file
             branch_inputs[current_data_point:current_data_point + n_cells_case] = case_branch_inputs
             trunk_inputs[current_data_point:current_data_point + n_cells_case] = case_trunk_inputs
             outputs[current_data_point:current_data_point + n_cells_case] = case_outputs
-            pde_data[current_data_point:current_data_point + n_cells_case] = case_pde_data
+            #pde_data[current_data_point:current_data_point + n_cells_case] = case_pde_data
 
             current_data_point += n_cells_case
         
@@ -1175,7 +1184,7 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_points_stats_dic
     
     # Fill in the expanded points
     pde_points[:, :2] = spatial_points  # Copy x, y coordinates
-    pde_data[:, 0] = zb_points
+    pde_data[:, 0] = zb_points   #The order of pde data is zb, Sx, Sy, ManningN.
     pde_data[:, 1] = Sx_points
     pde_data[:, 2] = Sy_points
     pde_data[:, 3] = ManningN_points

@@ -40,12 +40,17 @@ physics:
     
 # Training parameters
 training:
-  bLoad_initial_model: true
+  bLoad_initial_model: false
   initial_model_checkpoint_file: "./checkpoints/pi_deeponet_epoch_init.pt"  #start from a pretrained model (pure DeepONet model)
   batch_size: 16384
   epochs: 1000
-  learning_rate: 1E-5
+  learning_rate: 1E-3
   weight_decay: 1e-5
+
+  # Optimizer
+  optimizer:
+    optimizer_type: "Adam"  # "Adam" or "AdamW" or "LBFGS". Note: LBFGS needs full batch training, not mini-batch. Thus, it needs large memory.
+
   scheduler:
     use_scheduler: true
     scheduler_type: "ReduceLROnPlateau"
@@ -66,6 +71,11 @@ training:
     adaptive_balancing_frequency: 10  # Update weights every N epochs throughout training (recommended: 10)
     # If adaptive_balancing_frequency is not specified, uses old behavior:
     # adaptive_balancing_epochs: 10  # Only update weights during first N epochs (deprecated, use frequency instead)
+
+    # Ramping of the pde loss weights: ramping up the pde loss weights from 0 to 1 over the first N epochs linearly
+    ramping_pde_loss_weights:
+      use_ramping: true
+      ramping_epochs: 10
     
     # Base loss weights (before adaptive balancing)
     # Note: If adaptive balancing is enabled, these are starting weights that will be adjusted
