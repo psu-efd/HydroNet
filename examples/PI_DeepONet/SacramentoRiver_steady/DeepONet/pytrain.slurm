@@ -9,7 +9,7 @@
 #SBATCH --job-name=pytrain  #change this for each job to keep track
 #SBATCH --account=xzl123_cr_usgs
 #SBATCH --partition=standard     #partition
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:v100:1
 #SBATCH --output=outputFile1  #pick a name for this
 #SBATCH --error=errorFile1    #pick a name for this
 

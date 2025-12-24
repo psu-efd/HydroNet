@@ -17,8 +17,8 @@ plt.rc('font', family='serif') #specify the default font family to be "serif"
 if __name__ == "__main__":
 
     # Test case result files
-    deeponet_result_file = '../../SacramentoRiver_steady_DeepONet/data/DeepONet/test/test_results_summary.json'
-    pi_deeponet_result_file = '../../SacramentoRiver_steady_PI_DeepONet/data/DeepONet/test/test_results_summary.json'
+    deeponet_result_file = '../../DeepONet/data/DeepONet/test/test_results_summary.json'
+    pi_deeponet_result_file = '../../PI_DeepONet/data/DeepONet/test/test_results_summary.json'
     
     # read the result files
     deeponet_results = json.load(open(deeponet_result_file))

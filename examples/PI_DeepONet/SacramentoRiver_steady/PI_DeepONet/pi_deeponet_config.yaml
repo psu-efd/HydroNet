@@ -10,6 +10,8 @@ model:
   name: "PI_SWE_DeepONet"
   use_physics_loss: true  # Whether to enable physics-informed loss computation
   SWE_form: "non-conservative"  #conservative or non-conservative
+  bDryWet: false  #whether to deal with dry/wet points in the loss function. If true, the loss function will be zero for dry points.
+  dry_wet_threshold: 1e-3  #threshold for considering a point to be dry or wet. If the water depth is less than this threshold, the point is considered to be dry.
   branch_net:
     hidden_layers: [64, 128, 256, 256, 128, 64]
     activation: "relu"
@@ -21,8 +23,8 @@ model:
     dropout_rate: 0.0
     trunk_input_dim: 2  # (x, y) coordinates
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)  
-  pinn_loss_flags:         #loss flags for the physics-informed part
-    bPDE_loss: true        #whether to use PDEs in the loss function (if false, no physics-based loss)
+  pinn_loss_flags:         #loss flags for the physics part
+    bPDE_loss: true        #whether to include the PDEs loss in the loss function 
     bBoundary_loss: false   #whether to use boundary conditions in the loss function    
     bData_loss: false       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation). Note: this data loss is for PINN only. It is different from the data loss for DeepONet. In DeepONet models, this bData_loss should be set to false for most applications.
 
@@ -38,9 +40,11 @@ physics:
     
 # Training parameters
 training:
+  bLoad_initial_model: true
+  initial_model_checkpoint_file: "./checkpoints/pi_deeponet_epoch_init.pt"  #start from a pretrained model (pure DeepONet model)
   batch_size: 16384
   epochs: 1000
-  learning_rate: 0.001
+  learning_rate: 1E-5
   weight_decay: 1e-5
   scheduler:
     use_scheduler: true
@@ -48,8 +52,9 @@ training:
     patience: 10
     factor: 0.5
     min_lr: 1e-6
+    start_epoch: 10
   early_stopping:
-    use_early_stopping: true
+    use_early_stopping: false
     patience: 30
     min_delta: 1e-5
   loss_weights:

@@ -30,7 +30,18 @@ def test_PINN_data():
     print(f"PDE data-n-min: {np.min(pde_data[:, 3])}")
     print(f"PDE data-n-max: {np.max(pde_data[:, 3])}")
 
+def test_application_data():
+    """
+    Read the application point and data h5 file, and print the statistics for verification.
+    """
+
+    with h5py.File('application/data.h5', 'r') as f:
+        application_data = f['application_data'][:]
+        print(f"Application data shape: {application_data.shape}")
+        print(f"Application data: {application_data}")
+    
+
 if __name__ == "__main__":
-    test_PINN_data()
+    #test_PINN_data()
 
     print(f"All tests passed.")

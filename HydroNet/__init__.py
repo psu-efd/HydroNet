@@ -29,7 +29,10 @@ from .utils.pi_deeponet_utils import (
     pi_deeponet_train,
     pi_deeponet_test,
     pi_deeponet_plot_training_history,
-    pi_deeponet_convert_test_results_to_vtk
+    pi_deeponet_convert_test_results_to_vtk,
+    pi_deeponet_application_create_model_application_dataset,
+    pi_deeponet_application_run_model_application,
+    pi_deeponet_application_compare_model_application_results_with_simulation_results
 )
 
 # Define public API
@@ -63,4 +66,7 @@ __all__ = [
     "pi_deeponet_test",
     "pi_deeponet_plot_training_history",
     "pi_deeponet_convert_test_results_to_vtk",
+    "pi_deeponet_application_create_model_application_dataset",
+    "pi_deeponet_application_run_model_application",
+    "pi_deeponet_application_compare_model_application_results_with_simulation_results",
 ]

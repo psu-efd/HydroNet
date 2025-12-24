@@ -39,13 +39,21 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
     pi_deeponet_val_loss = np.array(pi_deeponet_history['validation_loss_history'])
     pi_deeponet_epochs = np.arange(1, len(pi_deeponet_train_loss) + 1)
     
-    # PI-DeepONet component losses
-    pi_component_loss = pi_deeponet_history['training_component_loss_history']
-    pi_data_loss = np.array(pi_component_loss['deeponet_data_loss'])
-    pi_pde_loss = np.array(pi_component_loss['pinn_pde_loss'])
-    pi_pde_cty = np.array(pi_component_loss['pinn_pde_loss_cty'])
-    pi_pde_mom_x = np.array(pi_component_loss['pinn_pde_loss_mom_x'])
-    pi_pde_mom_y = np.array(pi_component_loss['pinn_pde_loss_mom_y'])
+    # PI-DeepONet component losses for training
+    pi_component_loss_training = pi_deeponet_history['training_component_loss_history']
+    pi_data_loss_training = np.array(pi_component_loss_training['deeponet_data_loss'])
+    pi_pde_loss_training = np.array(pi_component_loss_training['pinn_pde_loss'])
+    pi_pde_cty_training = np.array(pi_component_loss_training['pinn_pde_loss_cty'])
+    pi_pde_mom_x_training = np.array(pi_component_loss_training['pinn_pde_loss_mom_x'])
+    pi_pde_mom_y_training = np.array(pi_component_loss_training['pinn_pde_loss_mom_y'])
+
+    # PI-DeepONet component losses for validation
+    pi_component_loss_validation = pi_deeponet_history['validation_component_loss_history']
+    pi_data_loss_validation = np.array(pi_component_loss_validation['deeponet_data_loss'])
+    pi_pde_loss_validation = np.array(pi_component_loss_validation['pinn_pde_loss'])
+    pi_pde_cty_validation = np.array(pi_component_loss_validation['pinn_pde_loss_cty'])
+    pi_pde_mom_x_validation = np.array(pi_component_loss_validation['pinn_pde_loss_mom_x'])
+    pi_pde_mom_y_validation = np.array(pi_component_loss_validation['pinn_pde_loss_mom_y'])
 
     # PI-DeepONet weights 
     pi_deeponet_data_loss_weight = pi_deeponet_history['adaptive_weight_history']['deeponet_data_loss_weight']
@@ -58,8 +66,8 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
     axs[0].plot(deeponet_epochs, deeponet_train_loss, 'b-', linewidth=1.5, label='SWE-DeepONet (training)', alpha=0.8)
     axs[0].plot(deeponet_epochs, deeponet_val_loss, 'b--', linewidth=1.5, label='SWE-DeepONet (validation)', alpha=0.8)
     #axs[0].plot(pi_deeponet_epochs, pi_deeponet_train_loss, 'r-', linewidth=1.5, label='PI-SWE-DeepONet (training)', alpha=0.8)
-    axs[0].plot(pi_deeponet_epochs, pi_data_loss, 'r-', linewidth=1.5, label='PI-SWE-DeepONet (training)', alpha=0.8)  #For PI-SWE-DeepONet, use the data loss as the training loss (to exclude the physics-informed loss)
-    axs[0].plot(pi_deeponet_epochs, pi_deeponet_val_loss, 'r-.', linewidth=1.5, label='PI-SWE-DeepONet (validation)', alpha=0.8)
+    axs[0].plot(pi_deeponet_epochs, pi_data_loss_training, 'r-', linewidth=1.5, label='PI-SWE-DeepONet (training)', alpha=0.8)  #For PI-SWE-DeepONet, use the data loss as the training loss (to exclude the physics-informed loss)
+    axs[0].plot(pi_deeponet_epochs, pi_data_loss_validation, 'r-.', linewidth=1.5, label='PI-SWE-DeepONet (validation)', alpha=0.8)
     axs[0].set_ylim(1e-2, 1)
     axs[0].set_xlabel('Epoch', fontsize=32)
     axs[0].set_ylabel('Loss', fontsize=32)
@@ -70,8 +78,8 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
     axs[0].set_yscale('log')  # Use log scale for better visualization
     
     # Subplot 2: PI-DeepONet physics-informed loss and data loss (weighted by the data loss weight and the PDE loss weight)
-    axs[1].plot(pi_deeponet_epochs, pi_data_loss * pi_deeponet_data_loss_weight[:len(pi_data_loss)], 'b-', linewidth=1.5, label='Data Loss', alpha=0.8)
-    axs[1].plot(pi_deeponet_epochs, pi_pde_loss * pi_deeponet_pde_loss_weight[:len(pi_pde_loss)], 'r--', linewidth=1.5, label='PDE Loss', alpha=0.8)
+    axs[1].plot(pi_deeponet_epochs, pi_data_loss_training * pi_deeponet_data_loss_weight[:len(pi_data_loss_training)], 'b-', linewidth=1.5, label='Data Loss', alpha=0.8)
+    axs[1].plot(pi_deeponet_epochs, pi_pde_loss_training * pi_deeponet_pde_loss_weight[:len(pi_pde_loss_training)], 'r--', linewidth=1.5, label='PDE Loss', alpha=0.8)
     axs[1].set_xlabel('Epoch', fontsize=32)
     axs[1].set_ylabel('Loss', fontsize=32)
     axs[1].set_title('PI-SWE-DeepONet: Data Loss vs. PDE Loss (weighted)', fontsize=24)
@@ -81,9 +89,9 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
     axs[1].set_yscale('log')
     
     # Subplot 3: PI-DeepONet PDE components
-    axs[2].plot(pi_deeponet_epochs, pi_pde_cty, 'k-', linewidth=1.5, label='Continuity', alpha=0.8)
-    axs[2].plot(pi_deeponet_epochs, pi_pde_mom_x, 'b--', linewidth=1.5, label='Momentum $x$', alpha=0.8)
-    axs[2].plot(pi_deeponet_epochs, pi_pde_mom_y, 'r-.', linewidth=1.5, label='Momentum $y$', alpha=0.8)
+    axs[2].plot(pi_deeponet_epochs, pi_pde_cty_training, 'k-', linewidth=1.5, label='Continuity', alpha=0.8)
+    axs[2].plot(pi_deeponet_epochs, pi_pde_mom_x_training, 'b--', linewidth=1.5, label='Momentum $x$', alpha=0.8)
+    axs[2].plot(pi_deeponet_epochs, pi_pde_mom_y_training, 'r-.', linewidth=1.5, label='Momentum $y$', alpha=0.8)
     axs[2].set_xlabel('Epoch', fontsize=32)
     axs[2].set_ylabel('Loss', fontsize=32)
     axs[2].set_title('PI-SWE-DeepONet: PDE Component Losses (unweighted)', fontsize=24)
@@ -108,8 +116,8 @@ def plot_training_history(deeponet_training_history_file, pi_deeponet_training_h
 
 if __name__ == "__main__":
     # The file names of the training history files
-    deeponet_training_history_file = '../../SacramentoRiver_steady_DeepONet/history_20251210_192956.json'
-    pi_deeponet_training_history_file = '../../SacramentoRiver_steady_PI_DeepONet/history_20251210_213029.json'
+    deeponet_training_history_file = '../../DeepONet/history_20251221_154421.json'
+    pi_deeponet_training_history_file = '../../PI_DeepONet/history_20251222_150256.json'
 
     plot_training_history(deeponet_training_history_file, pi_deeponet_training_history_file)
 

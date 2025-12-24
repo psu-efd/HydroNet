@@ -59,20 +59,52 @@ class PI_SWE_DeepONetTrainer:
         self.loss_fn = nn.MSELoss()
         
         # Optimizer
-        self.optimizer = optim.Adam(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay
-        )
+        optimizer_type = self.config.get_required_config('training.optimizer.optimizer_type')
+        self.optimizer_type = optimizer_type  # Store for use in training loop
+        if optimizer_type == 'Adam':
+            print(f"Using Adam optimizer")
+            self.optimizer = optim.Adam(
+                self.model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
+        elif optimizer_type == 'AdamW':
+            print(f"Using AdamW optimizer")
+            self.optimizer = optim.AdamW(
+                self.model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
+        elif optimizer_type == 'LBFGS':
+            print(f"Using LBFGS optimizer (full-batch optimizer)")
+            print(f"Warning: LBFGS does not support weight_decay. Weight decay will be ignored.")
+            print(f"Note: LBFGS requires full-batch training. All batches will be concatenated into a single batch per epoch.")
+            self.optimizer = optim.LBFGS(
+                self.model.parameters(),
+                lr=self.learning_rate,
+                max_iter=20,  # Maximum number of iterations per optimization step
+                max_eval=None,  # Maximum number of function evaluations per optimization step
+                tolerance_grad=1e-07,  # Termination tolerance on first order optimality
+                tolerance_change=1e-09,  # Termination tolerance on function value/parameter changes
+                history_size=100,  # Update history size
+                line_search_fn=None  # Either 'strong_wolfe' or None
+            )
+        else:
+            raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
         
         # Learning rate scheduler
         use_scheduler = self.config.get_required_config('training.scheduler.use_scheduler')
+        print(f"Use scheduler: {use_scheduler}")
+        
         if use_scheduler:
             scheduler_type = self.config.get_required_config('training.scheduler.scheduler_type')
             if scheduler_type == 'ReduceLROnPlateau':
                 patience = int(self.config.get_required_config('training.scheduler.patience'))
                 factor = float(self.config.get_required_config('training.scheduler.factor'))
                 min_lr = float(self.config.get_required_config('training.scheduler.min_lr'))
+                # Required: starting epoch to begin tracking best validation loss
+                # Useful when starting from pre-trained models where validation loss may initially increase
+                self.scheduler_start_epoch = int(self.config.get_required_config('training.scheduler.start_epoch'))
                 self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     self.optimizer,
                     mode='min',
@@ -80,6 +112,15 @@ class PI_SWE_DeepONetTrainer:
                     factor=factor,
                     min_lr=min_lr
                 )
+
+                #print for learning rate scheduler
+                print(f"Learning rate scheduler: {scheduler_type}")
+                print(f"Learning rate: {self.learning_rate}")
+                print(f"Learning rate scheduler patience: {patience}")
+                print(f"Learning rate scheduler factor: {factor}")
+                print(f"Learning rate scheduler min_lr: {min_lr}")
+                print(f"Learning rate scheduler start epoch: {self.scheduler_start_epoch} (will begin tracking best validation loss from this epoch)")
+
             elif scheduler_type == 'ExponentialLR':
                 gamma = self.config.get_required_config('training.scheduler.gamma')
                 self.scheduler = optim.lr_scheduler.ExponentialLR(
@@ -88,6 +129,8 @@ class PI_SWE_DeepONetTrainer:
                 )
             else:
                 raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
+
+            
         else:
             self.scheduler = None
             
@@ -159,7 +202,19 @@ class PI_SWE_DeepONetTrainer:
             'pde_continuity_weight': [],
             'pde_momentum_x_weight': [],
             'pde_momentum_y_weight': []
-        }        
+        }
+        
+        # PDE loss weight ramping
+        ramping_config = self.config.get('training.loss_weights.ramping_pde_loss_weights', {})
+        self.use_pde_loss_ramping = ramping_config.get('use_ramping', False)
+        self.ramping_epochs = int(ramping_config.get('ramping_epochs', 10)) if self.use_pde_loss_ramping else 0
+        
+        # Store the target PDE weight (will be updated by adaptive balancing if enabled)
+        # This is the weight we want to ramp to
+        self.target_pde_loss_weight = None
+        
+        if self.use_pde_loss_ramping:
+            print(f"PDE loss weight ramping enabled: ramping from 0 to full weight over {self.ramping_epochs} epochs")
         
     def train(self, train_loader, val_loader, physics_dataset=None):
         """
@@ -254,6 +309,13 @@ class PI_SWE_DeepONetTrainer:
             )
             self._update_loss_weights_from_balancing()
         
+        # Initialize target PDE loss weight for ramping (after adaptive balancing if enabled)
+        # If adaptive balancing is disabled, use the current weight from config
+        if self.use_pde_loss_ramping:
+            if self.target_pde_loss_weight is None:
+                self.target_pde_loss_weight = self.model.loss_weight_deeponet_pinn_loss.item()
+            #print(f"Target PDE loss weight for ramping: {self.target_pde_loss_weight:.6f}")
+        
         # Record initial weights
         self._record_adaptive_weights()
         
@@ -264,17 +326,56 @@ class PI_SWE_DeepONetTrainer:
         best_loss = float('inf')
         
         for epoch in range(self.epochs):
+            # Apply PDE loss weight ramping at the start of each epoch (before training)
+            # This ensures training uses the ramped weight
+            print(f"PDE loss weight before ramping: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
+            if self.use_pde_loss_ramping:
+                # Ensure target weight is set (fallback to current weight if somehow not set)
+                if self.target_pde_loss_weight is None:
+                    self.target_pde_loss_weight = self.model.loss_weight_deeponet_pinn_loss.item()
+
+                print(f"Target PDE loss weight for ramping: {self.target_pde_loss_weight:.6f}")
+                
+                if epoch < self.ramping_epochs:
+                    # Linear ramping from 0 to target weight
+                    # epoch 0: factor = 0, epoch ramping_epochs-1: factor = 1.0
+                    ramping_factor = epoch / self.ramping_epochs
+                    ramped_weight = self.target_pde_loss_weight * ramping_factor
+                    self.model.loss_weight_deeponet_pinn_loss.data = torch.tensor(
+                        float(ramped_weight), dtype=torch.float32, device=self.device
+                    )
+                else:
+                    # After ramping period, ensure weight is at target
+                    self.model.loss_weight_deeponet_pinn_loss.data = torch.tensor(
+                        float(self.target_pde_loss_weight), dtype=torch.float32, device=self.device
+                    )
+
+                print(f"PDE loss weight after ramping: {self.model.loss_weight_deeponet_pinn_loss.item():.6f}")
+            
             # Training step
-            train_loss, loss_components = self._train_epoch(
-                train_loader, 
-                pde_points, 
-                pde_data,
-                initial_points,
-                initial_values,
-                boundary_points,
-                all_deeponet_points_stats,
-                all_pinn_points_stats
-            )
+            # LBFGS requires full-batch training, so route to appropriate method
+            if self.optimizer_type == 'LBFGS':
+                train_loss, loss_components = self._train_epoch_lbfgs(
+                    train_loader, 
+                    pde_points, 
+                    pde_data,
+                    initial_points,
+                    initial_values,
+                    boundary_points,
+                    all_deeponet_points_stats,
+                    all_pinn_points_stats
+                )
+            else:
+                train_loss, loss_components = self._train_epoch(
+                    train_loader, 
+                    pde_points, 
+                    pde_data,
+                    initial_points,
+                    initial_values,
+                    boundary_points,
+                    all_deeponet_points_stats,
+                    all_pinn_points_stats
+                )
             
             # Adaptive loss balancing: update weights periodically
             should_update_weights = False
@@ -287,6 +388,16 @@ class PI_SWE_DeepONetTrainer:
             
             if should_update_weights:
                 self._update_adaptive_loss_weights(loss_components, epoch)
+                # Update target weight for ramping if adaptive balancing changed it
+                if self.use_pde_loss_ramping:
+                    self.target_pde_loss_weight = self.model.loss_weight_deeponet_pinn_loss.item()
+                    # Re-apply ramping if we're still in the ramping period
+                    if epoch < self.ramping_epochs:
+                        ramping_factor = epoch / self.ramping_epochs
+                        ramped_weight = self.target_pde_loss_weight * ramping_factor
+                        self.model.loss_weight_deeponet_pinn_loss.data = torch.tensor(
+                            float(ramped_weight), dtype=torch.float32, device=self.device
+                        )
             
             # Record weights at every epoch (for complete history)
             # This captures the current state of weights after any potential updates
@@ -321,12 +432,48 @@ class PI_SWE_DeepONetTrainer:
             # Update learning rate scheduler if needed
             if self.scheduler is not None and isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                 old_lr = self.optimizer.param_groups[0]['lr']
-                self.scheduler.step(val_loss)
+                old_best = self.scheduler.best if hasattr(self.scheduler, 'best') else None
+                old_num_bad_epochs = self.scheduler.num_bad_epochs if hasattr(self.scheduler, 'num_bad_epochs') else None
+                
+                # If we're before the start epoch, don't let the scheduler track best validation loss
+                # This is useful when starting from pre-trained models where validation loss may initially increase
+                if epoch < self.scheduler_start_epoch:
+                    # Don't call scheduler.step() before start_epoch to avoid accumulating state
+                    # The scheduler will be initialized at start_epoch
+                    pass  # Skip scheduler update entirely
+                elif epoch == self.scheduler_start_epoch:
+                    # At start epoch, initialize the scheduler's best to current validation loss
+                    # This ensures the scheduler starts tracking from this point
+                    self.scheduler.best = val_loss
+                    self.scheduler.num_bad_epochs = 0
+                    # Now call step to properly initialize the scheduler state
+                    self.scheduler.step(val_loss)
+                    print(f"  Learning rate scheduler: Starting to track best validation loss from epoch {self.scheduler_start_epoch}")
+                    print(f"    Initial best validation loss set to: {val_loss:.6f}")
+                else:
+                    # Normal operation: scheduler tracks best validation loss
+                    self.scheduler.step(val_loss)
+                
+                new_lr = self.optimizer.param_groups[0]['lr']
+                new_best = self.scheduler.best if hasattr(self.scheduler, 'best') else None
+                new_num_bad_epochs = self.scheduler.num_bad_epochs if hasattr(self.scheduler, 'num_bad_epochs') else None
+                
+                if old_lr != new_lr:
+                    print(f"  Learning rate scheduler: Reduced LR from {old_lr:.2e} to {new_lr:.2e}")
+                    print(f"    Best validation loss: {new_best:.6f}")
+                    print(f"    Epochs without improvement: {new_num_bad_epochs}/{self.scheduler.patience}")
+                else:
+                    # Print scheduler status every epoch
+                    if epoch < self.scheduler_start_epoch:
+                        print(f"  Learning rate scheduler: Current LR = {new_lr:.2e}, Not tracking yet (start epoch: {self.scheduler_start_epoch})")
+                    else:
+                        print(f"  Learning rate scheduler: Current LR = {new_lr:.2e}, Best val loss = {new_best:.6f}, Epochs without improvement = {new_num_bad_epochs}/{self.scheduler.patience}")
+            elif self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                old_lr = self.optimizer.param_groups[0]['lr']
+                self.scheduler.step()
                 new_lr = self.optimizer.param_groups[0]['lr']
                 if old_lr != new_lr:
-                    print(f"  Learning rate reduced from {old_lr:.2e} to {new_lr:.2e}")
-            elif self.scheduler is not None and not isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                self.scheduler.step()
+                    print(f"  Learning rate scheduler: LR changed from {old_lr:.2e} to {new_lr:.2e}")
                     
             # Print progress
             print(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
@@ -425,6 +572,8 @@ class PI_SWE_DeepONetTrainer:
         Returns:
             tuple: (average_loss, loss_components)
         """
+        # For Adam/AdamW, use standard mini-batch training
+        # Note: LBFGS is handled in the main training loop
         self.model.train()
         
         total_loss = 0
@@ -462,14 +611,13 @@ class PI_SWE_DeepONetTrainer:
                 # will clone, detach, and set requires_grad=True anyway, so we don't need to
                 # explicitly set requires_grad here.
                 # Handle case when batch_size > len(pde_points) by repeating indices
+                # Use memory-efficient sampling to avoid creating large intermediate tensors
                 if batch_size > len(pde_points):
-                    # Repeat indices to match batch_size, then shuffle
-                    num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
-                    physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
-                    physics_indices = physics_indices[torch.randperm(len(physics_indices))]
+                    # Sample with replacement using randint (memory efficient)
+                    physics_indices = torch.randint(0, len(pde_points), (batch_size,), device=pde_points.device, dtype=torch.long)
                 else:
                     # Sample without replacement if batch_size <= len(pde_points)
-                    physics_indices = torch.randperm(len(pde_points))[:batch_size]
+                    physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:batch_size]
                 physics_trunk_input = pde_points[physics_indices]
                 physics_pde_data = pde_data[physics_indices]
                 physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input, meaning the PDEs have to be satisfied for all the Branch inputs.
@@ -513,11 +661,19 @@ class PI_SWE_DeepONetTrainer:
             # Gradient clipping (to avoid exploding gradients)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             
-            # Update weights
+            # Update weights (Adam/AdamW)
             self.optimizer.step()
             
+            # Extract loss value before deleting tensor
+            batch_loss_value = total_batch_loss.item()
+            
+            # Explicitly delete intermediate tensors to help free memory
+            del total_batch_loss
+            if 'physics_indices' in locals() and physics_indices is not None:
+                del physics_indices
+            
             # Update total loss
-            total_loss += total_batch_loss.item()
+            total_loss += batch_loss_value
             
             # Update component losses
             for key in total_components:
@@ -527,6 +683,139 @@ class PI_SWE_DeepONetTrainer:
         # Compute average losses
         avg_loss = total_loss / len(train_loader)
         avg_components = {key: total_components[key] / len(train_loader) for key in total_components}
+        
+        return avg_loss, avg_components
+    
+    def _train_epoch_lbfgs(self, train_loader, pde_points=None, pde_data=None,
+                           initial_points=None, initial_values=None,
+                           boundary_points=None, all_deeponet_points_stats=None, all_pinn_points_stats=None):
+        """
+        Train for one epoch using LBFGS (full-batch optimizer).
+        
+        LBFGS requires the full dataset, so we concatenate all batches into a single batch.
+        
+        Args:
+            train_loader (DataLoader): Training data loader.
+            pde_points (torch.Tensor, optional): Points inside the domain for physics constraints.
+            pde_data (torch.Tensor, optional): PDE data (zb, Sx, Sy, ManningN) for physics constraints.
+            initial_points (torch.Tensor, optional): Points at initial time.
+            initial_values (torch.Tensor, optional): Initial values at initial points.
+            boundary_points (torch.Tensor, optional): Points on the boundary.
+            all_deeponet_points_stats (dict, optional): Statistics of DeepONet points for normalization.
+            all_pinn_points_stats (dict, optional): Statistics of PINN points for normalization.
+            
+        Returns:
+            tuple: (average_loss, loss_components)
+        """
+        self.model.train()
+        
+        # Concatenate all batches into a single full batch for LBFGS
+        print("  LBFGS: Concatenating all batches into full batch...")
+        all_branch_inputs = []
+        all_trunk_inputs = []
+        all_targets = []
+        
+        for batch in train_loader:
+            branch_input, trunk_input, target = batch
+            all_branch_inputs.append(branch_input)
+            all_trunk_inputs.append(trunk_input)
+            all_targets.append(target)
+        
+        # Concatenate all batches
+        full_branch_input = torch.cat(all_branch_inputs, dim=0).to(self.device)
+        full_trunk_input = torch.cat(all_trunk_inputs, dim=0).to(self.device)
+        full_target = torch.cat(all_targets, dim=0).to(self.device)
+        
+        full_batch_size = full_branch_input.shape[0]
+        print(f"  LBFGS: Full batch size: {full_batch_size}")
+        
+        # Sample PDE points for the full batch
+        physics_branch_input = None
+        physics_trunk_input = None
+        physics_pde_data = None
+        
+        if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
+            # Sample PDE points for the full batch
+            if full_batch_size > len(pde_points):
+                # Sample with replacement
+                physics_indices = torch.randint(0, len(pde_points), (full_batch_size,), device=pde_points.device, dtype=torch.long)
+            else:
+                # Sample without replacement
+                physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:full_batch_size]
+            physics_trunk_input = pde_points[physics_indices]
+            physics_pde_data = pde_data[physics_indices]
+            physics_branch_input = full_branch_input
+        
+        # Sample initial points if provided
+        initial_trunk_input = None
+        initial_batch_values = None
+        if initial_points is not None and initial_values is not None:
+            initial_indices = torch.randint(0, len(initial_points), (full_batch_size,))
+            initial_trunk_input = initial_points[initial_indices]
+            initial_batch_values = initial_values[initial_indices]
+        
+        # Sample boundary points if provided
+        boundary_trunk_input = None
+        boundary_batch_values = None
+        if boundary_points is not None:
+            boundary_indices = torch.randint(0, len(boundary_points), (full_batch_size,))
+            boundary_trunk_input = boundary_points[boundary_indices]
+        
+        # LBFGS requires a closure function
+        def closure():
+            # Zero gradients
+            self.optimizer.zero_grad()
+            
+            # Compute loss on full batch
+            loss, loss_components = self.model.compute_total_loss(
+                full_branch_input,
+                full_trunk_input,
+                target=full_target,
+                physics_branch_input=physics_branch_input,
+                physics_trunk_input=physics_trunk_input,
+                pde_data=physics_pde_data,
+                all_deeponet_points_stats=all_deeponet_points_stats,
+                all_pinn_points_stats=all_pinn_points_stats
+            )
+            
+            # Backward pass
+            loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            
+            return loss
+        
+        # Single optimizer step for the full batch
+        print("  LBFGS: Running optimizer step on full batch...")
+        final_loss = self.optimizer.step(closure)
+        
+        # Compute loss components for reporting (run one more forward pass)
+        with torch.no_grad():
+            _, loss_components = self.model.compute_total_loss(
+                full_branch_input,
+                full_trunk_input,
+                target=full_target,
+                physics_branch_input=physics_branch_input,
+                physics_trunk_input=physics_trunk_input,
+                pde_data=physics_pde_data,
+                all_deeponet_points_stats=all_deeponet_points_stats,
+                all_pinn_points_stats=all_pinn_points_stats
+            )
+        
+        # Convert loss components to Python floats
+        avg_components = {
+            'deeponet_data_loss': loss_components.get('deeponet_data_loss', 0.0),
+            'pinn_pde_loss': loss_components.get('pinn_pde_loss', 0.0),
+            'pinn_pde_loss_cty': loss_components.get('pinn_pde_loss_cty', 0.0),
+            'pinn_pde_loss_mom_x': loss_components.get('pinn_pde_loss_mom_x', 0.0),
+            'pinn_pde_loss_mom_y': loss_components.get('pinn_pde_loss_mom_y', 0.0),
+            'pinn_initial_loss': loss_components.get('pinn_initial_loss', 0.0),
+            'pinn_boundary_loss': loss_components.get('pinn_boundary_loss', 0.0),
+            'total_loss': final_loss.item() if final_loss is not None else loss_components.get('total_loss', 0.0)
+        }
+        
+        avg_loss = avg_components['total_loss']
         
         return avg_loss, avg_components
         
@@ -721,49 +1010,80 @@ class PI_SWE_DeepONetTrainer:
             
         print(f"Checkpoint saved to {checkpoint_path}")
         
-    def load_checkpoint(self, checkpoint_path):
+    def load_checkpoint(self, checkpoint_path, mode):
         """
         Load a model checkpoint.
         
         Args:
             checkpoint_path (str): Path to the checkpoint file.
+            mode (str): Loading mode. Options:
+                - 'initial_condition': Only load model weights, ignore optimizer, scheduler, and history.
+                                      Use this when you want to use pre-trained weights as initialization
+                                      but start training from scratch with new hyperparameters.
+                - 'resume_training': Load everything (model weights, optimizer state, scheduler state, history).
+                                    Use this when you want to continue training from where you left off.
         """
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        if mode not in ['initial_condition', 'resume_training']:
+            raise ValueError(f"Invalid mode: {mode}. Must be 'initial_condition' or 'resume_training'")
             
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
+        # Always load model weights
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
-        if 'scheduler_state_dict' in checkpoint and self.scheduler is not None:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        # Verify weights were loaded correctly
+        first_weight_after_load = next(iter(self.model.branch_net.net[0].fc.parameters()))
+        print(f"Model weights after loading checkpoint: first weight = {first_weight_after_load.data[0, 0].item():.8f}")
+        
+        if mode == 'initial_condition':
+            # Only load model weights, ignore everything else
+            # This allows starting fresh training with new hyperparameters
+            print(f"Loaded model weights from {checkpoint_path} (initial condition mode - optimizer, scheduler, and history ignored)")
+        elif mode == 'resume_training':
+            # Load optimizer state
+            if 'optimizer_state_dict' in checkpoint:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                # Update learning rate from config to override checkpoint learning rate
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = self.learning_rate
+                print(f"Loaded optimizer state (learning rate updated to {self.learning_rate} from config)")
+            else:
+                print("Warning: No optimizer state found in checkpoint")
             
-        # Load history
-        self.training_loss_history = checkpoint.get('training_loss_history', [])
-        self.validation_loss_history = checkpoint.get('validation_loss_history', [])
-        self.training_component_loss_history = checkpoint.get('training_component_loss_history', {
-            'deeponet_data_loss': [],
-            'pinn_pde_loss': [],
-            'pinn_pde_loss_cty': [],
-            'pinn_pde_loss_mom_x': [],
-            'pinn_pde_loss_mom_y': [],
-            'pinn_initial_loss': [],
-            'pinn_boundary_loss': [],
-            'total_loss': []
-        })
-        self.validation_component_loss_history = checkpoint.get('validation_component_loss_history', {
-            'deeponet_data_loss': [],
-            'pinn_pde_loss': [],
-            'pinn_pde_loss_cty': [],
-            'pinn_pde_loss_mom_x': [],
-            'pinn_pde_loss_mom_y': [],
-            'pinn_initial_loss': [],
-            'pinn_boundary_loss': [],
-            'total_loss': []
-        })
-        
-        #print(f"Loaded checkpoint from {checkpoint_path}")
+            # Load scheduler state
+            if 'scheduler_state_dict' in checkpoint and self.scheduler is not None:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print("Loaded scheduler state")
+            elif 'scheduler_state_dict' in checkpoint and self.scheduler is None:
+                print("Warning: Scheduler state found in checkpoint but no scheduler is configured")
+            
+            # Load history
+            self.training_loss_history = checkpoint.get('training_loss_history', [])
+            self.validation_loss_history = checkpoint.get('validation_loss_history', [])
+            self.training_component_loss_history = checkpoint.get('training_component_loss_history', {
+                'deeponet_data_loss': [],
+                'pinn_pde_loss': [],
+                'pinn_pde_loss_cty': [],
+                'pinn_pde_loss_mom_x': [],
+                'pinn_pde_loss_mom_y': [],
+                'pinn_initial_loss': [],
+                'pinn_boundary_loss': [],
+                'total_loss': []
+            })
+            self.validation_component_loss_history = checkpoint.get('validation_component_loss_history', {
+                'deeponet_data_loss': [],
+                'pinn_pde_loss': [],
+                'pinn_pde_loss_cty': [],
+                'pinn_pde_loss_mom_x': [],
+                'pinn_pde_loss_mom_y': [],
+                'pinn_initial_loss': [],
+                'pinn_boundary_loss': [],
+                'total_loss': []
+            })
+            print(f"Loaded training history from {checkpoint_path} (resume training mode)")
         
     def predict(self, branch_input, trunk_input):
         """
@@ -815,6 +1135,10 @@ class PI_SWE_DeepONetTrainer:
         pde_momentum_x_losses = []
         pde_momentum_y_losses = []
         
+        # Accumulate total squared error and total samples for consistent loss computation across batch sizes
+        total_squared_error = 0.0
+        total_samples = 0
+        
         # Note: We need gradients enabled for PDE loss computation (it uses autograd.grad),
         # but we don't call backward() so no gradients are accumulated
         for i, batch in enumerate(train_loader):
@@ -830,21 +1154,26 @@ class PI_SWE_DeepONetTrainer:
             
             # Compute data loss (no gradients needed, but doesn't hurt)
             with torch.no_grad():
+                # Verify model is in eval mode
+                if not self.model.training == False:
+                    print(f"  WARNING: Model is not in eval mode! Setting to eval mode...")
+                    self.model.eval()
+                
                 data_loss, _ = self.model.compute_deeponet_data_loss(branch_input, trunk_input, target, all_deeponet_points_stats)
-                data_losses.append(data_loss.item())
+                
+                data_losses.append(data_loss.item())              
             
             # Compute PDE loss if enabled (gradients needed for autograd.grad in compute_pde_residuals)
             if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
                 #physics_indices = torch.randint(0, len(pde_points), (batch_size,))
                 # Handle case when batch_size > len(pde_points) by repeating indices
+                # Use memory-efficient sampling to avoid creating large intermediate tensors
                 if batch_size > len(pde_points):
-                    # Repeat indices to match batch_size, then shuffle
-                    num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
-                    physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
-                    physics_indices = physics_indices[torch.randperm(len(physics_indices))]
+                    # Sample with replacement using randint (memory efficient)
+                    physics_indices = torch.randint(0, len(pde_points), (batch_size,), device=pde_points.device, dtype=torch.long)
                 else:
                     # Sample without replacement if batch_size <= len(pde_points)
-                    physics_indices = torch.randperm(len(pde_points))[:batch_size]
+                    physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:batch_size]
                 physics_trunk_input = pde_points[physics_indices]
                 physics_pde_data = pde_data[physics_indices]
                 physics_branch_input = branch_input
@@ -862,20 +1191,20 @@ class PI_SWE_DeepONetTrainer:
                     pde_momentum_x_losses.append(pde_loss_components['momentum_x_loss'])
                     pde_momentum_y_losses.append(pde_loss_components['momentum_y_loss'])
         
-        # Store initial magnitudes (use median to be robust to outliers)
+        # Store initial magnitudes (mean of the losses across all batches-to be consistent with the loss computation in the training loop)
         if data_losses:
-            self.initial_loss_magnitudes['deeponet_data_loss'] = np.median(data_losses)
+            self.initial_loss_magnitudes['deeponet_data_loss'] = np.mean(data_losses)           
         if pde_losses:
-            self.initial_loss_magnitudes['pinn_pde_loss'] = np.median(pde_losses)
+            self.initial_loss_magnitudes['pinn_pde_loss'] = np.mean(pde_losses)
         
-        # Store PDE component loss magnitudes
+        # Store PDE component loss magnitudes (mean of the losses across all batches-to be consistent with the loss computation in the training loop)
         if self.use_adaptive_pde_component_balancing:
             if pde_continuity_losses:
-                self.initial_loss_magnitudes['pde_continuity_loss'] = np.median(pde_continuity_losses)
+                self.initial_loss_magnitudes['pde_continuity_loss'] = np.mean(pde_continuity_losses)
             if pde_momentum_x_losses:
-                self.initial_loss_magnitudes['pde_momentum_x_loss'] = np.median(pde_momentum_x_losses)
+                self.initial_loss_magnitudes['pde_momentum_x_loss'] = np.mean(pde_momentum_x_losses)
             if pde_momentum_y_losses:
-                self.initial_loss_magnitudes['pde_momentum_y_loss'] = np.median(pde_momentum_y_losses)
+                self.initial_loss_magnitudes['pde_momentum_y_loss'] = np.mean(pde_momentum_y_losses)
         
         self.model.train()
         
@@ -889,17 +1218,22 @@ class PI_SWE_DeepONetTrainer:
         balancing_factor = reference_loss_magnitude / loss_magnitude
         
         This ensures losses are on similar scales.
+        
+        Note: Uses current loss magnitudes (stored in self.initial_loss_magnitudes,
+        which are updated by _update_adaptive_loss_weights() during training).
         """
         if not self.initial_loss_magnitudes:
             return
         
         # Use data loss as reference (typically the smallest)
+        # Use the current magnitude (which may have been updated by adaptive balancing)
         reference_magnitude = self.initial_loss_magnitudes.get('deeponet_data_loss', 1.0)
         
-        # Compute balancing factors
+        # Compute balancing factors based on current magnitudes
         if 'deeponet_data_loss' in self.initial_loss_magnitudes:
             data_magnitude = self.initial_loss_magnitudes['deeponet_data_loss']
             if data_magnitude > 0:
+                # Data loss weight should be 1.0 (reference)
                 self.loss_balancing_factors['deeponet_data_loss'] = reference_magnitude / data_magnitude
             else:
                 self.loss_balancing_factors['deeponet_data_loss'] = 1.0
@@ -907,6 +1241,7 @@ class PI_SWE_DeepONetTrainer:
         if 'pinn_pde_loss' in self.initial_loss_magnitudes:
             pde_magnitude = self.initial_loss_magnitudes['pinn_pde_loss']
             if pde_magnitude > 0:
+                # Balance PDE loss to match data loss scale
                 self.loss_balancing_factors['pinn_pde_loss'] = reference_magnitude / pde_magnitude
             else:
                 self.loss_balancing_factors['pinn_pde_loss'] = 1.0
@@ -914,6 +1249,13 @@ class PI_SWE_DeepONetTrainer:
         # Apply balancing factors to model's loss weights
         base_data_weight = self.config.get("training.loss_weights.deeponet.data_loss", 1.0)
         base_pde_weight = self.config.get("training.loss_weights.deeponet.pinn_loss", 1.0)
+        
+        # Debug: print current magnitudes and balancing factors
+        if 'deeponet_data_loss' in self.initial_loss_magnitudes and 'pinn_pde_loss' in self.initial_loss_magnitudes:
+            print(f"  Adaptive balancing - Data loss magnitude: {self.initial_loss_magnitudes['deeponet_data_loss']:.6f}, "
+                  f"PDE loss magnitude: {self.initial_loss_magnitudes['pinn_pde_loss']:.6f}")
+            if 'pinn_pde_loss' in self.loss_balancing_factors:
+                print(f"  Adaptive balancing - Balancing factor: {self.loss_balancing_factors['pinn_pde_loss']:.6f}")
         
         if 'deeponet_data_loss' in self.loss_balancing_factors:
             new_data_weight = base_data_weight * self.loss_balancing_factors['deeponet_data_loss']
@@ -926,6 +1268,9 @@ class PI_SWE_DeepONetTrainer:
             self.model.loss_weight_deeponet_pinn_loss.data = torch.tensor(
                 float(new_pde_weight), dtype=torch.float32, device=self.device
             )
+            # Update target weight for ramping if enabled
+            if self.use_pde_loss_ramping:
+                self.target_pde_loss_weight = new_pde_weight
         
         # Balance PDE component losses if enabled
         if self.use_adaptive_pde_component_balancing:

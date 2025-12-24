@@ -111,36 +111,20 @@ def pi_deeponet_train(config):
         bLoad_initial_model = config.get('training.bLoad_initial_model', False)
         if bLoad_initial_model:
             initial_model_checkpoint_file = config.get('training.initial_model_checkpoint_file')
+            initial_model_checkpoint_mode = config.get('training.initial_model_checkpoint_mode', "initial_condition")
             if initial_model_checkpoint_file is None:
                 raise ValueError("initial_model_checkpoint_file is not specified in the config")
-            trainer.load_checkpoint(initial_model_checkpoint_file)
+            if initial_model_checkpoint_mode is None:
+                raise ValueError("initial_model_checkpoint_mode is not specified in the config")
+
+            if initial_model_checkpoint_mode not in ['initial_condition', 'resume_training']:
+                raise ValueError(f"Invalid initial_model_checkpoint_mode: {initial_model_checkpoint_mode}. Must be 'initial_condition' or 'resume_training'")
+
+            trainer.load_checkpoint(initial_model_checkpoint_file, initial_model_checkpoint_mode)
             print(f"Successfully loaded initial model from {initial_model_checkpoint_file}")
         else:
             print("No initial model to load; using random initial weights")
-        
-        # Monitor memory after first batch. Note the GPU memory footprint only involves the DeepONet model, not the physics equations constrains.
-        print("\nMonitoring memory during first batch...")
-        for branch_input, trunk_input, target in train_loader:
-            branch_input = branch_input.to(device)
-            trunk_input = trunk_input.to(device)
-            target = target.to(device)
-            print_gpu_memory("GPU memory after data transfer")
-            
-            # Forward pass
-            output = model(branch_input, trunk_input, deeponet_points_stats)
-            print_gpu_memory("GPU memory after forward pass")
-            
-            # Backward pass
-            loss = trainer.loss_fn(output, target)
-            loss.backward()
-            print_gpu_memory("GPU memory after backward pass")
-            
-            # Optimizer step
-            trainer.optimizer.step()
-            trainer.optimizer.zero_grad()
-            print_gpu_memory("GPU memory after optimizer step")
-            break
-        
+                
         # Train the model
         print("\nStarting training...")
         history = trainer.train(
@@ -255,7 +239,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     
     # Load the trained model checkpoint
     try:
-        trainer.load_checkpoint(checkpoint_path)
+        trainer.load_checkpoint(checkpoint_path, "resume_training")
         print(f"Successfully loaded checkpoint from {checkpoint_path}")
     except (FileNotFoundError, RuntimeError) as e:
         print(f"Error loading checkpoint: {e}, exiting...")        
@@ -582,8 +566,8 @@ def pi_deeponet_plot_training_history(history_file_name, save_path=None):
         raise KeyError("History file must contain 'adaptive_weight_history'")
 
     # Plot the training history (instead of train_loss, we pass in deeponet_data_loss because train_loss is the total loss=data_loss+pinn_loss)
-    #_pi_deeponet_plot_training_history_training_loss_and_validation_loss(train_loss, val_loss, save_path)
-    _pi_deeponet_plot_training_history_training_loss_and_validation_loss(deeponet_data_loss, val_loss, save_path)
+    _pi_deeponet_plot_training_history_training_loss_and_validation_loss(train_loss, val_loss, save_path)
+    #_pi_deeponet_plot_training_history_training_loss_and_validation_loss(deeponet_data_loss, val_loss, save_path)
 
     _pi_deeponet_plot_training_component_loss_history_data_loss_and_pinn_loss(deeponet_data_loss, pinn_pde_loss, adaptive_weight_deeponet_data_loss, adaptive_weight_pinn_pde_loss, save_path)
 
@@ -883,6 +867,10 @@ def pi_deeponet_application_create_model_application_dataset(config):
     # Concatenate all cases
     branch_inputs = np.concatenate(branch_inputs_list, axis=0).astype(np.float32)
     trunk_inputs = np.concatenate(trunk_inputs_list, axis=0).astype(np.float32)
+
+    #print first 5 rows of branch inputs and trunk inputs
+    print(f"First 5 rows of branch inputs (dimensional): {branch_inputs[:5]}")
+    print(f"First 5 rows of trunk inputs (dimensional): {trunk_inputs[:5]}")
     
     # Load normalization stats from the training data
     stats_path = config['application']['train_val_test_stats_path']
@@ -954,6 +942,36 @@ def pi_deeponet_application_create_model_application_dataset(config):
     config['model']['use_physics_loss'] = False
     # Then create the dataset
     dataset = PI_SWE_DeepONetDataset(data_path=application_data_dir, config=config)
+
+    # Test to read the application data
+    bTest_reading_application_data = True
+    if bTest_reading_application_data:
+        with h5py.File(h5_file_path, 'r') as f:
+            branch_inputs = f['branch_inputs'][:]
+            trunk_inputs = f['trunk_inputs'][:]
+            outputs = f['outputs'][:]
+            print(f"Branch inputs shape: {branch_inputs.shape}")
+            print(f"Trunk inputs shape: {trunk_inputs.shape}")
+            print(f"Outputs shape: {outputs.shape}")
+
+            #print the statistics of the application data
+            print(f"Branch inputs statistics: {np.mean(branch_inputs, axis=0)}")
+            print(f"Trunk inputs statistics: {np.mean(trunk_inputs, axis=0)}")
+            print(f"Outputs statistics: {np.mean(outputs, axis=0)}")
+            print(f"Branch inputs std: {np.std(branch_inputs, axis=0)}")
+            print(f"Trunk inputs std: {np.std(trunk_inputs, axis=0)}")
+            print(f"Outputs std: {np.std(outputs, axis=0)}")
+
+            #trunk min and max
+            print(f"Trunk inputs min: {np.min(trunk_inputs, axis=0)}")
+            print(f"Trunk inputs max: {np.max(trunk_inputs, axis=0)}")
+
+            print(f"Branch inputs (first 5 rows): {branch_inputs[:5]}")
+            print(f"Trunk inputs (first 5 rows): {trunk_inputs[:5]}")
+            print(f"Outputs (first 5 rows): {outputs[:5]}")
+            print(f"Outputs (last 5 rows): {outputs[-5:]}")
+    
+    
     
     return dataset, application_parameters
 
@@ -1130,7 +1148,7 @@ def pi_deeponet_application_run_model_application(config):
     model_checkpoint_file = config['application']['model_checkpoint_file']
 
     # Create the application dataset
-    dataset, application_parameters = pi_deeponet_application_create_model_application_dataset(config)
+    dataset, application_parameters = pi_deeponet_application_create_model_application_dataset(config)    
 
     # Get a sample to determine dimensions
     sample_branch, sample_trunk, sample_output = dataset[0]
@@ -1149,7 +1167,7 @@ def pi_deeponet_application_run_model_application(config):
     
     # Load the trained model checkpoint
     try:
-        trainer.load_checkpoint(model_checkpoint_file)
+        trainer.load_checkpoint(model_checkpoint_file, "resume_training")
         print(f"Successfully loaded model checkpoint from {model_checkpoint_file}")
     except (FileNotFoundError, RuntimeError) as e:
         print(f"Error loading model checkpoint: {e}, exiting...")        

@@ -1095,13 +1095,14 @@ def plot_profile_results(case_index, variable_name, output_unit):
     #show the plot
     plt.show()
 
-def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict):
+def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_points_stats_dict, all_PINN_data_stats_dict):
     """
     Convert mesh points in a json file (mesh_points.json, derived from SRH-2D mesh file) to PINNDataset format.
     
     Parameters
     ----------
         postprocessing_specs (dict): The postprocessing specifications dictionary        
+        all_PINN_points_stats_dict (dict): The statistics of the PINN points (to be merged with the PINN points stats and saved to a JSON file)
         all_PINN_data_stats_dict (dict): The statistics of the PINN data (to be merged with the PINN points stats and saved to a JSON file)
 
     Returns
@@ -1271,20 +1272,37 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict)
     all_points = np.concatenate((pde_points, boundary_points), axis=0)
     print(f"All points shape: {all_points.shape}")
     print(f"All points: {all_points}")
-    x_min = np.min(all_points[:, 0])
-    x_max = np.max(all_points[:, 0])
-    x_mean = np.mean(all_points[:, 0])
-    x_std = np.std(all_points[:, 0])
-    y_min = np.min(all_points[:, 1])
-    y_max = np.max(all_points[:, 1])
-    y_mean = np.mean(all_points[:, 1])
-    y_std = np.std(all_points[:, 1])
+
+    #compute the statistics of all the points
+    #The following not used anymore; use the passed in all_PINN_points_stats_dict instead (to be consistent between DeepONet and PI)
+    #x_min = np.min(all_points[:, 0])
+    #x_max = np.max(all_points[:, 0])
+    #x_mean = np.mean(all_points[:, 0])
+    #x_std = np.std(all_points[:, 0])
+    #y_min = np.min(all_points[:, 1])
+    #y_max = np.max(all_points[:, 1])
+    #y_mean = np.mean(all_points[:, 1])
+    #y_std = np.std(all_points[:, 1])
     
     #this case is for steady case, thus time t is not relevant. But for completeness, we save it in all_points_stats
-    t_min = 0.0
-    t_max = 0.0
-    t_mean = 0.0
-    t_std = 0.0
+    #t_min = 0.0
+    #t_max = 0.0
+    #t_mean = 0.0
+    #t_std = 0.0
+
+    #get the statistics from the passed in all_PINN_points_stats_dict
+    x_min = all_PINN_points_stats_dict['x_min']
+    x_max = all_PINN_points_stats_dict['x_max']
+    x_mean = all_PINN_points_stats_dict['x_mean']
+    x_std = all_PINN_points_stats_dict['x_std']
+    y_min = all_PINN_points_stats_dict['y_min']
+    y_max = all_PINN_points_stats_dict['y_max']
+    y_mean = all_PINN_points_stats_dict['y_mean']
+    y_std = all_PINN_points_stats_dict['y_std']
+    t_min = all_PINN_points_stats_dict['t_min']
+    t_max = all_PINN_points_stats_dict['t_max']
+    t_mean = all_PINN_points_stats_dict['t_mean']
+    t_std = all_PINN_points_stats_dict['t_std']
 
     #get the normalization specs from the postprocessing_specs
     PINN_normalization_specs = postprocessing_specs['PINN_normalization_specs']
@@ -1396,7 +1414,7 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict)
     }
 
     #added the PINN_normalization_specs to the all_points_stats_dict; also add the all_PINN_data_stats_dict to the all_points_stats_dict
-    all_points_stats_dict = {
+    all_PINN_stats_dict = {
         "PINN_normalization_specs": PINN_normalization_specs,
         "all_points_stats": all_points_stats_dict,
         "all_data_stats": all_PINN_data_stats_dict
@@ -1439,7 +1457,7 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict)
         
         #save the statistics of all the points as a json file
         with open(os.path.join(output_dir, 'all_PINN_stats.json'), 'w') as f:
-            json.dump(all_points_stats_dict, f, indent=4)
+            json.dump(all_PINN_stats_dict, f, indent=4)
 
     except Exception as e:
         raise RuntimeError(f"Failed to save files: {e}")

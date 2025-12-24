@@ -1,6 +1,12 @@
 # Project specific ignores
 *.slurm.o*
 *.slurm.e*
+examples/PI_DeepONet/SacramentoRiver_steady/PI_DeepONet_2/
+examples/PI_DeepONet/SacramentoRiver_steady/PI_DeepONet_3/
+examples/PI_DeepONet/SacramentoRiver_steady/restart_1/
+examples/PI_DeepONet/SacramentoRiver_steady/temp/
+examples/PI_DeepONet/SacramentoRiver_steady_2/
+
 examples/PI_DeepONet/SacramentoRiver_steady/SacramentoRiver_steady_PI_DeepONet_*
 *.xlsx
 examples/PI_DeepONet/block_in_channel_steady/data_generation/

@@ -119,9 +119,17 @@ class PI_SWE_DeepONetModel(nn.Module):
         self.bSteady = self.config.get_required_config("physics.bSteady")
         self.use_physics_loss = self.config.get_required_config("model.use_physics_loss")
         self.SWE_form = self.config.get_required_config("model.SWE_form")
+        self.bDryWet = self.config.get_required_config("model.bDryWet")
+        # Ensure dry_wet_threshold is a float (YAML might read scientific notation as string)
+        self.dry_wet_threshold = float(self.config.get_required_config("model.dry_wet_threshold"))
+
+        if self.bDryWet and self.dry_wet_threshold < 0:
+            raise ValueError("Dry/wet threshold must be positive if dry/wet points are being dealt with.")
 
         print(f"Use physics loss: {self.use_physics_loss}")
         print(f"SWE form: {self.SWE_form}")
+        print(f"Whether deal with dry/wet points in pde loss: {self.bDryWet}")
+        print(f"Dry/wet threshold (m): {self.dry_wet_threshold}")
 
         device_type = self.config.get_required_config("device.type")
         if device_type is not None:
@@ -565,13 +573,13 @@ class PI_SWE_DeepONetModel(nn.Module):
         u = u_hat * sigma_u + mu_u
         v = v_hat * sigma_v + mu_v        
 
-        #flag dry points based on water depth: threshold is 1e-3 m
+        #flag dry points based on water depth: threshold 
         #flag = 1.0 for wet points, 0.0 for dry points
         #flag value is used to exclude the pde residuals at dry points from the loss calculation
-        flag = torch.where(h > 1e-3, torch.ones_like(h), torch.zeros_like(h))
+        flag = torch.where(h > self.dry_wet_threshold, torch.ones_like(h), torch.zeros_like(h))
 
         #clip water depth to be positive
-        h = torch.clamp(h, min=1e-3)
+        h = torch.clamp(h, min=self.dry_wet_threshold)
         
         #denormalize the coordinates (which are normalized with min-max) (NOT USED FOR NOW)
         #x = x_hat * Lx + x_min
@@ -621,9 +629,10 @@ class PI_SWE_DeepONetModel(nn.Module):
         momentum_y_residual = momentum_y_residual / self.velocity_scale**2 * self.length_scale
 
         #exclude the pde residuals at dry points from the loss calculation
-        mass_residual = mass_residual * flag
-        momentum_x_residual = momentum_x_residual * flag
-        momentum_y_residual = momentum_y_residual * flag
+        if self.bDryWet:
+            mass_residual = mass_residual * flag
+            momentum_x_residual = momentum_x_residual * flag
+            momentum_y_residual = momentum_y_residual * flag
 
         #debug print (all tensors are batched, so print first element and statistics)
         bDebug = False
@@ -648,11 +657,35 @@ class PI_SWE_DeepONetModel(nn.Module):
                 print(f"dh_dt shape: {dh_dt.shape}, first: {dh_dt[0].item():.6f}, mean: {dh_dt.mean().item():.6f}")
                 print(f"du_dt shape: {du_dt.shape}, first: {du_dt[0].item():.6f}, mean: {du_dt.mean().item():.6f}")
                 print(f"dv_dt shape: {dv_dt.shape}, first: {dv_dt[0].item():.6f}, mean: {dv_dt.mean().item():.6f}")
+
+            #print the components of the momentum conservation equations: first element and mean, min, max, std
+            u_du_dx = u * du_dx
+            v_du_dy = v * du_dy
+            g_dh_dx = self.g * dh_dx
+            g_sx = self.g * Sx
+            friction_term_x = self.g * ManningN**2 * u * u_mag / (h**(4.0/3.0) + 1e-8)
+            u_dv_dx = u * dv_dx
+            v_dv_dy = v * dv_dy
+            g_dh_dy = self.g * dh_dy
+            g_sy = self.g * Sy
+            friction_term_y = self.g * ManningN**2 * v * u_mag / (h**(4.0/3.0) + 1e-8)
+            
+            print(f"u*du_dx: {u_du_dx[0].item():.6f}, mean: {u_du_dx.mean().item():.6f}, min: {u_du_dx.min().item():.6f}, max: {u_du_dx.max().item():.6f}, std: {u_du_dx.std().item():.6f}")
+            print(f"v*du_dy: {v_du_dy[0].item():.6f}, mean: {v_du_dy.mean().item():.6f}, min: {v_du_dy.min().item():.6f}, max: {v_du_dy.max().item():.6f}, std: {v_du_dy.std().item():.6f}")
+            print(f"self.g * dh_dx: {g_dh_dx[0].item():.6f}, mean: {g_dh_dx.mean().item():.6f}, min: {g_dh_dx.min().item():.6f}, max: {g_dh_dx.max().item():.6f}, std: {g_dh_dx.std().item():.6f}")
+            print(f"self.g * Sx: {g_sx[0].item():.6f}, mean: {g_sx.mean().item():.6f}, min: {g_sx.min().item():.6f}, max: {g_sx.max().item():.6f}, std: {g_sx.std().item():.6f}")
+            print(f"self.g * ManningN**2 * u * u_mag / (h**(4.0/3.0) + 1e-8): {friction_term_x[0].item():.6f}, mean: {friction_term_x.mean().item():.6f}, min: {friction_term_x.min().item():.6f}, max: {friction_term_x.max().item():.6f}, std: {friction_term_x.std().item():.6f}")
+            print(f"u*dv_dx: {u_dv_dx[0].item():.6f}, mean: {u_dv_dx.mean().item():.6f}, min: {u_dv_dx.min().item():.6f}, max: {u_dv_dx.max().item():.6f}, std: {u_dv_dx.std().item():.6f}")
+            print(f"v*dv_dy: {v_dv_dy[0].item():.6f}, mean: {v_dv_dy.mean().item():.6f}, min: {v_dv_dy.min().item():.6f}, max: {v_dv_dy.max().item():.6f}, std: {v_dv_dy.std().item():.6f}")
+            print(f"self.g * dh_dy: {g_dh_dy[0].item():.6f}, mean: {g_dh_dy.mean().item():.6f}, min: {g_dh_dy.min().item():.6f}, max: {g_dh_dy.max().item():.6f}, std: {g_dh_dy.std().item():.6f}")
+            print(f"self.g * Sy: {g_sy[0].item():.6f}, mean: {g_sy.mean().item():.6f}, min: {g_sy.min().item():.6f}, max: {g_sy.max().item():.6f}, std: {g_sy.std().item():.6f}")
+            print(f"u*dv_dx: {u_dv_dx[0].item():.6f}, v*dv_dy: {v_dv_dy[0].item():.6f}, self.g * dh_dy: {g_dh_dy[0].item():.6f}, self.g * Sy: {g_sy[0].item():.6f}, self.g * ManningN**2 * v * u_mag / (h**(4.0/3.0) + 1e-8): {friction_term_y[0].item():.6f}")
+
             # Lx, Ly, Lt, mu_*, sigma_* are Python floats from stats dict, not tensors
-            #print(f"Lx: {Lx}, Ly: {Ly}" + (f", Lt: {Lt}" if not self.bSteady else ""))
-            #print(f"sigma_h: {sigma_h}, sigma_u: {sigma_u}, sigma_v: {sigma_v}")
-            #print(f"mu_h: {mu_h}, mu_u: {mu_u}, mu_v: {mu_v}")
-            #exit()
+            print(f"Lx: {Lx}, Ly: {Ly}" + (f", Lt: {Lt}" if not self.bSteady else ""))
+            print(f"sigma_h: {sigma_h}, sigma_u: {sigma_u}, sigma_v: {sigma_v}")
+            print(f"mu_h: {mu_h}, mu_u: {mu_u}, mu_v: {mu_v}")
+            exit()
 
 
         return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
