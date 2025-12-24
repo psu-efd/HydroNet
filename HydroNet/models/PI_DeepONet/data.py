@@ -91,47 +91,52 @@ class PI_SWE_DeepONetDataset(Dataset):
                 
             # Load data from HDF5 file
             with h5py.File(h5_file, 'r') as f:
-                # Load input functions (for branch net)
+                # Load input functions (for branch net) - shape: (nCases, n_features)
                 self.branch_inputs = f['branch_inputs'][:].astype(np.float64)
                 self.branch_dim = self.branch_inputs.shape[1]
 
-                # Load coordinates (for trunk net)
+                # Load coordinates (for trunk net) - shape: (nCells, n_coords)
                 self.trunk_inputs = f['trunk_inputs'][:].astype(np.float64)
                 self.trunk_dim = self.trunk_inputs.shape[1]
                 
-                # Load output values (h, u, v)
+                # Load output values (h, u, v) - shape: (nCases, nCells, n_outputs)
                 self.outputs = f['outputs'][:].astype(np.float64)
-                self.output_dim = self.outputs.shape[1]
+                self.output_dim = self.outputs.shape[2]  # Changed from shape[1] to shape[2] for 3D array
             
             print("branch_inputs.shape: ", self.branch_inputs.shape)
             print("trunk_inputs.shape: ", self.trunk_inputs.shape)
             print("outputs.shape: ", self.outputs.shape)
             
-            print(f"Loaded {len(self.branch_inputs)} samples from {self.data_path}")
+            print(f"Loaded {len(self.branch_inputs)} cases from {self.data_path}")
             
         except Exception as e:
             print(f"Error loading data: {e}")            
             raise RuntimeError("Error loading data. Please check the data directory and file structure.")
     
     def __len__(self):
-        """Return the number of samples in the dataset."""
+        """Return the number of cases in the dataset."""
         return len(self.branch_inputs)
     
     def __getitem__(self, idx):
         """
-        Get a sample from the dataset.
+        Get a case from the dataset (for case-based mini-batching).
         
         Args:
-            idx (int): Index of the sample.
+            idx (int): Index of the case.
             
         Returns:
             tuple: (branch_input, trunk_input, output) where:
-                - branch_input is the input function for the branch net
-                - trunk_input is the coordinate for the trunk net
-                - output is the corresponding output value
+                - branch_input is the input function for the branch net, shape: (n_features,)
+                - trunk_input is the coordinates for the trunk net, shape: (nCells, n_coords)
+                - output is the corresponding output values, shape: (nCells, n_outputs)
         """
+        # Get branch input for this case - shape: (n_features,)
         branch_input = self.branch_inputs[idx]
-        trunk_input = self.trunk_inputs[idx]
+        
+        # Trunk inputs are the same for all cases (mesh) - shape: (nCells, n_coords)
+        trunk_input = self.trunk_inputs
+        
+        # Get outputs for this case - shape: (nCells, n_outputs)
         output = self.outputs[idx]
         
         # Convert to torch tensors

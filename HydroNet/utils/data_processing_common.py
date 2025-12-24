@@ -644,48 +644,48 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
 
         # Create the temporary HDF5 file for this split (to be used for shuffling and normalization)
         h5_file = h5py.File(f'data/DeepONet/{split_name}/data_temp.h5', 'w')
+
+        #number of cases in this split
+        nCases = len(indices)
         
         # Calculate total number of data points for this split (= number of cases * number of cells per case)
-        total_data_points = len(indices) * nCells
+        total_data_points = nCases * nCells
         
-        # Initialize datasets with chunking
-        chunk_size = min(10000, total_data_points)  # Adjust chunk size as needed
+        # Initialize datasets (no chunking needed for one-time write)
         n_features = sampled_parameters.shape[1]  # Number of branch input features
         n_coords = 2  # x, y coordinates for trunk inputs
         n_outputs = 3  # h, u, v for outputs
         n_pde_data = 4  # Zb, ManningN, Sx, Sy for pde data (at cell centers for now, which are also used for computing PDE loss)
         
-        # Create datasets with chunking
+        # Create datasets
         branch_inputs = h5_file.create_dataset(
             'branch_inputs',
-            shape=(total_data_points, n_features),
-            chunks=(chunk_size, n_features),
+            shape=(nCases, n_features),
             dtype='float32'
         )
         
         trunk_inputs = h5_file.create_dataset(
             'trunk_inputs',
-            shape=(total_data_points, n_coords),
-            chunks=(chunk_size, n_coords),
+            shape=(nCells, n_coords),
             dtype='float32'
         )
         
         outputs = h5_file.create_dataset(
             'outputs',
-            shape=(total_data_points, n_outputs),
-            chunks=(chunk_size, n_outputs),
+            shape=(nCases, nCells, n_outputs),
             dtype='float32'
         )
 
         pde_data = h5_file.create_dataset(
             'pde_data',
-            shape=(total_data_points, n_pde_data),
-            chunks=(chunk_size, n_pde_data),
+            shape=(nCells, n_pde_data),
             dtype='float32'
         )
         
         # Process data 
-        current_data_point = 0
+        trunk_inputs_written = False
+        pde_data_written = False
+        
         for index, case_idx in enumerate(indices):
             print("    Processing case = ", case_idx, " (", index+1, " out of ", len(indices), ")")
 
@@ -699,21 +699,39 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
             assert n_cells_case == nCells, "Number of cells is not correct"
             
             # Prepare data for this case
-            case_branch_inputs = np.tile(sampled_parameters[case_idx-1, :], (n_cells_case, 1))  # -1 because indices are 1-based
+            # branch_inputs: one row per case (no repetition)
+            case_branch_input = sampled_parameters[case_idx-1, :]  # -1 because indices are 1-based
+            
+            # trunk_inputs: cell centers (same for all cases, write once)
             case_trunk_inputs = cell_centers[:, :2]  # Only need x,y coordinates
+            
+            # outputs: 3D array (case, cell, output)
             case_outputs = results_array[:, :3]  # h, u, v
+            
+            # pde_data: cell data (same for all cases, write once)
             case_pde_data = results_array[:, 3:]  # Zb, ManningN, Sx, Sy
             
             # Write this case's data to the HDF5 file
-            branch_inputs[current_data_point:current_data_point + n_cells_case] = case_branch_inputs
-            trunk_inputs[current_data_point:current_data_point + n_cells_case] = case_trunk_inputs
-            outputs[current_data_point:current_data_point + n_cells_case] = case_outputs
-            pde_data[current_data_point:current_data_point + n_cells_case] = case_pde_data
-
-            current_data_point += n_cells_case
+            # branch_inputs: write once per case at case index
+            branch_inputs[index, :] = case_branch_input
+            
+            # trunk_inputs: write once (same mesh for all cases)
+            if not trunk_inputs_written:
+                trunk_inputs[:, :] = case_trunk_inputs
+                trunk_inputs_written = True
+            
+            # outputs: write at case index
+            outputs[index, :, :] = case_outputs
+            
+            # pde_data: write once (same mesh for all cases)
+            if not pde_data_written:
+                pde_data[:, :] = case_pde_data
+                pde_data_written = True
         
         # Add metadata
-        h5_file.attrs['n_samples'] = total_data_points
+        h5_file.attrs['n_cases'] = nCases
+        h5_file.attrs['n_cells'] = nCells
+        h5_file.attrs['n_samples'] = total_data_points  # Keep for backward compatibility
         h5_file.attrs['n_features'] = n_features
         h5_file.attrs['n_coords'] = n_coords
         h5_file.attrs['n_outputs'] = n_outputs
@@ -722,7 +740,7 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         # Close the temporary HDF5 file (data within are not normalized yet)
         h5_file.close()
         
-        print(f"Saved {total_data_points} data points to data/DeepONet/{split_name}")
+        print(f"Saved {nCases} cases ({total_data_points} total data points) to data/DeepONet/{split_name}")
 
     #read the train and validation data again and combine/shuffle them; also read in the test data so we can compute the mean and std of the whole dataset
     train_data = h5py.File('data/DeepONet/train/data_temp.h5', 'r')
@@ -730,9 +748,17 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     test_data = h5py.File('data/DeepONet/test/data_temp.h5', 'r')
 
     #combine the whole dataset (train, val, test) for computing the statistics
+    # branch_inputs: (nCases, n_features) - concatenate along cases dimension
     train_val_test_data_branch_inputs = np.concatenate((train_data['branch_inputs'], val_data['branch_inputs'], test_data['branch_inputs']), axis=0).astype(np.float64)
+    
+    # trunk_inputs: (nCells, n_coords) - same mesh for all cases, just use from train (or concatenate if different meshes)
+    # Assuming same mesh across splits, so concatenating will duplicate but stats will be correct
     train_val_test_data_trunk_inputs = np.concatenate((train_data['trunk_inputs'], val_data['trunk_inputs'], test_data['trunk_inputs']), axis=0).astype(np.float64)
-    train_val_test_data_outputs = np.concatenate((train_data['outputs'], val_data['outputs'], test_data['outputs']), axis=0).astype(np.float64)    
+    
+    # outputs: (nCases, nCells, n_outputs) - concatenate along cases dimension, then reshape for statistics
+    train_val_test_data_outputs_3d = np.concatenate((train_data['outputs'], val_data['outputs'], test_data['outputs']), axis=0).astype(np.float64)
+    # Reshape to (total_cases * nCells, n_outputs) for computing statistics over all data points
+    train_val_test_data_outputs = train_val_test_data_outputs_3d.reshape(-1, train_val_test_data_outputs_3d.shape[-1]).astype(np.float64)    
 
     #compute the min, max, mean and std of the whole dataset (train, val, test)
     #For this case, the branch inputs are the sampled parameters (discharges at three inflow boundaries), which are not normalized yet.
@@ -833,14 +859,19 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     }
 
     #combine the train and validation data for normalization and shuffling
+    # branch_inputs: (nCases, n_features) - concatenate along cases dimension
     train_val_data_branch_inputs = np.concatenate((train_data['branch_inputs'], val_data['branch_inputs']), axis=0)
-    train_val_data_trunk_inputs = np.concatenate((train_data['trunk_inputs'], val_data['trunk_inputs']), axis=0)
+    
+    # trunk_inputs: (nCells, n_coords) - same mesh for all cases, use from train
+    train_val_data_trunk_inputs = train_data['trunk_inputs'][:]
+    
+    # outputs: (nCases, nCells, n_outputs) - concatenate along cases dimension
     train_val_data_outputs = np.concatenate((train_data['outputs'], val_data['outputs']), axis=0)
 
     #get the test data for normalization (no shuffling for test data because we need each simulation case to be together)
-    test_data_branch_inputs = test_data['branch_inputs']
-    test_data_trunk_inputs = test_data['trunk_inputs']
-    test_data_outputs = test_data['outputs']
+    test_data_branch_inputs = test_data['branch_inputs'][:]
+    test_data_trunk_inputs = test_data['trunk_inputs'][:]
+    test_data_outputs = test_data['outputs'][:]
 
     #normalize the data (train, validation and test). 
     #Note: currently, only z-score for branch inputs and outputs, and min-max for trunk inputs are supported.
@@ -855,7 +886,11 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         raise ValueError(f"Invalid trunk inputs normalization method: {trunk_inputs_normalization_method}")
 
     if outputs_normalization_method == 'z-score':
-        train_val_data_outputs = (train_val_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
+        # outputs is 3D (nCases, nCells, n_outputs), need to reshape for normalization then reshape back
+        original_shape = train_val_data_outputs.shape
+        train_val_data_outputs_flat = train_val_data_outputs.reshape(-1, original_shape[-1])
+        train_val_data_outputs_flat = (train_val_data_outputs_flat - train_val_test_mean_outputs) / train_val_test_std_outputs
+        train_val_data_outputs = train_val_data_outputs_flat.reshape(original_shape)
     else:
         raise ValueError(f"Invalid outputs normalization method: {outputs_normalization_method}")
 
@@ -871,7 +906,11 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         raise ValueError(f"Invalid test data trunk inputs normalization method: {trunk_inputs_normalization_method}")
 
     if outputs_normalization_method == 'z-score':
-        test_data_outputs = (test_data_outputs - train_val_test_mean_outputs) / train_val_test_std_outputs
+        # outputs is 3D (nCases, nCells, n_outputs), need to reshape for normalization then reshape back
+        original_shape = test_data_outputs.shape
+        test_data_outputs_flat = test_data_outputs.reshape(-1, original_shape[-1])
+        test_data_outputs_flat = (test_data_outputs_flat - train_val_test_mean_outputs) / train_val_test_std_outputs
+        test_data_outputs = test_data_outputs_flat.reshape(original_shape)
     else:
         raise ValueError(f"Invalid test data outputs normalization method: {outputs_normalization_method}")
 
@@ -880,43 +919,43 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     print(f"Trunk inputs: {train_val_data_trunk_inputs.shape}")
     print(f"Outputs: {train_val_data_outputs.shape}")
 
-    #get the total number of train and validation data points
-    n_train_val_data_points = train_val_data_branch_inputs.shape[0]
+    #get the total number of train and validation cases (not data points)
+    n_train_val_cases = train_val_data_branch_inputs.shape[0]
 
-    print("n_train_val_data_points = ", n_train_val_data_points)
+    print("n_train_val_cases = ", n_train_val_cases)
 
     #split the train and validation data into training and validation sets based on training_fraction and validation_fraction only
     # Calculate the new training fraction (relative to train+val)
     training_fraction_new = training_fraction/(training_fraction + validation_fraction)
 
     # Calculate split point
-    n_train = int(n_train_val_data_points * training_fraction_new)
+    n_train = int(n_train_val_cases * training_fraction_new)
 
-    # Randomly split into train and val
-    train_indices = np.random.choice(n_train_val_data_points, size=n_train, replace=False)
-    val_indices = np.setdiff1d(np.arange(n_train_val_data_points), train_indices)
+    # Randomly split into train and val at the case level
+    train_indices = np.random.choice(n_train_val_cases, size=n_train, replace=False)
+    val_indices = np.setdiff1d(np.arange(n_train_val_cases), train_indices)
 
     print("Split sizes:")
-    print(f"Train: {len(train_indices)}")
-    print(f"Val: {len(val_indices)}")
+    print(f"Train: {len(train_indices)} cases")
+    print(f"Val: {len(val_indices)} cases")
 
     #save the train data to the train HDF5 file
-    train_data = h5py.File('data/DeepONet/train/data.h5', 'w')
-    train_data['branch_inputs'] = train_val_data_branch_inputs[train_indices]
-    train_data['trunk_inputs'] = train_val_data_trunk_inputs[train_indices]
-    train_data['outputs'] = train_val_data_outputs[train_indices]
+    train_data_file = h5py.File('data/DeepONet/train/data.h5', 'w')
+    train_data_file['branch_inputs'] = train_val_data_branch_inputs[train_indices]
+    train_data_file['trunk_inputs'] = train_val_data_trunk_inputs  # Same mesh for all cases
+    train_data_file['outputs'] = train_val_data_outputs[train_indices]
 
     #save the validation data to the validation HDF5 file
-    val_data = h5py.File('data/DeepONet/val/data.h5', 'w')
-    val_data['branch_inputs'] = train_val_data_branch_inputs[val_indices]
-    val_data['trunk_inputs'] = train_val_data_trunk_inputs[val_indices]
-    val_data['outputs'] = train_val_data_outputs[val_indices]
+    val_data_file = h5py.File('data/DeepONet/val/data.h5', 'w')
+    val_data_file['branch_inputs'] = train_val_data_branch_inputs[val_indices]
+    val_data_file['trunk_inputs'] = train_val_data_trunk_inputs  # Same mesh for all cases
+    val_data_file['outputs'] = train_val_data_outputs[val_indices]
 
     #save the test data to the test HDF5 file
-    test_data = h5py.File('data/DeepONet/test/data.h5', 'w')
-    test_data['branch_inputs'] = test_data_branch_inputs
-    test_data['trunk_inputs'] = test_data_trunk_inputs
-    test_data['outputs'] = test_data_outputs
+    test_data_file = h5py.File('data/DeepONet/test/data.h5', 'w')
+    test_data_file['branch_inputs'] = test_data_branch_inputs
+    test_data_file['trunk_inputs'] = test_data_trunk_inputs
+    test_data_file['outputs'] = test_data_outputs
     
     #combine the stats dictionaries as sub-dictionaries and save them to a JSON file
     all_DeepONet_stats = {
@@ -933,9 +972,9 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
         json.dump(all_DeepONet_stats_serializable, f, indent=4)
     
     #close the train and validation HDF5 files
-    train_data.close()
-    val_data.close()
-    test_data.close()
+    train_data_file.close()
+    val_data_file.close()
+    test_data_file.close()
 
     #remove data_temp.h5 file
     os.remove('data/DeepONet/train/data_temp.h5')
