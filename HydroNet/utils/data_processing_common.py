@@ -416,7 +416,8 @@ def sample_vtk_in_domain(vtk_file, flow_variables, output_unit):
     
     Args:
         vtk_file: VTK file path
-        flow_variables: List of flow variables to sample in the order of (h, u, v), also Bed_Elev, ManningN, Sx, and Sy        output_unit: Output unit, SI or EN
+        flow_variables: List of flow variables to sample in the order of (h, u, v), also Bed_Elev and ManningN. Need to add bed slope
+        output_unit: Output unit, SI or EN
         
     Returns:
         dict: Dictionary of sampled values
@@ -457,10 +458,10 @@ def sample_vtk_in_domain(vtk_file, flow_variables, output_unit):
     # Sample data for these cells   
     index_var = 0
     for var in flow_variables:       
-        print("sampling ", var)
+        #print("sampling ", var)
 
         #print("var = ", var)
-        print("index_var = ", index_var)
+        #print("index_var = ", index_var)
         #print("content of result_dict = ", result_dict.keys())
 
         # Sx and Sy are computed from the z-coordinates of the nodes
@@ -600,8 +601,6 @@ def postprocess_results_for_DeepONet(nSamples, sampled_parameters, flow_variable
     Two passes:
     1. Loop through each split, read vtk result files and write to temporary HDF5 files.
     2. Read the temporary HDF5 files, compute the statistics of the data, normalize the data, and write to the final HDF5 files.
-
-    Note: this function only deals with the data for the DeepONet, not the PDE data. 
 
     Args:
         nSamples (int): Number of samples
@@ -1174,7 +1173,7 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_points_stats_dic
     
     # Fill in the expanded points
     pde_points[:, :2] = spatial_points  # Copy x, y coordinates
-    pde_data[:, 0] = zb_points   #The order of pde data is zb, Sx, Sy, ManningN.
+    pde_data[:, 0] = zb_points
     pde_data[:, 1] = Sx_points
     pde_data[:, 2] = Sy_points
     pde_data[:, 3] = ManningN_points
