@@ -1,6 +1,11 @@
 # Project specific ignores
 *.slurm.o*
 *.slurm.e*
+examples/PI_DeepONet/SacramentoRiver_steady_N_100/
+examples/PI_DeepONet/SacramentoRiver_steady_N_1000_relu_tanh/
+examples/PI_DeepONet/SacramentoRiver_steady_N_200/
+examples/PI_DeepONet/SacramentoRiver_steady_N_200_small/
+
 examples/PI_DeepONet/SacramentoRiver_steady/PI_DeepONet_2/
 examples/PI_DeepONet/SacramentoRiver_steady/PI_DeepONet_3/
 examples/PI_DeepONet/SacramentoRiver_steady/restart_1/

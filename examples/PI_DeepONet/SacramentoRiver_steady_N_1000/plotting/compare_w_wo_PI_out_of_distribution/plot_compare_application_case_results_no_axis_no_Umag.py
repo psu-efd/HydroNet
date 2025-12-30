@@ -1,0 +1,625 @@
+#This script plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the application cases.
+# All results are in vtk files. Each vtk file contains the results for an application case and it also has the SRH-2D simulation results for the same application case.
+# It produces two figures. 
+# 1. For Figure 1, it plots 3 rows and 3 columns of subplots. Each row is for SRH-2D simulation, SWE-DeepONet, and PI-SWE-DeepONet, respectively. Columns are fro h, u, and v plots, respectively.
+# 2. For Figure 2, it plots the difference between DeepONet and SRH-2D simulation, and PI-SWE-DeepONet and SRH-2D simulation, respectively. This figure has 2 rows and 3 columns. The first row is for the difference between DeepONet and SRH-2D simulation, and the second row is for the difference between PI-SWE-DeepONet and SRH-2D simulation. Columns are for difference in h, u, v plots, respectively.
+# Remove axis labels and titles from the subplots.
+
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.ticker as tick
+from matplotlib.collections import PolyCollection
+import vtk
+from vtk.util.numpy_support import vtk_to_numpy
+import meshio
+
+plt.rc('text', usetex=True)  #allow the use of Latex for math expressions and equations
+plt.rc('font', family='serif') #specify the default font family to be "serif"
+
+def extract_boundary_outline(vtk_fileName):
+    """Extract boundary outline from VTK file."""
+    reader = vtk.vtkUnstructuredGridReader()
+    reader.SetFileName(vtk_fileName)
+    reader.Update()
+    mesh = reader.GetOutput()
+    
+    surface_filter = vtk.vtkDataSetSurfaceFilter()
+    surface_filter.SetInputData(mesh)
+    surface_filter.Update()
+    surface_polydata = surface_filter.GetOutput()
+    
+    feature_edges = vtk.vtkFeatureEdges()
+    feature_edges.SetInputData(surface_polydata)
+    feature_edges.BoundaryEdgesOn()
+    feature_edges.FeatureEdgesOff()
+    feature_edges.ManifoldEdgesOff()
+    feature_edges.NonManifoldEdgesOff()
+    feature_edges.Update()
+    
+    boundary_polydata = feature_edges.GetOutput()
+    boundary_points = boundary_polydata.GetPoints()
+    
+    if boundary_points and boundary_points.GetNumberOfPoints() > 0:
+        all_points = vtk_to_numpy(boundary_points.GetData())[:, :2]
+        num_cells = boundary_polydata.GetNumberOfCells()
+        if num_cells > 0:
+            edges = []
+            for i in range(num_cells):
+                cell = boundary_polydata.GetCell(i)
+                if cell.GetNumberOfPoints() == 2:
+                    pt0 = cell.GetPointId(0)
+                    pt1 = cell.GetPointId(1)
+                    edges.append((pt0, pt1))
+            
+            if len(edges) > 0:
+                ordered_points = []
+                used_edges = set()
+                current_edge = edges[0]
+                ordered_points.append(all_points[current_edge[0]])
+                ordered_points.append(all_points[current_edge[1]])
+                used_edges.add(0)
+                current_point_id = current_edge[1]
+                
+                while len(used_edges) < len(edges):
+                    found_next = False
+                    for i, edge in enumerate(edges):
+                        if i in used_edges:
+                            continue
+                        if edge[0] == current_point_id:
+                            ordered_points.append(all_points[edge[1]])
+                            current_point_id = edge[1]
+                            used_edges.add(i)
+                            found_next = True
+                            break
+                        elif edge[1] == current_point_id:
+                            ordered_points.append(all_points[edge[0]])
+                            current_point_id = edge[0]
+                            used_edges.add(i)
+                            found_next = True
+                            break
+                    
+                    if not found_next:
+                        for i, edge in enumerate(edges):
+                            if i not in used_edges:
+                                ordered_points.append(all_points[edge[0]])
+                                ordered_points.append(all_points[edge[1]])
+                                used_edges.add(i)
+                                current_point_id = edge[1]
+                                break
+                        else:
+                            break
+                
+                return np.array(ordered_points)
+            else:
+                return all_points
+        else:
+            return all_points
+    else:
+        return np.array([]).reshape(0, 2)
+
+def plot_compare_application_case_results(application_case_indices, deeponet_result_dir, pi_deeponet_result_dir):
+    """
+    Plots the comparison of the results of the DeepONet and PI-DeepONet models and the simulation results for the application cases.
+
+    The figures ar saved as png files in the current directory. The figure names are 'compare_application_case_results_{case_id}.png' and 'compare_application_case_diff_2_{case_id}.png'.
+
+    Args:
+        application_case_indices: The indices of the application cases to plot.
+        deeponet_result_dir: The directory of the DeepONet result files.
+        pi_deeponet_result_dir: The directory of the PI-DeepONet result files.
+    Returns:
+        None
+    """
+
+    # Loop through the application case indices
+    for application_case_index in application_case_indices:
+        # Get the result files - check file naming convention
+        deeponet_result_file = os.path.join(deeponet_result_dir, f'case_{application_case_index}_diff.vtk')
+        if not os.path.exists(deeponet_result_file):
+            raise FileNotFoundError(f"DeepONet result file not found: {deeponet_result_file}")
+        
+        pi_deeponet_result_file = os.path.join(pi_deeponet_result_dir, f'case_{application_case_index}_diff.vtk')
+        if not os.path.exists(pi_deeponet_result_file):
+            raise FileNotFoundError(f"PI-DeepONet result file not found: {pi_deeponet_result_file}")        
+
+        # Read the result files using meshio
+        deeponet_result = meshio.read(deeponet_result_file)
+        pi_deeponet_result = meshio.read(pi_deeponet_result_file)
+        
+        # Extract boundary outline (use first file for boundary)
+        boundary_outline = extract_boundary_outline(deeponet_result_file)
+        
+        # Get mesh points and cells
+        points = deeponet_result.points[:, :2]  # x, y coordinates
+        xl, xh = points[:, 0].min(), points[:, 0].max()
+        yl, yh = points[:, 1].min(), points[:, 1].max()
+        
+        # Get all cells (triangles and quads) and build cell-to-point mapping
+        all_cells = []
+        cell_data_indices = []  # Track which cell data index corresponds to each cell
+        cell_idx = 0
+        
+        for cell_block in deeponet_result.cells:
+            if cell_block.type == "triangle":
+                for cell in cell_block.data:
+                    all_cells.append(cell)
+                    cell_data_indices.append(cell_idx)
+                    cell_idx += 1
+            elif cell_block.type == "quad":
+                # Split quads into two triangles for contour plotting
+                for quad in cell_block.data:
+                    # Triangle 1: points 0, 1, 2
+                    all_cells.append([quad[0], quad[1], quad[2]])
+                    cell_data_indices.append(cell_idx)
+                    # Triangle 2: points 0, 2, 3
+                    all_cells.append([quad[0], quad[2], quad[3]])
+                    cell_data_indices.append(cell_idx)
+                    cell_idx += 1
+        
+        triangles = np.array(all_cells) if all_cells else None
+        
+        # Helper function to interpolate cell data to points
+        def cell_to_point_data(cell_data, all_cells_list, cell_data_indices_list, n_points):
+            """Interpolate cell-centered data to point data by averaging values from all cells containing each point."""
+            point_data = np.zeros(n_points)
+            point_count = np.zeros(n_points)
+            for cell, data_idx in zip(all_cells_list, cell_data_indices_list):
+                cell_value = cell_data[data_idx]
+                for pt_id in cell:
+                    point_data[pt_id] += cell_value
+                    point_count[pt_id] += 1
+            point_data = point_data / np.maximum(point_count, 1)
+            return point_data
+        
+        # Helper function to extract cell data (handles multiple cell blocks)
+        def extract_cell_data_array(cell_data_dict, key):
+            """Extract cell data array, concatenating across all cell blocks if needed."""
+            if key not in cell_data_dict:
+                raise KeyError(f"Key '{key}' not found in cell_data")
+            data = cell_data_dict[key]
+            # If it's a list (multiple cell blocks), concatenate
+            if isinstance(data, list):
+                return np.concatenate([np.array(d).flatten() for d in data])
+            else:
+                return np.array(data).flatten()
+        
+        def extract_cell_data_vector(cell_data_dict, key, n_components=3):
+            """Extract vector cell data array, concatenating across all cell blocks if needed."""
+            if key not in cell_data_dict:
+                raise KeyError(f"Key '{key}' not found in cell_data")
+            data = cell_data_dict[key]
+            # If it's a list (multiple cell blocks), concatenate
+            if isinstance(data, list):
+                arrays = []
+                for d in data:
+                    d_array = np.array(d)
+                    if d_array.ndim == 1:
+                        # Reshape to (n_cells, n_components)
+                        d_array = d_array.reshape(-1, n_components)
+                    arrays.append(d_array)
+                return np.vstack(arrays)
+            else:
+                d_array = np.array(data)
+                if d_array.ndim == 1:
+                    d_array = d_array.reshape(-1, n_components)
+                return d_array
+        
+        # Extract data from DeepONet results
+        deeponet_cell_data = deeponet_result.cell_data
+        deeponet_h_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_Water_Depth')
+        deeponet_u_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_X_Velocity')
+        deeponet_v_pred = extract_cell_data_array(deeponet_cell_data, 'Pred_Y_Velocity')
+        deeponet_vel_pred = extract_cell_data_vector(deeponet_cell_data, 'Pred_Velocity', 3)[:, :2]  # x, y components
+        
+        # Extract SRH-2D simulation data (from DeepONet file - same mesh)
+        sim_h = extract_cell_data_array(deeponet_cell_data, 'Sim_Water_Depth')
+        sim_u = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, 0]
+        sim_v = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, 1]
+        sim_vel = extract_cell_data_vector(deeponet_cell_data, 'Sim_Velocity', 3)[:, :2]
+        
+        # Extract data from PI-DeepONet results
+        pi_cell_data = pi_deeponet_result.cell_data
+        pi_h_pred = extract_cell_data_array(pi_cell_data, 'Pred_Water_Depth')
+        pi_u_pred = extract_cell_data_array(pi_cell_data, 'Pred_X_Velocity')
+        pi_v_pred = extract_cell_data_array(pi_cell_data, 'Pred_Y_Velocity')
+        pi_vel_pred = extract_cell_data_vector(pi_cell_data, 'Pred_Velocity', 3)[:, :2]
+        
+        # Build cell list for interpolation (need original cells, not triangulated)
+        original_cells = []
+        original_cell_idx = 0
+        for cell_block in deeponet_result.cells:
+            if cell_block.type == "triangle":
+                for cell in cell_block.data:
+                    original_cells.append(cell)
+            elif cell_block.type == "quad":
+                for quad in cell_block.data:
+                    original_cells.append(quad)
+            original_cell_idx += len(cell_block.data)
+        
+        # Interpolate cell data to points for contour plotting
+        if triangles is not None and len(original_cells) > 0:
+            n_points = len(points)
+            # Create mapping from original cells to data indices
+            orig_cell_data_indices = list(range(len(original_cells)))
+            
+            sim_h_pt = cell_to_point_data(sim_h, original_cells, orig_cell_data_indices, n_points)
+            sim_u_pt = cell_to_point_data(sim_u, original_cells, orig_cell_data_indices, n_points)
+            sim_v_pt = cell_to_point_data(sim_v, original_cells, orig_cell_data_indices, n_points)
+            deeponet_h_pt = cell_to_point_data(deeponet_h_pred, original_cells, orig_cell_data_indices, n_points)
+            deeponet_u_pt = cell_to_point_data(deeponet_u_pred, original_cells, orig_cell_data_indices, n_points)
+            deeponet_v_pt = cell_to_point_data(deeponet_v_pred, original_cells, orig_cell_data_indices, n_points)
+            pi_h_pt = cell_to_point_data(pi_h_pred, original_cells, orig_cell_data_indices, n_points)
+            pi_u_pt = cell_to_point_data(pi_u_pred, original_cells, orig_cell_data_indices, n_points)
+            pi_v_pt = cell_to_point_data(pi_v_pred, original_cells, orig_cell_data_indices, n_points)
+        
+        # Calculate differences
+        diff_deeponet_h = deeponet_h_pred - sim_h
+        diff_deeponet_u = deeponet_u_pred - sim_u
+        diff_deeponet_v = deeponet_v_pred - sim_v
+        diff_deeponet_vel_mag = np.sqrt(deeponet_u_pred**2 + deeponet_v_pred**2) - np.sqrt(sim_u**2 + sim_v**2)
+        
+        diff_pi_h = pi_h_pred - sim_h
+        diff_pi_u = pi_u_pred - sim_u
+        diff_pi_v = pi_v_pred - sim_v
+        diff_pi_vel_mag = np.sqrt(pi_u_pred**2 + pi_v_pred**2) - np.sqrt(sim_u**2 + sim_v**2)
+        
+        # Interpolate differences to points
+        if triangles is not None and len(original_cells) > 0:
+            diff_deeponet_h_pt = cell_to_point_data(diff_deeponet_h, original_cells, orig_cell_data_indices, n_points)
+            diff_deeponet_u_pt = cell_to_point_data(diff_deeponet_u, original_cells, orig_cell_data_indices, n_points)
+            diff_deeponet_v_pt = cell_to_point_data(diff_deeponet_v, original_cells, orig_cell_data_indices, n_points)
+            diff_deeponet_vel_mag_pt = cell_to_point_data(diff_deeponet_vel_mag, original_cells, orig_cell_data_indices, n_points)
+            diff_pi_h_pt = cell_to_point_data(diff_pi_h, original_cells, orig_cell_data_indices, n_points)
+            diff_pi_u_pt = cell_to_point_data(diff_pi_u, original_cells, orig_cell_data_indices, n_points)
+            diff_pi_v_pt = cell_to_point_data(diff_pi_v, original_cells, orig_cell_data_indices, n_points)
+            diff_pi_vel_mag_pt = cell_to_point_data(diff_pi_vel_mag, original_cells, orig_cell_data_indices, n_points)
+
+        # Compute the minimum and maximum of h, u, and v across SRH-2D, SWE-DeepONet, and PI-SWE-DeepONet
+        h_min = np.min([sim_h_pt.min(), deeponet_h_pt.min(), pi_h_pt.min()])
+        h_max = np.max([sim_h_pt.max(), deeponet_h_pt.max(), pi_h_pt.max()])
+        u_min = np.min([sim_u_pt.min(), deeponet_u_pt.min(), pi_u_pt.min()])
+        u_max = np.max([sim_u_pt.max(), deeponet_u_pt.max(), pi_u_pt.max()])
+        v_min = np.min([sim_v_pt.min(), deeponet_v_pt.min(), pi_v_pt.min()])
+        v_max = np.max([sim_v_pt.max(), deeponet_v_pt.max(), pi_v_pt.max()])
+        
+        # create levels for the contour plots
+        levels_h = np.linspace(h_min, h_max, 20)
+        levels_u = np.linspace(u_min, u_max, 20)
+        levels_v = np.linspace(v_min, v_max, 20)
+
+        # Compute the minimum and maximum of the difference in h, u, and v across SRH-2D, SWE-DeepONet, and PI-SWE-DeepONet
+        diff_h_min = np.min([diff_deeponet_h_pt.min(), diff_pi_h_pt.min()])
+        diff_h_max = np.max([diff_deeponet_h_pt.max(), diff_pi_h_pt.max()])
+        diff_u_min = np.min([diff_deeponet_u_pt.min(), diff_pi_u_pt.min()])
+        diff_u_max = np.max([diff_deeponet_u_pt.max(), diff_pi_u_pt.max()])
+        diff_v_min = np.min([diff_deeponet_v_pt.min(), diff_pi_v_pt.min()])
+        diff_v_max = np.max([diff_deeponet_v_pt.max(), diff_pi_v_pt.max()])
+        
+        # create levels for the contour plots
+        levels_diff_h = np.linspace(diff_h_min, diff_h_max, 20)
+        levels_diff_u = np.linspace(diff_u_min, diff_u_max, 20)
+        levels_diff_v = np.linspace(diff_v_min, diff_v_max, 20)
+
+        # Figure 1: Results comparison (3 rows, 3 columns)
+        fig1, axs1 = plt.subplots(3, 3, figsize=(16, 14), facecolor='w')
+        
+        # Row 0: SRH-2D simulation
+        if triangles is not None:
+            # h
+            cf = axs1[0, 0].tricontourf(points[:, 0], points[:, 1], triangles, sim_h_pt, levels=levels_h, cmap=plt.cm.RdBu_r, vmin=h_min, vmax=h_max)
+            axs1[0, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[0, 0].set_title('SRH-2D: $h$', fontsize=28)
+            axs1[0, 0].set_xticks([])
+            axs1[0, 0].set_yticks([])
+            #axs1[0, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 0].tick_params(axis='both', which='major', labelsize=22)
+            axs1[0, 0].set_aspect('equal')
+            axs1[0, 0].set_xlim([xl, xh])
+            axs1[0, 0].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[0, 0], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # u
+            cf = axs1[0, 1].tricontourf(points[:, 0], points[:, 1], triangles, sim_u_pt, levels=levels_u, cmap=plt.cm.RdBu_r, vmin=u_min, vmax=u_max)
+            axs1[0, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[0, 1].set_title('SRH-2D: $u$', fontsize=28)
+            axs1[0, 1].set_xticks([])
+            axs1[0, 1].set_yticks([])
+            #axs1[0, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 1].tick_params(axis='both', which='major', labelsize=22)
+            axs1[0, 1].set_aspect('equal')
+            axs1[0, 1].set_xlim([xl, xh])
+            axs1[0, 1].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[0, 1], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # v
+            cf = axs1[0, 2].tricontourf(points[:, 0], points[:, 1], triangles, sim_v_pt, levels=levels_v, cmap=plt.cm.RdBu_r, vmin=v_min, vmax=v_max)
+            axs1[0, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[0, 2].set_title('SRH-2D: $v$', fontsize=28)
+            axs1[0, 2].set_xticks([])
+            axs1[0, 2].set_yticks([])
+            #axs1[0, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[0, 2].tick_params(axis='both', which='major', labelsize=22)
+            axs1[0, 2].set_aspect('equal')
+            axs1[0, 2].set_xlim([xl, xh])
+            axs1[0, 2].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[0, 2], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+        
+        # Row 1: SWE-DeepONet
+        if triangles is not None:
+            # h
+            cf = axs1[1, 0].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_h_pt, levels=levels_h, cmap=plt.cm.RdBu_r, vmin=h_min, vmax=h_max)
+            axs1[1, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[1, 0].set_title('SWE-DeepONet: $h$', fontsize=28)
+            axs1[1, 0].set_xticks([])
+            axs1[1, 0].set_yticks([])
+            #axs1[1, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 0].tick_params(axis='both', which='major', labelsize=22)
+            axs1[1, 0].set_aspect('equal')
+            axs1[1, 0].set_xlim([xl, xh])
+            axs1[1, 0].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[1, 0], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # u
+            cf = axs1[1, 1].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_u_pt, levels=levels_u, cmap=plt.cm.RdBu_r, vmin=u_min, vmax=u_max)
+            axs1[1, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[1, 1].set_title('SWE-DeepONet: $u$', fontsize=28)
+            axs1[1, 1].set_xticks([])
+            axs1[1, 1].set_yticks([])
+            #axs1[1, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 1].tick_params(axis='both', which='major', labelsize=22)
+            axs1[1, 1].set_aspect('equal')
+            axs1[1, 1].set_xlim([xl, xh])
+            axs1[1, 1].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[1, 1], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # v
+            cf = axs1[1, 2].tricontourf(points[:, 0], points[:, 1], triangles, deeponet_v_pt, levels=levels_v, cmap=plt.cm.RdBu_r, vmin=v_min, vmax=v_max)
+            axs1[1, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[1, 2].set_title('SWE-DeepONet: $v$', fontsize=28)
+            axs1[1, 2].set_xticks([])
+            axs1[1, 2].set_yticks([])
+            #axs1[1, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[1, 2].tick_params(axis='both', which='major', labelsize=22)
+            axs1[1, 2].set_aspect('equal')
+            axs1[1, 2].set_xlim([xl, xh])
+            axs1[1, 2].set_ylim([yl, yh])
+            cbar = plt.colorbar(cf, ax=axs1[1, 2], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')            
+        
+        # Row 2: PI-SWE-DeepONet
+        if triangles is not None:
+            # h
+            cf = axs1[2, 0].tricontourf(points[:, 0], points[:, 1], triangles, pi_h_pt, levels=levels_h, cmap=plt.cm.RdBu_r, vmin=h_min, vmax=h_max)
+            axs1[2, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[2, 0].set_title('PI-SWE-DeepONet: $h$', fontsize=28)
+            axs1[2, 0].set_xticks([])
+            axs1[2, 0].set_yticks([])
+            #axs1[2, 0].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 0].tick_params(axis='both', which='major', labelsize=22)
+            axs1[2, 0].set_aspect('equal')
+            axs1[2, 0].set_xlim([xl, xh])
+            axs1[2, 0].set_ylim([yl, yh])
+            #axs1[2, 0].set_xlabel('$x$ (m)', fontsize=16)
+            #axs1[2, 0].set_ylabel('$y$ (m)', fontsize=16)
+            cbar = plt.colorbar(cf, ax=axs1[2, 0], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # u
+            cf = axs1[2, 1].tricontourf(points[:, 0], points[:, 1], triangles, pi_u_pt, levels=levels_u, cmap=plt.cm.RdBu_r, vmin=u_min, vmax=u_max)
+            axs1[2, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[2, 1].set_title('PI-SWE-DeepONet: $u$', fontsize=28)
+            axs1[2, 1].set_xticks([])
+            axs1[2, 1].set_yticks([])
+            #axs1[2, 1].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 1].tick_params(axis='both', which='major', labelsize=22)
+            axs1[2, 1].set_aspect('equal')
+            axs1[2, 1].set_xlim([xl, xh])
+            axs1[2, 1].set_ylim([yl, yh])
+            #axs1[2, 1].set_xlabel('$x$ (m)', fontsize=16)
+            cbar = plt.colorbar(cf, ax=axs1[2, 1], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # v
+            cf = axs1[2, 2].tricontourf(points[:, 0], points[:, 1], triangles, pi_v_pt, levels=levels_v, cmap=plt.cm.RdBu_r, vmin=v_min, vmax=v_max)
+            axs1[2, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs1[2, 2].set_title('PI-SWE-DeepONet: $v$', fontsize=28)
+            axs1[2, 2].set_xticks([])
+            axs1[2, 2].set_yticks([])
+            #axs1[2, 2].set_ylabel('$y$ (m)', fontsize=16)
+            axs1[2, 2].tick_params(axis='both', which='major', labelsize=22)
+            axs1[2, 2].set_aspect('equal')
+            axs1[2, 2].set_xlim([xl, xh])
+            axs1[2, 2].set_ylim([yl, yh])
+            #axs1[2, 2].set_xlabel('$x$ (m)', fontsize=16)
+            cbar = plt.colorbar(cf, ax=axs1[2, 2], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=28, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+        
+        plt.tight_layout()
+        plt.savefig(f'compare_application_case_results_{application_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
+        plt.close()
+        #exit()
+        
+        # Figure 2: Differences (2 rows, 3 columns)
+        fig2, axs2 = plt.subplots(2, 3, figsize=(15, 9), facecolor='w')
+        
+        # Row 0: DeepONet - SRH-2D differences
+        if triangles is not None:
+            # h difference
+            vmax = diff_deeponet_h_pt.max()
+            vmin = diff_deeponet_h_pt.min()
+            
+            #compute RMSE
+            rmse_h = np.sqrt(np.mean(diff_deeponet_h_pt**2))
+
+            cf = axs2[0, 0].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_h_pt, 
+                                       levels=levels_diff_h, cmap=plt.cm.RdBu_r, vmin=diff_h_min, vmax=diff_h_max)
+            axs2[0, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[0, 0].set_title('SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=20)
+            axs2[0, 0].set_xticks([])
+            axs2[0, 0].set_yticks([])
+            #set tick labels font size 
+            axs2[0, 0].tick_params(axis='both', which='major', labelsize=22)
+            axs2[0, 0].set_aspect('equal')
+            axs2[0, 0].set_xlim([xl, xh])
+            axs2[0, 0].set_ylim([yl, yh])
+            #text for RMSE, Min and Max (in three lines)
+            axs2[0, 0].text(0.45, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=22, transform=axs2[0, 0].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[0, 0], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.1f'))
+            cbar.ax.text(0.5, 1.05, '(m)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')            
+            
+            # u difference
+            vmax = diff_deeponet_u_pt.max()
+            vmin = diff_deeponet_u_pt.min()
+
+            #compute RMSE
+            rmse_u = np.sqrt(np.mean(diff_deeponet_u_pt**2))
+
+            cf = axs2[0, 1].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_u_pt, 
+                                       levels=levels_diff_u, cmap=plt.cm.RdBu_r, vmin=diff_u_min, vmax=diff_u_max)
+            axs2[0, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[0, 1].set_title('SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=20)
+            axs2[0, 1].set_xticks([])
+            axs2[0, 1].set_yticks([])
+            axs2[0, 1].tick_params(axis='both', which='major', labelsize=22)
+            axs2[0, 1].set_aspect('equal')
+            axs2[0, 1].set_xlim([xl, xh])
+            axs2[0, 1].set_ylim([yl, yh])
+            axs2[0, 1].text(0.38, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[0, 1].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[0, 1], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.2f'))
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+
+            # v difference
+            vmax = diff_deeponet_v_pt.max()
+            vmin = diff_deeponet_v_pt.min()
+
+            #compute RMSE
+            rmse_v = np.sqrt(np.mean(diff_deeponet_v_pt**2))
+
+            cf = axs2[0, 2].tricontourf(points[:, 0], points[:, 1], triangles, diff_deeponet_v_pt, 
+                                       levels=levels_diff_v, cmap=plt.cm.RdBu_r, vmin=diff_v_min, vmax=diff_v_max)
+            axs2[0, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[0, 2].set_title('SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=20)
+            axs2[0, 2].set_xticks([])
+            axs2[0, 2].set_yticks([])
+            axs2[0, 2].tick_params(axis='both', which='major', labelsize=22)
+            axs2[0, 2].set_aspect('equal')
+            axs2[0, 2].set_xlim([xl, xh])
+            axs2[0, 2].set_ylim([yl, yh])
+            axs2[0, 2].text(0.38, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[0, 2].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[0, 2], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.2f'))
+            cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+        # Row 1: PI-DeepONet - SRH-2D differences
+        if triangles is not None:
+            # h difference
+            vmax = diff_pi_h_pt.max()
+            vmin = diff_pi_h_pt.min()
+
+            #compute RMSE
+            rmse_h = np.sqrt(np.mean(diff_pi_h_pt**2))
+
+            cf = axs2[1, 0].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_h_pt, 
+                                       levels=levels_diff_h, cmap=plt.cm.RdBu_r, vmin=diff_h_min, vmax=diff_h_max)
+            axs2[1, 0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[1, 0].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta h$', fontsize=20)
+            axs2[1, 0].set_xticks([])
+            axs2[1, 0].set_yticks([])
+            axs2[1, 0].tick_params(axis='both', which='major', labelsize=22)
+            axs2[1, 0].set_aspect('equal')
+            axs2[1, 0].set_xlim([xl, xh])
+            axs2[1, 0].set_ylim([yl, yh])
+            axs2[1, 0].text(0.45, 0.9, f'RMSE: {rmse_h:.2f} m\nMin: {vmin:.2f} m\nMax: {vmax:.2f} m', fontsize=22, transform=axs2[1, 0].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[1, 0], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.1f'))
+            cbar.ax.text(0.55, 1.05, '(m)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # u difference
+            vmax = diff_pi_u_pt.max()
+            vmin = diff_pi_u_pt.min()
+
+            #compute RMSE
+            rmse_u = np.sqrt(np.mean(diff_pi_u_pt**2))
+
+            cf = axs2[1, 1].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_u_pt, 
+                                       levels=levels_diff_u, cmap=plt.cm.RdBu_r, vmin=diff_u_min, vmax=diff_u_max)
+            axs2[1, 1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[1, 1].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta u$', fontsize=20)
+            axs2[1, 1].set_xticks([])
+            axs2[1, 1].set_yticks([])
+            axs2[1, 1].tick_params(axis='both', which='major', labelsize=22)
+            axs2[1, 1].set_aspect('equal')
+            axs2[1, 1].set_xlim([xl, xh])
+            axs2[1, 1].set_ylim([yl, yh])
+            axs2[1, 1].text(0.38, 0.9, f'RMSE: {rmse_u:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[1, 1].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[1, 1], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.2f'))
+            cbar.ax.text(0.55, 1.05, '(m/s)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+            
+            # v difference
+            vmax = diff_pi_v_pt.max()
+            vmin = diff_pi_v_pt.min()
+
+            #compute RMSE
+            rmse_v = np.sqrt(np.mean(diff_pi_v_pt**2))
+
+            cf = axs2[1, 2].tricontourf(points[:, 0], points[:, 1], triangles, diff_pi_v_pt, 
+                                       levels=levels_diff_v, cmap=plt.cm.RdBu_r, vmin=diff_v_min, vmax=diff_v_max)
+            axs2[1, 2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
+            axs2[1, 2].set_title('PI-SWE-DeepONet - SRH-2D: $\\Delta v$', fontsize=20)
+            axs2[1, 2].set_xticks([])
+            axs2[1, 2].set_yticks([])
+            axs2[1, 2].tick_params(axis='both', which='major', labelsize=22)
+            axs2[1, 2].set_aspect('equal')
+            axs2[1, 2].set_xlim([xl, xh])
+            axs2[1, 2].set_ylim([yl, yh])
+            axs2[1, 2].text(0.38, 0.9, f'RMSE: {rmse_v:.2f} m/s\nMin: {vmin:.2f} m/s\nMax: {vmax:.2f} m/s', fontsize=22, transform=axs2[1, 2].transAxes, verticalalignment='top', horizontalalignment='left')
+            cbar = plt.colorbar(cf, ax=axs2[1, 2], fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=22)
+            cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.2f'))
+            cbar.ax.text(0.55, 1.05, '(m/s)', fontsize=22, transform=cbar.ax.transAxes, horizontalalignment='left', verticalalignment='bottom')
+        
+        plt.tight_layout()
+        #increase the column spacing 
+        plt.subplots_adjust(wspace=0.3)
+        plt.savefig(f'compare_application_case_diff_{application_case_index}.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
+        plt.close()
+    
+
+if __name__ == "__main__":
+
+    # Application case indices: 1 (average distance), 70 (minimum distance), 73 (maximum distance)
+    #application_case_indices = [1, 70, 73]
+    application_case_indices = [1]
+
+    # Application case result directories
+    deeponet_result_dir = '../../DeepONet/application/diff_vtks'
+    pi_deeponet_result_dir = '../../PI_DeepONet_1/application/diff_vtks'
+    
+
+    plot_compare_application_case_results(application_case_indices, deeponet_result_dir, pi_deeponet_result_dir)
+
+    print("Plotting comparison of application case results completed.")

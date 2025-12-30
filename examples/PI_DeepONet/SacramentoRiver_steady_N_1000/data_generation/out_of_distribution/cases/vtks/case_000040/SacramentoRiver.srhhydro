@@ -1,0 +1,31 @@
+SRHHYDRO 30
+Case "SacramentoRiver"
+Description "Description"
+RunType FLOW
+ModelTemp OFF
+UnsteadyOutput STEADY
+SimTime 0.0 5.0 100.0
+TurbulenceModel PARABOLIC
+ParabolicTurbulence 0.7
+InitCondOption DRY
+Grid "SacramentoRiver.srhgeom"
+HydroMat "SacramentoRiver.srhmat"
+MonitorPtFile "SacramentoRiver.srhmpoint"
+OutputFormat XMDFC SI
+OutputOption 1
+OutputInterval 10.0
+ManningsN 0 0.02
+ManningsN 1 0.06
+ManningsN 2 0.1
+ManningsN 3 0.05
+ManningsN 4 0.07
+ManningsN 5 0.03
+BC 1 MONITORING
+BC 2 INLET-Q
+BC 3 INLET-Q
+BC 4 INLET-Q
+BC 5 EXIT-H
+EWSParamsRC 5 "curve_1.xys" SI RC
+IQParams 2 892.0454647110959 SI CONVEYANCE
+IQParams 3 115.58580027364032 SI CONVEYANCE
+IQParams 4 522.9232170365625 SI CONVEYANCE

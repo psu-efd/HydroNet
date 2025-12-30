@@ -32,7 +32,7 @@ def pi_deeponet_train(config):
         config: Configuration object (Config instance)
     
     Returns:
-        tuple: (model, history) - The trained model and training history dictionary
+        tuple: (model, history, history_file_name) - The trained model and training history dictionary and the file name of the history file
     """    
 
     # Check if config is an instance of Config
@@ -72,6 +72,35 @@ def pi_deeponet_train(config):
         # Monitor memory after dataset loading
         print_gpu_memory("GPU memory after dataset loading")
         
+        # Optionally limit the number of training cases if the optimizer type is LBFGS (useful for LBFGS to reduce memory)
+        # Store reference to original dataset for accessing methods like get_deeponet_stats()
+        original_train_dataset = train_dataset
+
+        max_training_cases = None
+        optimizer_type = config.get('training.optimizer.optimizer_type', None)
+        if optimizer_type is not None and optimizer_type == "LBFGS":
+            lbfgs_options = config.get('training.optimizer.LBFGS_options', {})
+            if lbfgs_options is not None:
+                max_training_cases = lbfgs_options.get('max_training_cases')
+
+        original_dataset_size = len(train_dataset)
+
+        if max_training_cases is not None and max_training_cases < original_dataset_size and max_training_cases > 0 and optimizer_type is not None and optimizer_type == "LBFGS":
+            from torch.utils.data import Subset
+            import random
+            # Create a random subset of cases
+            indices = list(range(original_dataset_size))
+            random.seed(42)  # For reproducibility
+            random.shuffle(indices)
+            subset_indices = indices[:max_training_cases]
+            #debug: print the subset indices
+            print(f"Subset indices: {subset_indices}")
+
+            train_dataset = Subset(train_dataset, subset_indices)
+            print(f"Using subset of {max_training_cases} training cases (out of {original_dataset_size} total)")
+        else:
+            print(f"Using all {original_dataset_size} training cases")
+        
         # Create dataloaders
         # Note: On Windows, num_workers > 0 and pin_memory=True can cause issues with buffer variables
         # Adjust these settings based on your platform and needs        
@@ -91,15 +120,15 @@ def pi_deeponet_train(config):
             pin_memory=config.get('training.pin_memory', False)
         )
 
-        # Get the deeponet points stats
-        deeponet_points_stats = train_dataset.get_deeponet_stats()
+        # Get the deeponet points stats from the original dataset (not the Subset wrapper)
+        deeponet_points_stats = original_train_dataset.get_deeponet_stats()
         
         # Initialize model 
         print("Initializing model...")
         model = PI_SWE_DeepONetModel(config)        
 
-        # Check whether the model and data are compatible
-        model.check_model_input_output_dimensions(train_dataset.branch_dim, train_dataset.trunk_dim, train_dataset.output_dim)
+        # Check whether the model and data are compatible (use original dataset for attributes)
+        model.check_model_input_output_dimensions(original_train_dataset.branch_dim, original_train_dataset.trunk_dim, original_train_dataset.output_dim)
         
         # Initialize trainer
         trainer = PI_SWE_DeepONetTrainer(
@@ -130,16 +159,17 @@ def pi_deeponet_train(config):
         history = trainer.train(
             train_loader=train_loader,
             val_loader=val_loader,
-            physics_dataset=train_dataset.physics_dataset
+            physics_dataset=original_train_dataset.physics_dataset
         )
 
         # Save the history to a json file with a time stamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(f'history_{timestamp}.json', 'w') as f:
+        history_file_name = f'history_{timestamp}.json'
+        with open(history_file_name, 'w') as f:
             json.dump(history, f, indent=4)
-        print(f"History saved to history_{timestamp}.json")
+        print(f"History saved to {history_file_name}")
         
-        return model, history
+        return model, history, history_file_name
         
     except RuntimeError as e:
         if "out of memory" in str(e):
@@ -202,7 +232,7 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     print("Starting PI-DeepONet test...")
     print("================================================")
     print("Best model path: ", best_model_path)
-    print("Test dataset path: ", config.get('data.deeponet.test_data_path'))
+    print("Test dataset path: ", config.get_required_config('data.deeponet.test_data_path'))
     print("Number of cells: ", nCells)
     print("================================================")
     print("\n")
@@ -211,18 +241,21 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
 
     # First, peek at the test dataset to get input dimensions
     print("Determining input dimensions from test data...")
-    test_data_path = config.get('data.deeponet.test_data_path')
+    test_data_path = config.get_required_config('data.deeponet.test_data_path')
 
     try:
         test_dataset = PI_SWE_DeepONetDataset(
             data_path=test_data_path,
             config=config)            
 
-        # Get a sample to determine dimensions
-        sample_branch, sample_trunk, sample_output = test_dataset[0]
-        branch_dim = sample_branch.shape[0]
-        trunk_dim = sample_trunk.shape[0]
-        output_dim = sample_output.shape[0]
+        # Get dimensions from dataset (already computed correctly)
+        # For case-based batching:
+        # - branch_input: (n_features,) -> branch_dim = n_features
+        # - trunk_input: (nCells, n_coords) -> trunk_dim = n_coords
+        # - output: (nCells, n_outputs) -> output_dim = n_outputs
+        branch_dim = test_dataset.branch_dim
+        trunk_dim = test_dataset.trunk_dim
+        output_dim = test_dataset.output_dim
         print(f"Detected branch_dim={branch_dim}, trunk_dim={trunk_dim}, output_dim={output_dim}")
     except (IndexError, FileNotFoundError) as e:
         # Default to dimensions from training (assuming 10 for branch and 3 for trunk)
@@ -277,23 +310,40 @@ def pi_deeponet_test(best_model_path, config, case_indices=None, num_samples_to_
     with torch.no_grad():  # Disable gradient calculation for inference
         for branch_input, trunk_input, target in test_loader:
             # Move data to device
+            # branch_input: (batch_size_cases, n_features)
+            # trunk_input: (batch_size_cases, nCells, n_coords)
+            # target: (batch_size_cases, nCells, n_outputs)
             branch_input = branch_input.to(trainer.device)
             trunk_input = trunk_input.to(trainer.device)
             target = target.to(trainer.device)
             
+            # Get batch dimensions
+            batch_size_cases = branch_input.shape[0]
+            nCells = trunk_input.shape[1]
+            
+            # Reshape inputs to match model expectations (point-based batching)
+            # Expand branch_input: (batch_size_cases, n_features) -> (batch_size_cases * nCells, n_features)
+            branch_input_expanded = branch_input.repeat_interleave(nCells, dim=0)  # (batch_size_cases * nCells, n_features)
+            
+            # Expand trunk_input: (batch_size_cases, nCells, n_coords) -> (batch_size_cases * nCells, n_coords)
+            trunk_input_expanded = trunk_input.view(-1, trunk_input.shape[-1])  # (batch_size_cases * nCells, n_coords)
+            
+            # Flatten target: (batch_size_cases, nCells, n_outputs) -> (batch_size_cases * nCells, n_outputs)
+            target_flattened = target.view(-1, target.shape[-1])  # (batch_size_cases * nCells, n_outputs)
+            
             # Forward pass
-            output = model(branch_input, trunk_input, all_DeepONet_stats)
+            output = model(branch_input_expanded, trunk_input_expanded, all_DeepONet_stats)
             
             # Calculate loss
-            loss = trainer.loss_fn(output, target)
+            loss = trainer.loss_fn(output, target_flattened)
             total_loss += loss.item()
 
             # Store predictions and targets for analysis    
             all_predictions.append(output.cpu().numpy())
-            all_targets.append(target.cpu().numpy())
+            all_targets.append(target_flattened.cpu().numpy())
             
-            # Count samples
-            sample_count += len(branch_input)
+            # Count samples (number of points, not cases)
+            sample_count += len(branch_input_expanded)
 
     # Calculate average test loss
     avg_test_loss = np.sqrt(total_loss / len(test_loader))
@@ -851,25 +901,15 @@ def pi_deeponet_application_create_model_application_dataset(config):
         print(f"Number of features is {n_features}")
         raise ValueError("Number of features is less than 1")    
     
-    # Create branch inputs: for each case, tile the parameters for all cells
-    branch_inputs_list = []
-    trunk_inputs_list = []
+    # Create branch inputs and trunk inputs for case-based batching
+    # branch_inputs: (n_cases, n_features) - one per case, no repetition
+    branch_inputs = application_parameters.astype(np.float32)  # (n_cases, n_features)
     
-    for case_idx in range(n_cases):
-        # Tile the parameters for this case to match the number of cells
-        case_branch_inputs = np.tile(application_parameters[case_idx, :], (n_cells, 1))
-        branch_inputs_list.append(case_branch_inputs)
-        
-        # Trunk inputs are the same for all cases (cell centers)
-        case_trunk_inputs = cell_centers[:, :2]  # Only need x, y coordinates for steady case. For unsteady case, we need to add the time variable.
-        trunk_inputs_list.append(case_trunk_inputs)
-    
-    # Concatenate all cases
-    branch_inputs = np.concatenate(branch_inputs_list, axis=0).astype(np.float32)
-    trunk_inputs = np.concatenate(trunk_inputs_list, axis=0).astype(np.float32)
+    # trunk_inputs: (n_cells, n_coords) - same for all cases (cell centers)
+    trunk_inputs = cell_centers[:, :2].astype(np.float32)  # Only need x, y coordinates for steady case. For unsteady case, we need to add the time variable.
 
-    #print first 5 rows of branch inputs and trunk inputs
-    print(f"First 5 rows of branch inputs (dimensional): {branch_inputs[:5]}")
+    #print first few rows of branch inputs and trunk inputs
+    print(f"First 3 cases of branch inputs (dimensional): {branch_inputs[:3]}")
     print(f"First 5 rows of trunk inputs (dimensional): {trunk_inputs[:5]}")
     
     # Load normalization stats from the training data
@@ -913,9 +953,9 @@ def pi_deeponet_application_create_model_application_dataset(config):
     os.makedirs(application_data_dir, exist_ok=True)
     
     # Create dummy outputs (zeros) since we don't have ground truth for application
-    # The shape should match: (n_cases * n_cells, n_outputs) where n_outputs = 3 (h, u, v)
+    # The shape should match: (n_cases, n_cells, n_outputs) where n_outputs = 3 (h, u, v)
     n_outputs = config['model']['output_dim']
-    outputs = np.zeros((n_cases * n_cells, n_outputs), dtype=np.float32)
+    outputs = np.zeros((n_cases, n_cells, n_outputs), dtype=np.float32)
     
     # Save to HDF5 file
     h5_file_path = os.path.join(application_data_dir, 'data.h5')
@@ -955,9 +995,9 @@ def pi_deeponet_application_create_model_application_dataset(config):
             print(f"Outputs shape: {outputs.shape}")
 
             #print the statistics of the application data
-            print(f"Branch inputs statistics: {np.mean(branch_inputs, axis=0)}")
-            print(f"Trunk inputs statistics: {np.mean(trunk_inputs, axis=0)}")
-            print(f"Outputs statistics: {np.mean(outputs, axis=0)}")
+            print(f"Branch inputs mean: {np.mean(branch_inputs, axis=0)}")
+            print(f"Trunk inputs mean: {np.mean(trunk_inputs, axis=0)}")
+            print(f"Outputs mean: {np.mean(outputs, axis=0)}")
             print(f"Branch inputs std: {np.std(branch_inputs, axis=0)}")
             print(f"Trunk inputs std: {np.std(trunk_inputs, axis=0)}")
             print(f"Outputs std: {np.std(outputs, axis=0)}")
@@ -970,8 +1010,6 @@ def pi_deeponet_application_create_model_application_dataset(config):
             print(f"Trunk inputs (first 5 rows): {trunk_inputs[:5]}")
             print(f"Outputs (first 5 rows): {outputs[:5]}")
             print(f"Outputs (last 5 rows): {outputs[-5:]}")
-    
-    
     
     return dataset, application_parameters
 
@@ -1151,10 +1189,14 @@ def pi_deeponet_application_run_model_application(config):
     dataset, application_parameters = pi_deeponet_application_create_model_application_dataset(config)    
 
     # Get a sample to determine dimensions
+    # For case-based batching:
+    # - sample_branch: (n_features,) -> branch_dim = shape[0]
+    # - sample_trunk: (nCells, n_coords) -> trunk_dim = shape[1] (not shape[0]!)
+    # - sample_output: (nCells, n_outputs) -> output_dim = shape[1] (not shape[0]!)
     sample_branch, sample_trunk, sample_output = dataset[0]
     branch_dim = sample_branch.shape[0]
-    trunk_dim = sample_trunk.shape[0]
-    output_dim = sample_output.shape[0]
+    trunk_dim = sample_trunk.shape[1]  # n_coords, not nCells
+    output_dim = sample_output.shape[1]  # n_outputs, not nCells
     print(f"Detected branch_dim={branch_dim}, trunk_dim={trunk_dim}, output_dim={output_dim}")
 
     # Create model
@@ -1203,18 +1245,31 @@ def pi_deeponet_application_run_model_application(config):
     with torch.no_grad():  # Disable gradient calculation for inference
         for branch_input, trunk_input, target in test_loader:
             # Move data to device
+            # branch_input: (batch_size_cases, n_features)
+            # trunk_input: (batch_size_cases, nCells, n_coords)
             branch_input = branch_input.to(trainer.device)
             trunk_input = trunk_input.to(trainer.device)
             target = target.to(trainer.device)
             
+            # Get batch dimensions
+            batch_size_cases = branch_input.shape[0]
+            nCells = trunk_input.shape[1]
+            
+            # Reshape inputs to match model expectations (point-based batching)
+            # Expand branch_input: (batch_size_cases, n_features) -> (batch_size_cases * nCells, n_features)
+            branch_input_expanded = branch_input.repeat_interleave(nCells, dim=0)  # (batch_size_cases * nCells, n_features)
+            
+            # Expand trunk_input: (batch_size_cases, nCells, n_coords) -> (batch_size_cases * nCells, n_coords)
+            trunk_input_expanded = trunk_input.view(-1, trunk_input.shape[-1])  # (batch_size_cases * nCells, n_coords)
+            
             # Forward pass
-            output = model(branch_input, trunk_input, all_DeepONet_stats)           
+            output = model(branch_input_expanded, trunk_input_expanded, all_DeepONet_stats)           
             
             # Store predictions 
             all_predictions.append(output.cpu().numpy())
             
-            # Count samples
-            sample_count += len(branch_input)
+            # Count samples (number of points, not cases)
+            sample_count += len(branch_input_expanded)
 
     # Concatenate all predictions
     all_predictions = np.vstack(all_predictions)

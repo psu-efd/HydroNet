@@ -1,0 +1,17 @@
+{
+    "2": {
+        "distribution": "uniform",
+        "min": 650.0,
+        "max": 1000.0
+    },
+    "3": {
+        "distribution": "uniform",
+        "min": 80,
+        "max": 120
+    },
+    "4": {
+        "distribution": "uniform",
+        "min": 400,
+        "max": 800
+    }
+}

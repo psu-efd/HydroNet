@@ -24,9 +24,13 @@ class PI_SWE_DeepONetDataset(Dataset):
     The DeepONet data is expected to be normalized already.
     
     The DeepONet data file is expected to be called "data.h5" and to be in the following format:
-    - branch_inputs: Input functions for the branch net.
-    - trunk_inputs: Coordinates for the trunk net.
-    - outputs: Corresponding output values.
+    - branch_inputs: Input functions for the branch net, with shape: (nCases, n_features)
+    - trunk_inputs: Coordinates for the trunk net, with shape: (nCells, n_coords)
+    - outputs: Corresponding output values, with shape: (nCases, nCells, n_outputs)
+
+    Batching is done by case-based mini-batching, i.e., each batch contains a subset of cases from the dataset.
+    The trunk input is the same for all cases in the batch, i.e., the mesh is the same for all cases in the batch.
+    The output is the corresponding output values for the cases in the batch.
     """
     
     def __init__(self, data_path, config):
@@ -101,7 +105,7 @@ class PI_SWE_DeepONetDataset(Dataset):
                 
                 # Load output values (h, u, v) - shape: (nCases, nCells, n_outputs)
                 self.outputs = f['outputs'][:].astype(np.float64)
-                self.output_dim = self.outputs.shape[2]  # Changed from shape[1] to shape[2] for 3D array
+                self.output_dim = self.outputs.shape[2]  
             
             print("branch_inputs.shape: ", self.branch_inputs.shape)
             print("trunk_inputs.shape: ", self.trunk_inputs.shape)
