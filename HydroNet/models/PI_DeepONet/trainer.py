@@ -622,7 +622,8 @@ class PI_SWE_DeepONetTrainer:
             'total_loss': 0.0
         }
         
-        for batch in tqdm(train_loader, desc="Training", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
+        #for batch in tqdm(train_loader, desc="Training", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
+        for batch in tqdm(train_loader, desc="Training", leave=False):
             
             # Get batch data (batching over cases)
             # branch_input: (batch_size_cases, n_features)
@@ -1034,7 +1035,8 @@ class PI_SWE_DeepONetTrainer:
         # Note: We don't use torch.no_grad() here because PDE residual computation
         # requires gradients even during validation. We're still in eval() mode and
         # won't update parameters since we don't call backward() or optimizer.step()
-        for batch in tqdm(val_loader, desc="Validating", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
+        #for batch in tqdm(val_loader, desc="Validating", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
+        for batch in tqdm(val_loader, desc="Validating", leave=False):
                 # Get batch data (batching over cases)
                 branch_input, trunk_input, target = batch
                 branch_input = branch_input.to(self.device)  # (batch_size_cases, n_features)
