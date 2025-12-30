@@ -80,6 +80,11 @@ training:
     adaptive_balancing_frequency: 10  # Update weights every N epochs throughout training (recommended: 10)
     # If adaptive_balancing_frequency is not specified, uses old behavior:
     # adaptive_balancing_epochs: 10  # Only update weights during first N epochs (deprecated, use frequency instead)
+
+    # Ramping of the pde loss weights: ramping up the pde loss weights from 0 to 1 over the first N epochs linearly
+    ramping_pde_loss_weights:
+      use_ramping: true
+      ramping_epochs: 10
     
     # Base loss weights (before adaptive balancing)
     # Note: If adaptive balancing is enabled, these are starting weights that will be adjusted

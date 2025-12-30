@@ -76,7 +76,7 @@ if __name__ == "__main__":
     pi_deeponet_plot_training_history(history_file_name)
 
     # Test the model with the best model and save the test results to vtk files
-    pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
+    #pi_deeponet_test('./checkpoints/pi_deeponet_epoch_best.pt', config)
     
     # Calculate and print the total execution time
     main_execution_time = time.time() - main_start_time
