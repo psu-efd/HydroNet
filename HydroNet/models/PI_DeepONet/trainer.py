@@ -282,6 +282,12 @@ class PI_SWE_DeepONetTrainer:
             pde_points_data = physics_dataset.get_pde_points()
             if pde_points_data is not None:
                 pde_points, pde_data = pde_points_data
+                # Validate that pde_points and pde_data have the same length
+                if len(pde_points) != len(pde_data):
+                    raise ValueError(
+                        f"pde_points and pde_data must have the same length. "
+                        f"Got len(pde_points)={len(pde_points)}, len(pde_data)={len(pde_data)}"
+                    )
                 pde_points = pde_points.to(self.device)
                 pde_data = pde_data.to(self.device)
             else:

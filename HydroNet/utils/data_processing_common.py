@@ -1427,6 +1427,8 @@ def convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_points_stats_dic
 
     #added the PINN_normalization_specs to the all_points_stats_dict; also add the all_PINN_data_stats_dict to the all_points_stats_dict
     all_PINN_stats_dict = {
+        "n_PDE_points": n_spatial_points,
+        "n_boundary_points": n_boundary_spatial,
         "PINN_normalization_specs": PINN_normalization_specs,
         "all_points_stats": all_points_stats_dict,
         "all_data_stats": all_PINN_data_stats_dict

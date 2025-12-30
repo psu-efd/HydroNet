@@ -123,7 +123,7 @@ if __name__ == "__main__":
     all_DeepONet_stats = json.load(open('data/DeepONet/all_DeepONet_stats.json', 'r'))
 
     #convert the SRH-2D mesh points to PINN points: result files are saved in the `data/PINN` directory
-    convert_mesh_points_for_PINN(postprocessing_specs, all_DeepONet_stats['all_points_stats'], all_DeepONet_stats['all_data_stats'], n_PDE_points_downsample=10)
+    convert_mesh_points_for_PINN(postprocessing_specs, all_DeepONet_stats['all_points_stats'], all_DeepONet_stats['all_data_stats'], n_PDE_points_downsample=0)
 
     #plot some results for visual checking
     #print("Plotting the results for DeepONet ...")

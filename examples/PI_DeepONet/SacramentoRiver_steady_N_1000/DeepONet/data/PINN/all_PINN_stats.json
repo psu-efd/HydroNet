@@ -1,4 +1,6 @@
 {
+    "n_PDE_points": 5036,
+    "n_boundary_points": 726,
     "PINN_normalization_specs": {
         "x": "min-max",
         "y": "min-max",
