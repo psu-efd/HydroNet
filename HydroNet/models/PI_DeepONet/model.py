@@ -63,7 +63,11 @@ class BranchNet(nn.Module):
                 )
             )
 
-        layers.append(nn.Linear(layer_dims[-1], out_dim))
+        # Add final layer with Xavier initialization (same as FCLayer)
+        final_layer = nn.Linear(layer_dims[-1], out_dim)
+        nn.init.xavier_normal_(final_layer.weight)
+        nn.init.zeros_(final_layer.bias)
+        layers.append(final_layer)
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -95,7 +99,11 @@ class TrunkNet(nn.Module):
                 )
             )
 
-        layers.append(nn.Linear(layer_dims[-1], out_dim))
+        # Add final layer with Xavier initialization (same as FCLayer)
+        final_layer = nn.Linear(layer_dims[-1], out_dim)
+        nn.init.xavier_normal_(final_layer.weight)
+        nn.init.zeros_(final_layer.bias)
+        layers.append(final_layer)
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -178,6 +186,10 @@ class PI_SWE_DeepONetModel(nn.Module):
             trunk_activation,
             trunk_dropout,
         )
+
+        # Check if hidden_dim is divisible by output_dim
+        if self.hidden_dim % self.output_dim != 0:
+            raise ValueError(f"hidden_dim {self.hidden_dim} must be divisible by output_dim {self.output_dim}")
 
         self.bias = nn.Parameter(torch.zeros(self.output_dim))
 
@@ -395,11 +407,24 @@ class PI_SWE_DeepONetModel(nn.Module):
 
         branch_output = self.branch_net(branch_input)
         trunk_output = self.trunk_net(trunk_input)
+        
+        # Debug: Check shapes
+        if branch_output.shape != trunk_output.shape:
+            raise ValueError(
+                f"Branch and trunk outputs must have the same shape. "
+                f"Got branch_output.shape={branch_output.shape}, trunk_output.shape={trunk_output.shape}. "
+                f"branch_input.shape={branch_input.shape}, trunk_input.shape={trunk_input.shape}"
+            )
 
         outputs = []
         for i in range(self.output_dim):
             branch_i = branch_output[:, i :: self.output_dim]
             trunk_i = trunk_output[:, i :: self.output_dim]
+            if branch_i.shape != trunk_i.shape:
+                raise ValueError(
+                    f"After slicing, branch_i.shape={branch_i.shape} != trunk_i.shape={trunk_i.shape}. "
+                    f"i={i}, output_dim={self.output_dim}, branch_output.shape={branch_output.shape}, trunk_output.shape={trunk_output.shape}"
+                )
             output_i = torch.sum(branch_i * trunk_i, dim=1, keepdim=True) + self.bias[i]
             outputs.append(output_i)
 
@@ -850,7 +875,7 @@ class PI_SWE_DeepONetModel(nn.Module):
 
         Returns:
             tuple: (total_loss, loss_components)
-        """        
+        """
         
         # Initialize losses with requires_grad=True
         # Initialize loss for DeepONet
@@ -877,26 +902,26 @@ class PI_SWE_DeepONetModel(nn.Module):
             loss_components['deeponet_data_loss'] = deeponet_data_loss.item()
             
 
-        # Check if physics-informed loss is enabled and all required inputs are provided
-        # If not, raise an error.
+        # Compute PINN PDE loss if physics-informed loss is enabled and all required inputs are provided
+        # If physics loss is enabled but inputs are missing (e.g., no PDE points configured), skip physics loss
         if self.use_physics_loss:
-            if physics_branch_input is None or physics_trunk_input is None or pde_data is None or all_pinn_points_stats is None or all_deeponet_points_stats is None:
-                raise ValueError("Physics-informed loss is enabled but required physics inputs or statistics are missing.")
+            if physics_branch_input is not None and physics_trunk_input is not None and pde_data is not None and all_pinn_points_stats is not None and all_deeponet_points_stats is not None:
+                pinn_pde_loss, pinn_pde_loss_components, _, _, _ = self.compute_pde_loss(
+                    physics_branch_input, physics_trunk_input, pde_data, all_deeponet_points_stats, all_pinn_points_stats
+                )
 
-        # Compute PINN PDE loss if physics-informed loss is enabled
-        if self.use_physics_loss:
-            pinn_pde_loss, pinn_pde_loss_components, _, _, _ = self.compute_pde_loss(
-                physics_branch_input, physics_trunk_input, pde_data, all_deeponet_points_stats, all_pinn_points_stats
-            )
-
-            loss_components['pinn_pde_loss'] = pinn_pde_loss.item()
-            loss_components['pinn_pde_loss_cty'] = pinn_pde_loss_components['continuity_loss']
-            loss_components['pinn_pde_loss_mom_x'] = pinn_pde_loss_components['momentum_x_loss']
-            loss_components['pinn_pde_loss_mom_y'] = pinn_pde_loss_components['momentum_y_loss']        
+                loss_components['pinn_pde_loss'] = pinn_pde_loss.item()
+                loss_components['pinn_pde_loss_cty'] = pinn_pde_loss_components['continuity_loss']
+                loss_components['pinn_pde_loss_mom_x'] = pinn_pde_loss_components['momentum_x_loss']
+                loss_components['pinn_pde_loss_mom_y'] = pinn_pde_loss_components['momentum_y_loss']
+            else:
+                # Physics loss is enabled but inputs are missing - skip physics loss
+                # This can happen if PDE points are not configured for the problem
+                pinn_pde_loss = torch.zeros(1, device=self.device, requires_grad=True)        
             
         # Compute total loss
         total_loss = self.loss_weights['deeponet_data_loss'] * deeponet_data_loss
-        if self.use_physics_loss:
+        if self.use_physics_loss and physics_branch_input is not None and physics_trunk_input is not None and pde_data is not None:
             total_loss = total_loss + self.loss_weights['deeponet_pinn_loss'] * pinn_pde_loss
 
         # Update loss components with total loss

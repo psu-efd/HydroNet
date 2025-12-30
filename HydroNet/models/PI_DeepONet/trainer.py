@@ -2,6 +2,7 @@
 Training utilities for Physics-Informed SWE_DeepONet models.
 """
 import os
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -79,15 +80,43 @@ class PI_SWE_DeepONetTrainer:
             print(f"Using LBFGS optimizer (full-batch optimizer)")
             print(f"Warning: LBFGS does not support weight_decay. Weight decay will be ignored.")
             print(f"Note: LBFGS requires full-batch training. All batches will be concatenated into a single batch per epoch.")
+            
+            # Read LBFGS options from config
+            lbfgs_options = self.config.get('training.optimizer.LBFGS_options', {})
+            max_iter = int(lbfgs_options.get('max_iter', 20))
+            max_eval = lbfgs_options.get('max_eval', None)
+            if max_eval is not None:
+                max_eval = int(max_eval)
+            tolerance_grad = float(lbfgs_options.get('tolerance_grad', 1e-07))
+            tolerance_change = float(lbfgs_options.get('tolerance_change', 1e-09))
+            history_size = int(lbfgs_options.get('history_size', 100))
+            line_search_fn = lbfgs_options.get('line_search_fn', None)
+            # Convert string "null" or "None" to Python None
+            if line_search_fn in [None, "null", "None", ""]:
+                line_search_fn = None
+            elif line_search_fn == "strong_wolfe":
+                line_search_fn = "strong_wolfe"
+            else:
+                raise ValueError(f"Invalid line_search_fn: {line_search_fn}. Must be 'strong_wolfe' or null")
+            
+            # Store tolerance values and options for debugging
+            self.lbfgs_tolerance_grad = tolerance_grad
+            self.lbfgs_tolerance_change = tolerance_change
+            self.lbfgs_max_iter = max_iter
+            self.lbfgs_history_size = history_size
+            self.lbfgs_line_search_fn = line_search_fn
+            
+            print(f"LBFGS options: history_size={history_size}, max_iter={max_iter}, max_eval={max_eval}")
+            
             self.optimizer = optim.LBFGS(
                 self.model.parameters(),
                 lr=self.learning_rate,
-                max_iter=20,  # Maximum number of iterations per optimization step
-                max_eval=None,  # Maximum number of function evaluations per optimization step
-                tolerance_grad=1e-07,  # Termination tolerance on first order optimality
-                tolerance_change=1e-09,  # Termination tolerance on function value/parameter changes
-                history_size=100,  # Update history size
-                line_search_fn=None  # Either 'strong_wolfe' or None
+                max_iter=max_iter,
+                max_eval=max_eval,
+                tolerance_grad=tolerance_grad,
+                tolerance_change=tolerance_change,
+                history_size=history_size,
+                line_search_fn=line_search_fn
             )
         else:
             raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
@@ -232,9 +261,9 @@ class PI_SWE_DeepONetTrainer:
         """
             
         # Get branch input dimension from data if needed
-        batch = next(iter(train_loader))
-        branch_input = batch[0]
-        branch_dim = branch_input.shape[1]
+        batch = next(iter(train_loader))  #branch_input(batch_size, n_features), trunk_input(nCells, n_coords), output(batch_size, nCells, n_outputs)
+        branch_input = batch[0]   #branch_input(batch_size, n_features)
+        branch_dim = branch_input.shape[1]  #branch_dim = n_features
 
         if self.model.branch_input_dim == 0:            
             self.model.set_branch_input_dim(branch_dim)
@@ -292,12 +321,17 @@ class PI_SWE_DeepONetTrainer:
             all_pinn_points_stats = None
         
         # Get DeepONet stats 
-        all_deeponet_points_stats = train_loader.dataset.get_deeponet_stats()
+        # Handle case where dataset might be a Subset wrapper
+        train_dataset = train_loader.dataset
+        if hasattr(train_dataset, 'dataset'):
+            # It's a Subset, get the underlying dataset
+            train_dataset = train_dataset.dataset
+        all_deeponet_points_stats = train_dataset.get_deeponet_stats()
 
         if all_deeponet_points_stats is None:
             raise ValueError("train_loader.dataset must provide DeepONet point statistics.")
 
-        if self.model.use_physics_loss:           
+        if self.model.use_physics_loss:
             if all_pinn_points_stats is None:
                 raise ValueError("physics_dataset must provide PINN point statistics when physics loss is enabled.")
         
@@ -588,45 +622,73 @@ class PI_SWE_DeepONetTrainer:
             'total_loss': 0.0
         }
         
-        for batch in tqdm(train_loader, desc="Training", leave=False):
+        for batch in tqdm(train_loader, desc="Training", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
             
-            # Get batch data
+            # Get batch data (batching over cases)
+            # branch_input: (batch_size_cases, n_features)
+            # trunk_input: (batch_size_cases, nCells, n_coords) - DataLoader stacks the same trunk_input for each case
+            # target: (batch_size_cases, nCells, n_outputs)
             branch_input, trunk_input, target = batch
-            branch_input = branch_input.to(self.device)
-            trunk_input = trunk_input.to(self.device)
-            target = target.to(self.device)
+            branch_input = branch_input.to(self.device)  # (batch_size_cases, n_features)
+            trunk_input = trunk_input.to(self.device)  # (batch_size_cases, nCells, n_coords)
+            target = target.to(self.device)  # (batch_size_cases, nCells, n_outputs)
             
-            # Get the batch size for this batch
-            batch_size = branch_input.shape[0]
+            # Get the batch size for this batch (number of cases)
+            batch_size_cases = branch_input.shape[0]
+            nCells = trunk_input.shape[1]  # Number of cells (same for all cases)
             
-            # Randomly sample PINN mesh points for PINN physics (PDEs: SWEs) constraints
+            # Reshape inputs to match model expectations (point-based batching)
+            # Expand branch_input: (batch_size_cases, n_features) -> (batch_size_cases * nCells, n_features)
+            # Repeat each case's branch_input nCells times
+            branch_input_expanded = branch_input.repeat_interleave(nCells, dim=0)  # (batch_size_cases * nCells, n_features)
+            
+            # Expand trunk_input: (batch_size_cases, nCells, n_coords) -> (batch_size_cases * nCells, n_coords)
+            trunk_input_expanded = trunk_input.view(-1, trunk_input.shape[-1])  # (batch_size_cases * nCells, n_coords)
+            
+            # Flatten target: (batch_size_cases, nCells, n_outputs) -> (batch_size_cases * nCells, n_outputs)
+            target_flattened = target.view(-1, target.shape[-1])  # (batch_size_cases * nCells, n_outputs)
+            
+            # Set PINN mesh points for PINN physics (PDEs: SWEs) constraints
             physics_branch_input = None
             physics_trunk_input = None
             physics_pde_data = None
             
             if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
-                # Sample random PDE points for this batch
-                # Note: Advanced indexing (tensor indices) creates a copy, not a view.
-                # The copy inherits requires_grad from pde_points, but compute_pde_residuals
-                # will clone, detach, and set requires_grad=True anyway, so we don't need to
-                # explicitly set requires_grad here.
-                # Handle case when batch_size > len(pde_points) by repeating indices
-                # Use memory-efficient sampling to avoid creating large intermediate tensors
-                if batch_size > len(pde_points):
-                    # Sample with replacement using randint (memory efficient)
-                    physics_indices = torch.randint(0, len(pde_points), (batch_size,), device=pde_points.device, dtype=torch.long)
-                else:
-                    # Sample without replacement if batch_size <= len(pde_points)
-                    physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:batch_size]
-                physics_trunk_input = pde_points[physics_indices]
-                physics_pde_data = pde_data[physics_indices]
-                physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input, meaning the PDEs have to be satisfied for all the Branch inputs.
+                # For case-based batching, we need to repeat PDE points batch_size_cases times
+                # Each case in the batch needs its own set of PDE points
+                # Sample random PDE points (same number for all cases, but can be different points)
+                n_pde_points_per_case = len(pde_points)  # Use all PDE points
+
+                #print(f"  Training epoch: Using {n_pde_points_per_case} PDE points per case")
+                
+                # Sample PDE points for each case (can use same or different points per case)
+                # For now, use the same set of PDE points for all cases (but repeat for each case)
+                #if n_pde_points_per_case > len(pde_points):
+                    # Sample with replacement if needed
+                #    physics_indices = torch.randint(0, len(pde_points), (n_pde_points_per_case,), device=pde_points.device, dtype=torch.long)
+                #else:
+                # Use all PDE points
+                physics_indices = torch.arange(len(pde_points), device=pde_points.device, dtype=torch.long)[:n_pde_points_per_case]
+                
+                pde_points_sampled = pde_points[physics_indices]  # (n_pde_points_per_case, n_coords)
+                pde_data_sampled = pde_data[physics_indices]  # (n_pde_points_per_case, 4)
+                
+                # Repeat PDE points and data for each case in the batch
+                # Shape: (batch_size_cases, n_pde_points_per_case, ...) -> (batch_size_cases * n_pde_points_per_case, ...)
+                physics_trunk_input = pde_points_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, n_coords)
+                physics_trunk_input = physics_trunk_input.view(-1, physics_trunk_input.shape[-1])  # (batch_size_cases * n_pde_points_per_case, n_coords)
+                
+                physics_pde_data = pde_data_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, 4)
+                physics_pde_data = physics_pde_data.view(-1, physics_pde_data.shape[-1])  # (batch_size_cases * n_pde_points_per_case, 4)
+                
+                # Repeat branch_input for each PDE point (same branch_input for all PDE points of a case)
+                physics_branch_input = branch_input.repeat_interleave(n_pde_points_per_case, dim=0)  # (batch_size_cases * n_pde_points_per_case, n_features)
             
             # Sample initial points if provided
             initial_trunk_input = None
             initial_batch_values = None
             if initial_points is not None and initial_values is not None:
-                initial_indices = torch.randint(0, len(initial_points), (batch_size,))
+                initial_indices = torch.randint(0, len(initial_points), (batch_size_cases,))
                 initial_trunk_input = initial_points[initial_indices]
                 initial_batch_values = initial_values[initial_indices]
                 
@@ -636,7 +698,7 @@ class PI_SWE_DeepONetTrainer:
             boundary_trunk_input = None
             boundary_batch_values = None
             if boundary_points is not None:
-                boundary_indices = torch.randint(0, len(boundary_points), (batch_size,))
+                boundary_indices = torch.randint(0, len(boundary_points), (batch_size_cases,))
                 boundary_trunk_input = boundary_points[boundary_indices]
                 # For now, we assume boundary_values would be provided separately
                 # This can be extended later for more complex boundary conditions
@@ -645,9 +707,9 @@ class PI_SWE_DeepONetTrainer:
             self.optimizer.zero_grad()
 
             total_batch_loss, loss_components = self.model.compute_total_loss(
-                branch_input,
-                trunk_input,
-                target=target,
+                branch_input_expanded,
+                trunk_input_expanded,
+                target=target_flattened,
                 physics_branch_input=physics_branch_input,
                 physics_trunk_input=physics_trunk_input,
                 pde_data=physics_pde_data,                
@@ -710,47 +772,76 @@ class PI_SWE_DeepONetTrainer:
         self.model.train()
         
         # Concatenate all batches into a single full batch for LBFGS
+        # Note: Batches are case-based, so we concatenate cases
         print("  LBFGS: Concatenating all batches into full batch...")
         all_branch_inputs = []
         all_trunk_inputs = []
         all_targets = []
         
         for batch in train_loader:
+            # Get batch data (batching over cases)
+            # branch_input: (batch_size_cases, n_features)
+            # trunk_input: (batch_size_cases, nCells, n_coords)
+            # target: (batch_size_cases, nCells, n_outputs)
             branch_input, trunk_input, target = batch
             all_branch_inputs.append(branch_input)
             all_trunk_inputs.append(trunk_input)
             all_targets.append(target)
         
-        # Concatenate all batches
-        full_branch_input = torch.cat(all_branch_inputs, dim=0).to(self.device)
-        full_trunk_input = torch.cat(all_trunk_inputs, dim=0).to(self.device)
-        full_target = torch.cat(all_targets, dim=0).to(self.device)
+        # Concatenate all batches (case-based)
+        full_branch_input = torch.cat(all_branch_inputs, dim=0).to(self.device)  # (n_all_cases, n_features)
+        full_trunk_input = torch.cat(all_trunk_inputs, dim=0).to(self.device)  # (n_all_cases, nCells, n_coords)
+        full_target = torch.cat(all_targets, dim=0).to(self.device)  # (n_all_cases, nCells, n_outputs)
         
-        full_batch_size = full_branch_input.shape[0]
-        print(f"  LBFGS: Full batch size: {full_batch_size}")
+        n_all_cases = full_branch_input.shape[0]
+        nCells = full_trunk_input.shape[1]
+        print(f"  LBFGS: Full batch - Cases: {n_all_cases}, Cells per case: {nCells}, Total points: {n_all_cases * nCells}")
         
-        # Sample PDE points for the full batch
+        # Reshape inputs to match model expectations (point-based batching)
+        # Expand branch_input: (n_all_cases, n_features) -> (n_all_cases * nCells, n_features)
+        branch_input_expanded = full_branch_input.repeat_interleave(nCells, dim=0)  # (n_all_cases * nCells, n_features)
+        
+        # Expand trunk_input: (n_all_cases, nCells, n_coords) -> (n_all_cases * nCells, n_coords)
+        trunk_input_expanded = full_trunk_input.view(-1, full_trunk_input.shape[-1])  # (n_all_cases * nCells, n_coords)
+        
+        # Flatten target: (n_all_cases, nCells, n_outputs) -> (n_all_cases * nCells, n_outputs)
+        target_flattened = full_target.view(-1, full_target.shape[-1])  # (n_all_cases * nCells, n_outputs)
+        
+        # Set PINN mesh points for PINN physics (PDEs: SWEs) constraints
         physics_branch_input = None
         physics_trunk_input = None
         physics_pde_data = None
         
         if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
-            # Sample PDE points for the full batch
-            if full_batch_size > len(pde_points):
-                # Sample with replacement
-                physics_indices = torch.randint(0, len(pde_points), (full_batch_size,), device=pde_points.device, dtype=torch.long)
-            else:
-                # Sample without replacement
-                physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:full_batch_size]
-            physics_trunk_input = pde_points[physics_indices]
-            physics_pde_data = pde_data[physics_indices]
-            physics_branch_input = full_branch_input
+            # For case-based batching, we need to repeat PDE points n_all_cases times
+            # Each case in the batch needs its own set of PDE points
+            # Use all PDE points for each case
+            n_pde_points_per_case = len(pde_points)  # Use all PDE points
+
+            #print(f"  LBFGS: Using {n_pde_points_per_case} PDE points per case")
+            
+            # Use all PDE points
+            physics_indices = torch.arange(len(pde_points), device=pde_points.device, dtype=torch.long)[:n_pde_points_per_case]
+            
+            pde_points_sampled = pde_points[physics_indices]  # (n_pde_points_per_case, n_coords)
+            pde_data_sampled = pde_data[physics_indices]  # (n_pde_points_per_case, 4)
+            
+            # Repeat PDE points and data for each case in the batch
+            # Shape: (n_all_cases, n_pde_points_per_case, ...) -> (n_all_cases * n_pde_points_per_case, ...)
+            physics_trunk_input = pde_points_sampled.unsqueeze(0).repeat(n_all_cases, 1, 1)  # (n_all_cases, n_pde_points_per_case, n_coords)
+            physics_trunk_input = physics_trunk_input.view(-1, physics_trunk_input.shape[-1])  # (n_all_cases * n_pde_points_per_case, n_coords)
+            
+            physics_pde_data = pde_data_sampled.unsqueeze(0).repeat(n_all_cases, 1, 1)  # (n_all_cases, n_pde_points_per_case, 4)
+            physics_pde_data = physics_pde_data.view(-1, physics_pde_data.shape[-1])  # (n_all_cases * n_pde_points_per_case, 4)
+            
+            # Repeat branch_input for each PDE point (same branch_input for all PDE points of a case)
+            physics_branch_input = full_branch_input.repeat_interleave(n_pde_points_per_case, dim=0)  # (n_all_cases * n_pde_points_per_case, n_features)
         
         # Sample initial points if provided
         initial_trunk_input = None
         initial_batch_values = None
         if initial_points is not None and initial_values is not None:
-            initial_indices = torch.randint(0, len(initial_points), (full_batch_size,))
+            initial_indices = torch.randint(0, len(initial_points), (n_all_cases,), device=initial_points.device)
             initial_trunk_input = initial_points[initial_indices]
             initial_batch_values = initial_values[initial_indices]
         
@@ -758,19 +849,23 @@ class PI_SWE_DeepONetTrainer:
         boundary_trunk_input = None
         boundary_batch_values = None
         if boundary_points is not None:
-            boundary_indices = torch.randint(0, len(boundary_points), (full_batch_size,))
+            boundary_indices = torch.randint(0, len(boundary_points), (n_all_cases,), device=boundary_points.device)
             boundary_trunk_input = boundary_points[boundary_indices]
         
         # LBFGS requires a closure function
+        closure_call_count = [0]  # Use list to allow modification in closure
+        closure_losses = []  # Track losses during LBFGS iterations
+        
         def closure():
+            closure_call_count[0] += 1
             # Zero gradients
             self.optimizer.zero_grad()
             
-            # Compute loss on full batch
+            # Compute loss on full batch (using point-based reshaped inputs)
             loss, loss_components = self.model.compute_total_loss(
-                full_branch_input,
-                full_trunk_input,
-                target=full_target,
+                branch_input_expanded,
+                trunk_input_expanded,
+                target=target_flattened,
                 physics_branch_input=physics_branch_input,
                 physics_trunk_input=physics_trunk_input,
                 pde_data=physics_pde_data,
@@ -778,30 +873,114 @@ class PI_SWE_DeepONetTrainer:
                 all_pinn_points_stats=all_pinn_points_stats
             )
             
+            loss_value = loss.item()
+            closure_losses.append(loss_value)
+            
             # Backward pass
             loss.backward()
             
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            # Debug: Check gradient magnitudes on first call and track loss changes
+            if closure_call_count[0] == 1:
+                total_grad_norm = 0.0
+                max_grad = 0.0
+                for param in self.model.parameters():
+                    if param.grad is not None:
+                        param_grad_norm = param.grad.data.norm(2)
+                        total_grad_norm += param_grad_norm.item() ** 2
+                        max_grad = max(max_grad, param.grad.data.abs().max().item())
+                total_grad_norm = total_grad_norm ** 0.5
+                print(f"    LBFGS closure call {closure_call_count[0]}: loss = {loss_value:.9f}")
+                print(f"    Gradient norm: {total_grad_norm:.6e}, Max gradient: {max_grad:.6e}")
+                print(f"    Tolerance check: grad_norm <= {self.lbfgs_tolerance_grad}? {total_grad_norm <= self.lbfgs_tolerance_grad}")
+                print(f"    Learning rate: {self.learning_rate}")
+            else:
+                # Print loss every call with change from previous
+                prev_loss = closure_losses[-2] if len(closure_losses) > 1 else initial_loss_value
+                loss_delta = loss_value - prev_loss
+                direction = "↑" if loss_delta > 0 else "↓" if loss_delta < 0 else "="
+                print(f"    LBFGS closure call {closure_call_count[0]}: loss = {loss_value:.9f} ({direction} {loss_delta:+.9f})")
             
             return loss
         
         # Single optimizer step for the full batch
         print("  LBFGS: Running optimizer step on full batch...")
+        initial_loss = closure()  # Get initial loss before optimization
+        initial_loss_value = initial_loss.item()
+        print(f"    Initial loss before LBFGS step: {initial_loss_value:.6f}")
+        
+        # Store initial parameter values for comparison
+        initial_params = [p.data.clone() for p in self.model.parameters() if p.requires_grad]
+        
         final_loss = self.optimizer.step(closure)
         
+        print(f"    LBFGS closure called {closure_call_count[0]} times")
+        
+        # Get the actual final loss from the last closure call (more accurate than optimizer.step() return value)
+        actual_final_loss = closure_losses[-1] if closure_losses else initial_loss_value
+        
+        if final_loss is not None:
+            final_loss_value = final_loss.item()
+            loss_change = initial_loss_value - final_loss_value
+            actual_loss_change = initial_loss_value - actual_final_loss
+            
+            # Show loss progression
+            if len(closure_losses) > 1:
+                min_loss = min(closure_losses)
+                max_loss = max(closure_losses)
+                print(f"    Loss during LBFGS: min={min_loss:.9f}, max={max_loss:.9f}, range={max_loss-min_loss:.9f}")
+                print(f"    First 5 losses: {[f'{l:.9f}' for l in closure_losses[:5]]}")
+                if len(closure_losses) > 5:
+                    print(f"    Last 5 losses: {[f'{l:.9f}' for l in closure_losses[-5:]]}")
+            
+            print(f"    Final loss (from optimizer.step): {final_loss_value:.9f}")
+            print(f"    Final loss (from last closure call): {actual_final_loss:.9f}")
+            print(f"    Loss change (optimizer): {loss_change:.9f}")
+            print(f"    Loss change (actual): {actual_loss_change:.9f}")
+            
+            # Check if line search rejected the step
+            if abs(final_loss_value - initial_loss_value) < 1e-8 and abs(actual_final_loss - initial_loss_value) > 1e-6:
+                print(f"    WARNING: Line search may have rejected steps! Final loss reverted to initial.")
+                if hasattr(self, 'lbfgs_line_search_fn') and self.lbfgs_line_search_fn == "strong_wolfe":
+                    print(f"      This suggests 'strong_wolfe' line search is too strict.")
+                    print(f"      Consider: line_search_fn: null (disable line search)")
+                else:
+                    print(f"      LBFGS backtracking line search rejected the step (loss got worse).")
+                    print(f"      Consider: increasing learning rate or relaxing tolerance_change")
+            
+            # Check if parameters actually changed
+            param_changes = []
+            for i, (init_param, curr_param) in enumerate(zip(initial_params, [p.data for p in self.model.parameters() if p.requires_grad])):
+                param_change = (curr_param - init_param).abs().max().item()
+                param_changes.append(param_change)
+            max_param_change = max(param_changes) if param_changes else 0.0
+            print(f"    Max parameter change: {max_param_change:.6e}")
+            
+            if loss_change == 0.0 and max_param_change < 1e-8:
+                print(f"    WARNING: LBFGS made no progress! Consider:")
+                print(f"      - Increasing learning rate (current: {self.learning_rate})")
+                if hasattr(self, 'lbfgs_tolerance_change'):
+                    print(f"      - Relaxing tolerance_change (current: {self.lbfgs_tolerance_change:.2e}, try 1e-07)")
+                if hasattr(self, 'lbfgs_max_iter'):
+                    print(f"      - Increasing max_iter (current: {self.lbfgs_max_iter})")
+                if hasattr(self, 'lbfgs_history_size'):
+                    print(f"      - Increasing history_size (current: {self.lbfgs_history_size})")
+        else:
+            print(f"    Final loss: None (LBFGS may have converged or hit tolerance)")
+        
         # Compute loss components for reporting (run one more forward pass)
-        with torch.no_grad():
-            _, loss_components = self.model.compute_total_loss(
-                full_branch_input,
-                full_trunk_input,
-                target=full_target,
-                physics_branch_input=physics_branch_input,
-                physics_trunk_input=physics_trunk_input,
-                pde_data=physics_pde_data,
-                all_deeponet_points_stats=all_deeponet_points_stats,
-                all_pinn_points_stats=all_pinn_points_stats
-            )
+        # Use the reshaped point-based inputs, not the case-based ones
+        # Note: We don't use torch.no_grad() here because PDE residual computation
+        # requires gradients. We won't call backward() or optimizer.step() after this.
+        _, loss_components = self.model.compute_total_loss(
+            branch_input_expanded,
+            trunk_input_expanded,
+            target=target_flattened,
+            physics_branch_input=physics_branch_input,
+            physics_trunk_input=physics_trunk_input,
+            pde_data=physics_pde_data,
+            all_deeponet_points_stats=all_deeponet_points_stats,
+            all_pinn_points_stats=all_pinn_points_stats
+        )
         
         # Convert loss components to Python floats
         avg_components = {
@@ -855,15 +1034,26 @@ class PI_SWE_DeepONetTrainer:
         # Note: We don't use torch.no_grad() here because PDE residual computation
         # requires gradients even during validation. We're still in eval() mode and
         # won't update parameters since we don't call backward() or optimizer.step()
-        for batch in tqdm(val_loader, desc="Validating", leave=False):
-                # Get batch data
+        for batch in tqdm(val_loader, desc="Validating", leave=False, file=sys.stdout, dynamic_ncols=True, mininterval=0.1, ncols=None):
+                # Get batch data (batching over cases)
                 branch_input, trunk_input, target = batch
-                branch_input = branch_input.to(self.device)
-                trunk_input = trunk_input.to(self.device)
-                target = target.to(self.device)
+                branch_input = branch_input.to(self.device)  # (batch_size_cases, n_features)
+                trunk_input = trunk_input.to(self.device)  # (batch_size_cases, nCells, n_coords)
+                target = target.to(self.device)  # (batch_size_cases, nCells, n_outputs)
                 
-                # Get the batch size for this batch
-                batch_size = branch_input.shape[0]
+                # Get the batch size for this batch (number of cases)
+                batch_size_cases = branch_input.shape[0]
+                nCells = trunk_input.shape[1]  # Number of cells (same for all cases)
+                
+                # Reshape inputs to match model expectations (point-based batching)
+                # Expand branch_input: (batch_size_cases, n_features) -> (batch_size_cases * nCells, n_features)
+                branch_input_expanded = branch_input.repeat_interleave(nCells, dim=0)  # (batch_size_cases * nCells, n_features)
+                
+                # Expand trunk_input: (batch_size_cases, nCells, n_coords) -> (batch_size_cases * nCells, n_coords)
+                trunk_input_expanded = trunk_input.view(-1, trunk_input.shape[-1])  # (batch_size_cases * nCells, n_coords)
+                
+                # Flatten target: (batch_size_cases, nCells, n_outputs) -> (batch_size_cases * nCells, n_outputs)
+                target_flattened = target.view(-1, target.shape[-1])  # (batch_size_cases * nCells, n_outputs)
                 
                 # Randomly sample PINN mesh points for PINN physics (PDEs: SWEs) constraints
                 physics_branch_input = None
@@ -871,26 +1061,32 @@ class PI_SWE_DeepONetTrainer:
                 physics_pde_data = None
                 
                 if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
-                    # Sample random PDE points for this batch
-                    # Handle case when batch_size > len(pde_points) by repeating indices
-                    if batch_size > len(pde_points):
-                        # Repeat indices to match batch_size, then shuffle
-                        num_repeats = (batch_size + len(pde_points) - 1) // len(pde_points)
-                        physics_indices = torch.arange(len(pde_points)).repeat(num_repeats)[:batch_size]
-                        physics_indices = physics_indices[torch.randperm(len(physics_indices))]
-                    else:
-                        # Sample without replacement if batch_size <= len(pde_points)
-                        physics_indices = torch.randperm(len(pde_points))[:batch_size]
-                        
-                    physics_trunk_input = pde_points[physics_indices]
-                    physics_pde_data = pde_data[physics_indices]
-                    physics_branch_input = branch_input  # Use the same branch input as the DeepONet branch input
+                    # For case-based batching, we need to repeat PDE points batch_size_cases times
+                    n_pde_points_per_case = len(pde_points)  # Use all PDE points
+
+                    #print(f"  Validation epoch: Using {n_pde_points_per_case} PDE points per case")
+                    
+                    # Sample PDE points (use all for validation)
+                    physics_indices = torch.arange(len(pde_points), device=pde_points.device, dtype=torch.long)[:n_pde_points_per_case]
+                    
+                    pde_points_sampled = pde_points[physics_indices]  # (n_pde_points_per_case, n_coords)
+                    pde_data_sampled = pde_data[physics_indices]  # (n_pde_points_per_case, 4)
+                    
+                    # Repeat PDE points and data for each case in the batch
+                    physics_trunk_input = pde_points_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, n_coords)
+                    physics_trunk_input = physics_trunk_input.view(-1, physics_trunk_input.shape[-1])  # (batch_size_cases * n_pde_points_per_case, n_coords)
+                    
+                    physics_pde_data = pde_data_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, 4)
+                    physics_pde_data = physics_pde_data.view(-1, physics_pde_data.shape[-1])  # (batch_size_cases * n_pde_points_per_case, 4)
+                    
+                    # Repeat branch_input for each PDE point
+                    physics_branch_input = branch_input.repeat_interleave(n_pde_points_per_case, dim=0)  # (batch_size_cases * n_pde_points_per_case, n_features)
                 
                 # Sample initial points if provided
                 initial_trunk_input = None
                 initial_batch_values = None
                 if initial_points is not None and initial_values is not None:
-                    initial_indices = torch.randint(0, len(initial_points), (batch_size,))
+                    initial_indices = torch.randint(0, len(initial_points), (batch_size_cases,))
                     initial_trunk_input = initial_points[initial_indices]
                     initial_batch_values = initial_values[initial_indices]
                     
@@ -898,14 +1094,14 @@ class PI_SWE_DeepONetTrainer:
                 boundary_trunk_input = None
                 boundary_batch_values = None
                 if boundary_points is not None:
-                    boundary_indices = torch.randint(0, len(boundary_points), (batch_size,))
+                    boundary_indices = torch.randint(0, len(boundary_points), (batch_size_cases,))
                     boundary_trunk_input = boundary_points[boundary_indices]
                 
                 # Forward pass and compute loss
                 total_batch_loss, loss_components = self.model.compute_total_loss(
-                    branch_input,
-                    trunk_input,
-                    target=target,
+                    branch_input_expanded,
+                    trunk_input_expanded,
+                    target=target_flattened,
                     physics_branch_input=physics_branch_input,
                     physics_trunk_input=physics_trunk_input,
                     pde_data=physics_pde_data,
@@ -1145,12 +1341,25 @@ class PI_SWE_DeepONetTrainer:
             if i >= num_samples:
                 break
                 
+            # Get batch data (batching over cases)
             branch_input, trunk_input, target = batch
-            branch_input = branch_input.to(self.device)
-            trunk_input = trunk_input.to(self.device)
-            target = target.to(self.device)
+            branch_input = branch_input.to(self.device)  # (batch_size_cases, n_features)
+            trunk_input = trunk_input.to(self.device)  # (batch_size_cases, nCells, n_coords)
+            target = target.to(self.device)  # (batch_size_cases, nCells, n_outputs)
             
-            batch_size = branch_input.shape[0]
+            # Get the batch size for this batch (number of cases)
+            batch_size_cases = branch_input.shape[0]
+            nCells = trunk_input.shape[1]  # Number of cells (same for all cases)
+            
+            # Reshape inputs to match model expectations (point-based batching)
+            # Expand branch_input: (batch_size_cases, n_features) -> (batch_size_cases * nCells, n_features)
+            branch_input_expanded = branch_input.repeat_interleave(nCells, dim=0)  # (batch_size_cases * nCells, n_features)
+            
+            # Expand trunk_input: (batch_size_cases, nCells, n_coords) -> (batch_size_cases * nCells, n_coords)
+            trunk_input_expanded = trunk_input.view(-1, trunk_input.shape[-1])  # (batch_size_cases * nCells, n_coords)
+            
+            # Flatten target: (batch_size_cases, nCells, n_outputs) -> (batch_size_cases * nCells, n_outputs)
+            target_flattened = target.view(-1, target.shape[-1])  # (batch_size_cases * nCells, n_outputs)
             
             # Compute data loss (no gradients needed, but doesn't hurt)
             with torch.no_grad():
@@ -1159,24 +1368,30 @@ class PI_SWE_DeepONetTrainer:
                     print(f"  WARNING: Model is not in eval mode! Setting to eval mode...")
                     self.model.eval()
                 
-                data_loss, _ = self.model.compute_deeponet_data_loss(branch_input, trunk_input, target, all_deeponet_points_stats)
+                data_loss, _ = self.model.compute_deeponet_data_loss(branch_input_expanded, trunk_input_expanded, target_flattened, all_deeponet_points_stats)
                 
                 data_losses.append(data_loss.item())              
             
             # Compute PDE loss if enabled (gradients needed for autograd.grad in compute_pde_residuals)
             if self.model.use_physics_loss and pde_points is not None and pde_data is not None:
-                #physics_indices = torch.randint(0, len(pde_points), (batch_size,))
-                # Handle case when batch_size > len(pde_points) by repeating indices
-                # Use memory-efficient sampling to avoid creating large intermediate tensors
-                if batch_size > len(pde_points):
-                    # Sample with replacement using randint (memory efficient)
-                    physics_indices = torch.randint(0, len(pde_points), (batch_size,), device=pde_points.device, dtype=torch.long)
-                else:
-                    # Sample without replacement if batch_size <= len(pde_points)
-                    physics_indices = torch.randperm(len(pde_points), device=pde_points.device, dtype=torch.long)[:batch_size]
-                physics_trunk_input = pde_points[physics_indices]
-                physics_pde_data = pde_data[physics_indices]
-                physics_branch_input = branch_input
+                # For case-based batching, we need to repeat PDE points batch_size_cases times
+                n_pde_points_per_case = len(pde_points)  # Use all PDE points
+                
+                # Sample PDE points (use all for initial loss computation)
+                physics_indices = torch.arange(len(pde_points), device=pde_points.device, dtype=torch.long)[:n_pde_points_per_case]
+                
+                pde_points_sampled = pde_points[physics_indices]  # (n_pde_points_per_case, n_coords)
+                pde_data_sampled = pde_data[physics_indices]  # (n_pde_points_per_case, 4)
+                
+                # Repeat PDE points and data for each case in the batch
+                physics_trunk_input = pde_points_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, n_coords)
+                physics_trunk_input = physics_trunk_input.view(-1, physics_trunk_input.shape[-1])  # (batch_size_cases * n_pde_points_per_case, n_coords)
+                
+                physics_pde_data = pde_data_sampled.unsqueeze(0).repeat(batch_size_cases, 1, 1)  # (batch_size_cases, n_pde_points_per_case, 4)
+                physics_pde_data = physics_pde_data.view(-1, physics_pde_data.shape[-1])  # (batch_size_cases * n_pde_points_per_case, 4)
+                
+                # Repeat branch_input for each PDE point
+                physics_branch_input = branch_input.repeat_interleave(n_pde_points_per_case, dim=0)  # (batch_size_cases * n_pde_points_per_case, n_features)
                 
                 # Enable gradients for PDE loss computation
                 pde_loss, pde_loss_components, _, _, _ = self.model.compute_pde_loss(
