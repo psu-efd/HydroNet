@@ -380,7 +380,7 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax1.set_ylabel('Error Ratio for $h$', fontsize=24)
     ax1.set_title('Water depth $h$', fontsize=24, fontweight='bold')
     ax1.grid(True, alpha=0.3, linestyle='--')
-    ax1.legend(fontsize=18, loc='upper right')
+    #ax1.legend(fontsize=18, loc='upper right')
     ax1.tick_params(axis='both', labelsize=22)
 
     # plot the error ratio for u
@@ -392,7 +392,7 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax2.set_ylabel('Error Ratio for $u$', fontsize=24)
     ax2.set_title('Velocity component $u$', fontsize=24, fontweight='bold')
     ax2.grid(True, alpha=0.3, linestyle='--')
-    ax2.legend(fontsize=18, loc='upper right')
+    #ax2.legend(fontsize=18, loc='upper right')
     ax2.tick_params(axis='both', labelsize=22)
 
     # plot the error ratio for v
@@ -404,7 +404,7 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax3.set_ylabel('Error Ratio for $v$', fontsize=24)
     ax3.set_title('Velocity component $v$', fontsize=24, fontweight='bold')
     ax3.grid(True, alpha=0.3, linestyle='--')
-    ax3.legend(fontsize=18, loc='upper right')
+    #ax3.legend(fontsize=18, loc='upper right')
     ax3.tick_params(axis='both', labelsize=22)
 
     # plot the error ratio for velocity magnitude
@@ -417,7 +417,7 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax4.set_title('Velocity magnitude $|\\mathbf{u}|$', fontsize=24, fontweight='bold')
 
     ax4.grid(True, alpha=0.3, linestyle='--')
-    ax4.legend(fontsize=18, loc='upper right')
+    #ax4.legend(fontsize=18, loc='upper right')
     ax4.tick_params(axis='both', labelsize=22)
 
     # Adjust layout to prevent overlap and increase space between columns
@@ -434,7 +434,7 @@ if __name__ == "__main__":
 
 
     model_1_name = 'DeepONet'
-    model_2_name = 'PI_DeepONet_3'
+    model_2_name = 'PI_DeepONet_1'
     model_1_dir = '../../'+model_1_name+'/application'
     model_2_dir = '../../'+model_2_name+'/application'
 

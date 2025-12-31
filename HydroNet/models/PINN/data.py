@@ -124,6 +124,11 @@ class PINNDataset(Dataset):
                 #check the consistency of the pde points and pde data
                 if len(self.interior_points) != len(self.pde_data):
                     raise ValueError("The number of points in pde_points and pde_data must be the same")
+
+                #print how many PDE points are loaded
+                print(f"Loaded {len(self.interior_points)} PDE points")
+                print(f"Loaded {len(self.pde_data)} PDE data")
+                
             else:
                 raise FileNotFoundError(f"PDE points file not found: {pde_points_file}")
         else:
@@ -142,6 +147,15 @@ class PINNDataset(Dataset):
                 self.boundary_normals = boundary_info[:, 2:4]    # normal vectors
                 self.boundary_lengths = boundary_info[:, 4]      # represented lengths
                 self.boundary_ManningN = boundary_info[:, 5]    # ManningN
+
+                #print how many boundary points are loaded
+                print(f"Loaded {len(self.boundary_points)} boundary points")
+                print(f"Loaded {len(self.boundary_identifiers)} boundary identifiers")
+                print(f"Loaded {len(self.boundary_z)} boundary z")
+                print(f"Loaded {len(self.boundary_normals)} boundary normals")
+                print(f"Loaded {len(self.boundary_lengths)} boundary lengths")
+                print(f"Loaded {len(self.boundary_ManningN)} boundary ManningN")
+                #exit()
             else:
                 raise FileNotFoundError("Boundary points or info file not found")
         else:
