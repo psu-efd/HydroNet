@@ -283,7 +283,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
         vel_mag_levels = np.linspace(vel_mag_min, vel_mag_max, 20)
         
         # Figure 1: Results comparison (3 columns)
-        fig1, axs1 = plt.subplots(1, 3, figsize=(20, 6), facecolor='w')
+        fig1, axs1 = plt.subplots(3, 1, figsize=(10, 20), facecolor='w')
         
         # Row 0: SRH-2D simulation
         if triangles is not None:            
@@ -295,7 +295,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             step = 2
             axs1[0].quiver(points[::step, 0], points[::step, 1], 
                              sim_u_pt[::step], sim_v_pt[::step], 
-                             scale=10, width=0.002, color='white', alpha=0.6)
+                             scale=10, width=0.002, color='k', alpha=0.6)
             axs1[0].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
             axs1[0].set_title('SRH-2D', fontsize=28)
             axs1[0].set_xticks([])
@@ -303,7 +303,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             axs1[0].set_aspect('equal')
             axs1[0].set_xlim([18500, 21240])
             axs1[0].set_ylim([-7036, -5358])
-            cbar = plt.colorbar(cf, ax=axs1[0], fraction=0.046, pad=0.04, shrink=0.5)
+            cbar = plt.colorbar(cf, ax=axs1[0], fraction=0.046, pad=0.04, shrink=0.8)
             cbar.ax.tick_params(labelsize=24)
             cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.1f'))
             cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=24, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
@@ -316,7 +316,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs1[1].tricontourf(points[:, 0], points[:, 1], triangles, vel_mag_deeponet, levels=vel_mag_levels, cmap=plt.cm.RdBu_r)
             axs1[1].quiver(points[::step, 0], points[::step, 1], 
                              deeponet_u_pt[::step], deeponet_v_pt[::step], 
-                             scale=10, width=0.002, color='white', alpha=0.6)
+                             scale=10, width=0.002, color='k', alpha=0.6)
             axs1[1].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
             axs1[1].set_title('SWE-DeepONet', fontsize=28)
             axs1[1].set_xticks([])
@@ -324,7 +324,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             axs1[1].set_aspect('equal')
             axs1[1].set_xlim([18500, 21240])
             axs1[1].set_ylim([-7036, -5358])
-            cbar = plt.colorbar(cf, ax=axs1[1], fraction=0.046, pad=0.04, shrink=0.5)
+            cbar = plt.colorbar(cf, ax=axs1[1], fraction=0.046, pad=0.04, shrink=0.8)
             cbar.ax.tick_params(labelsize=26)
             cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.1f'))
             cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=26, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')
@@ -337,7 +337,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             cf = axs1[2].tricontourf(points[:, 0], points[:, 1], triangles, vel_mag_pi, levels=vel_mag_levels, cmap=plt.cm.RdBu_r)
             axs1[2].quiver(points[::step, 0], points[::step, 1], 
                              pi_u_pt[::step], pi_v_pt[::step], 
-                             scale=10, width=0.002, color='white', alpha=0.6)
+                             scale=10, width=0.002, color='k', alpha=0.6)
             axs1[2].plot(boundary_outline[:, 0], boundary_outline[:, 1], 'k-', linewidth=1.0)
             axs1[2].set_title('PI-SWE-DeepONet', fontsize=28)
             axs1[2].set_xticks([])
@@ -345,7 +345,7 @@ def plot_compare_test_case_results(test_case_indices, deeponet_result_dir, pi_de
             axs1[2].set_aspect('equal')
             axs1[2].set_xlim([18500, 21240])
             axs1[2].set_ylim([-7036, -5358])
-            cbar = plt.colorbar(cf, ax=axs1[2], fraction=0.046, pad=0.04, shrink=0.5)
+            cbar = plt.colorbar(cf, ax=axs1[2], fraction=0.046, pad=0.04, shrink=0.8)
             cbar.ax.tick_params(labelsize=26)
             cbar.ax.yaxis.set_major_formatter(tick.FormatStrFormatter('%.1f'))
             cbar.ax.text(0.5, 1.05, '(m/s)', fontsize=26, transform=cbar.ax.transAxes, horizontalalignment='center', verticalalignment='bottom')

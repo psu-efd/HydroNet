@@ -159,14 +159,14 @@ def plot_mesh_points():
                     tri_points = points[tri]
                     # Close the triangle
                     tri_points_closed = np.vstack([tri_points, tri_points[0]])
-                    axs[0].plot(tri_points_closed[:, 0], tri_points_closed[:, 1], 'lightgray', linewidth=0.5, alpha=0.8)
+                    axs[0].plot(tri_points_closed[:, 0], tri_points_closed[:, 1], 'k', linewidth=0.5, alpha=0.8)
             elif cell_type == "quad":
                 # Plot quadrilaterals
                 for quad in cell_data:
                     quad_points = points[quad]
                     # Close the quad
                     quad_points_closed = np.vstack([quad_points, quad_points[0]])
-                    axs[0].plot(quad_points_closed[:, 0], quad_points_closed[:, 1], 'lightgray', linewidth=0.5, alpha=0.8)
+                    axs[0].plot(quad_points_closed[:, 0], quad_points_closed[:, 1], 'k', linewidth=0.5, alpha=0.8)
     
     # Plot mesh boundary outline
     if boundary_outline.shape[0] > 0:

@@ -53,7 +53,7 @@ def plot_inlet_discharge_pairs(Q_samples_train_val_test, Q_samples_application):
 
     # Define colors for special cases (one color per point)
     n_special = 3  #len(special_case_indices); we have 3 special cases: average distance, minimum distance, and maximum distance    
-    special_colors = ['red', 'green', 'blue']
+    special_colors = ['red', 'magenta', 'blue']
 
     fig = plt.figure(figsize=(15, 5*n_rows))
     for idx, (i, j) in enumerate(pairs):
@@ -63,7 +63,7 @@ def plot_inlet_discharge_pairs(Q_samples_train_val_test, Q_samples_application):
         ax.scatter(Q_samples_application[:, i], Q_samples_application[:, j], edgecolors='k', facecolors='none', s=40, label='Out-of-distribution parameters')
 
         # Mark the special cases with different colored dots
-        ax.scatter(Q_samples_application[application_special_indices, i], Q_samples_application[application_special_indices, j], facecolors='none', edgecolors=special_colors, marker='o', linewidths=1.5, s=200)
+        ax.scatter(Q_samples_application[application_special_indices, i], Q_samples_application[application_special_indices, j], facecolors='none', edgecolors=special_colors, marker='o', linewidths=3, s=300)
         
 
         # Add labels

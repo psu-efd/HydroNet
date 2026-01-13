@@ -252,19 +252,19 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax1, ax2, ax3, ax4 = axes.flatten()
 
     scatter_size = 40
-    special_case_scatter_size = 5*scatter_size
+    special_case_scatter_size = 300
     
     # Define colors for special cases (one color per point)
     n_special = 3  #len(special_case_indices); we have 3 special cases: average distance, minimum distance, and maximum distance    
-    special_colors = ['red', 'green', 'blue']
+    special_colors = ['red', 'magenta', 'blue']
     
     # Plot water depth MSE
     ax1.scatter(distance_list_wo_PI, diff_h_normalized_rmse_list_wo_PI, color='black', marker='o', s=scatter_size, label='SWE-DeepONet')
     ax1.scatter(distance_list_w_PI, diff_h_normalized_rmse_list_w_PI, facecolors='none', edgecolors='black', marker='o', s=scatter_size, label='PI-SWE-DeepONet')
 
     # Mark the special cases with different colored dots
-    ax1.scatter(distance_list_wo_PI_special, diff_h_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
-    ax1.scatter(distance_list_w_PI_special, diff_h_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
+    ax1.scatter(distance_list_wo_PI_special, diff_h_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
+    ax1.scatter(distance_list_w_PI_special, diff_h_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
 
     ax1.set_xlabel('Wasserstein Distance', fontsize=24)
     ax1.set_ylabel('Normalized RMSE for $h$', fontsize=24)
@@ -280,8 +280,8 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax2.scatter(distance_list_w_PI, diff_u_normalized_rmse_list_w_PI, facecolors='none', edgecolors='black', marker='o', s=scatter_size, label='PI-SWE-DeepONet')
 
     # Mark the special cases with dots with different colors (each scatter has a different color)
-    ax2.scatter(distance_list_wo_PI_special, diff_u_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
-    ax2.scatter(distance_list_w_PI_special, diff_u_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
+    ax2.scatter(distance_list_wo_PI_special, diff_u_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
+    ax2.scatter(distance_list_w_PI_special, diff_u_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
 
     ax2.set_xlabel('Wasserstein Distance', fontsize=24)
     ax2.set_ylabel('Normalized RMSE for $u$', fontsize=24)
@@ -297,8 +297,8 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax3.scatter(distance_list_w_PI, diff_v_normalized_rmse_list_w_PI, facecolors='none', edgecolors='black', marker='o', s=scatter_size, label='PI-SWE-DeepONet')
 
     # Mark the special cases with different colored dots
-    ax3.scatter(distance_list_wo_PI_special, diff_v_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
-    ax3.scatter(distance_list_w_PI_special, diff_v_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
+    ax3.scatter(distance_list_wo_PI_special, diff_v_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
+    ax3.scatter(distance_list_w_PI_special, diff_v_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
 
     ax3.set_xlabel('Wasserstein Distance', fontsize=24)
     ax3.set_ylabel('Normalized RMSE for $v$', fontsize=24)
@@ -314,8 +314,8 @@ def compare_w_wo_PI_plot_difference_metrics_against_parameter_distance(model_1_d
     ax4.scatter(distance_list_w_PI, diff_velocity_magnitude_normalized_rmse_list_w_PI, facecolors='none', edgecolors='black', marker='o', s=scatter_size, label='PI-SWE-DeepONet')
 
     # Mark the special cases with different colored dots
-    ax4.scatter(distance_list_wo_PI_special, diff_velocity_magnitude_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
-    ax4.scatter(distance_list_w_PI_special, diff_velocity_magnitude_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size)
+    ax4.scatter(distance_list_wo_PI_special, diff_velocity_magnitude_normalized_rmse_list_wo_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
+    ax4.scatter(distance_list_w_PI_special, diff_velocity_magnitude_normalized_rmse_list_w_PI_special, facecolors='none', edgecolors=special_colors, marker='o', s=special_case_scatter_size, linewidths=3)
 
     ax4.set_xlabel('Wasserstein Distance', fontsize=24)
     ax4.set_ylabel('Normalized RMSE for $|\\mathbf{u}|$', fontsize=24)
