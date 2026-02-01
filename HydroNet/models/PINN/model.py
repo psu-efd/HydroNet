@@ -35,7 +35,7 @@ class SWE_PINN(nn.Module):
     - physics-based simulation: Data points from physics-based simulation (e.g., SRH-2D, HEC-RAS, etc).
     - measurement: Data points from measurement (e.g., field measurements, laboratory experiments, etc).
 
-    The model is trained by minimizing the total loss, which is the sum of the PDE loss, initial condition loss (if unsteady), boundary condition loss, and/or data loss.
+    The model is trained by minimizing the total loss, which is the sum of the PDE loss, initial condition loss (if unsteady), boundary condition loss, and data loss.
     """
 
     def __init__(self, config):
@@ -72,18 +72,18 @@ class SWE_PINN(nn.Module):
 
         # Get loss flags from config
         try:
-            self.bPDE_loss = bool(self.config.get_required_config('model.loss_flags.bPDE_loss'))
+            self.bPDE_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bPDE_loss'))
             if self.bPDE_loss is None:
-                raise ValueError("model.loss_flags.bPDE_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bPDE_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bPDE_loss must be a boolean value in config file")
+            raise ValueError("model.pinn_loss_flags.bPDE_loss must be a boolean value in config file")
             
         try:
-            self.bBoundary_loss = bool(self.config.get_required_config('model.loss_flags.bBoundary_loss'))
+            self.bBoundary_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bBoundary_loss'))
             if self.bBoundary_loss is None:
-                raise ValueError("model.loss_flags.bBoundary_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bBoundary_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bBoundary_loss must be a boolean value in config file")
+            raise ValueError("model.pinn_loss_flags.bBoundary_loss must be a boolean value in config file")
             
         try:
             self.bSteady = bool(self.config.get_required_config('physics.bSteady'))
@@ -96,11 +96,11 @@ class SWE_PINN(nn.Module):
             raise ValueError("physics.bSteady must be a boolean value in config file")
             
         try:
-            self.bData_loss = bool(self.config.get_required_config('model.loss_flags.bData_loss'))
+            self.bData_loss = bool(self.config.get_required_config('model.pinn_loss_flags.bData_loss'))
             if self.bData_loss is None:
-                raise ValueError("model.loss_flags.bData_loss must be specified in config file")
+                raise ValueError("model.pinn_loss_flags.bData_loss must be specified in config file")
         except (TypeError, ValueError):
-            raise ValueError("model.loss_flags.bData_loss must be a boolean value in config file")
+            raise ValueError("model.pinn_loss_flags.bData_loss must be a boolean value in config file")
 
         hidden_layers = self.config.get_required_config('model.hidden_layers')
         activation = self.config.get_required_config('model.activation')
@@ -766,7 +766,8 @@ class SWE_PINN(nn.Module):
             data_stats (dict): Statistics of the data points.
 
         Returns:
-            torch.Tensor: Total data loss.
+            torch.Tensor: Total data loss (MSE, normalized).
+            dict: Loss components.
             h_pred, u_pred, v_pred: Predicted values at data points.
         """
         

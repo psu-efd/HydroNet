@@ -74,9 +74,9 @@ def create_data_files_from_SRH2D_results(srhcontrol_file, result_file, PINN_norm
     my_srh_2d_data.readSRHXMDFFile(result_file, bNodal)
 
     #convert the SRH-2D result to PINN data and return the statistics of the PINN data: all_PINN_data_stats.json
-    all_PINN_data_stats_dict = my_srh_2d_data.outputXMDFDataToPINNData(bNodal, PINN_normalization_specs, bBoundary=bBoundary)
+    all_PINN_points_stats_dict, all_PINN_data_stats_dict = my_srh_2d_data.outputXMDFDataToPINNData(bNodal, PINN_normalization_specs, bBoundary=bBoundary)
 
-    return all_PINN_data_stats_dict
+    return all_PINN_points_stats_dict, all_PINN_data_stats_dict
 
 if __name__ == '__main__':
 
@@ -91,14 +91,11 @@ if __name__ == '__main__':
     # Create data files from SRH-2D simulation result
     result_file = "block_in_channel_XMDFC.h5"   #Name of the SRH-2D result file (currently only XMDFC format is supported)
     bBoundary = False   #Use False for now. It does not work with True (not fully implemented yet for wall's water depth value; need to get internal water depth value from SRH-2D)
-    all_PINN_data_stats_dict = create_data_files_from_SRH2D_results(postprocessing_specs['PINN_points_specs']['srhcontrol_file'], result_file, postprocessing_specs['PINN_normalization_specs'], bBoundary)
+    all_PINN_points_stats_dict, all_PINN_data_stats_dict = create_data_files_from_SRH2D_results(postprocessing_specs['PINN_points_specs']['srhcontrol_file'], result_file, postprocessing_specs['PINN_normalization_specs'], bBoundary)
     
     # Convert SRH-2D mesh to PINN points:
     #  - create mesh_points.json file, equation_points.vtk, boundary_points.vtk files
     #  - convert the mesh_points.json file to npy files in "PINN" directory (to be loaded by PINNDataset)
-    convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_data_stats_dict)
-
-    
+    convert_mesh_points_for_PINN(postprocessing_specs, all_PINN_points_stats_dict, all_PINN_data_stats_dict, n_PDE_points_downsample=0)
 
     print("All done!")
-

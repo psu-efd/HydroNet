@@ -13,7 +13,7 @@ model:
     bBoundary_loss: false   #whether to use boundary conditions in the loss function    
     bData_loss: true       #whether to use SRH-2D results or measurement data as data points and values in the loss function (data assimilation)
   hidden_layers: [32, 64, 32]  # Network architecture
-  activation: "relu"  # tanh, relu, leaky_relu  
+  activation: "tanh"  # tanh, relu, leaky_relu  
   output_dim: 3  # h (water depth), u (x-velocity), v (y-velocity)
   initialization: "xavier_normal"
 
@@ -77,8 +77,7 @@ training:
     save_freq: 100           # Save checkpoint every N epochs
     checkpoint_dir: "./checkpoints" # Save checkpoint to this directory
     print_freq: 1            # Print progress every N epochs
-
-      
+     
 
 # Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)
 boundary_conditions:
@@ -101,6 +100,6 @@ boundary_conditions:
 data:
   pinn: 
     points_dir: "data/PINN"    #for the physics part of the PI-DeepONet
-    train_val_test_stats_path: "all_PINN_stats.json"  # Path to the dataset mean and 
+    train_val_test_stats_path: "all_PINN_stats.json"  # Path to the dataset mean and std file (for normalization/denormalization purposes)
   nCells: 1326  # Number of cells in the SRH-2D cases
-  template_vtk_file: "data/case.vtk"  # Template vtk file for the data generation (test cases)
+  template_vtk_file: "data/case.vtk"  # Template vtk file for the data generation (used for output the predictions to vtk file)

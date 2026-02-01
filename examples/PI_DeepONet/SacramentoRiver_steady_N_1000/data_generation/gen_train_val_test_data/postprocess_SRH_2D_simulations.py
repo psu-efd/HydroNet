@@ -1,5 +1,5 @@
 """
-Postprocess the results of simulations with the SRH_2D_Model and SRH_2D_Data classes, for the purpose of preparing the data for DeepONet training.
+Postprocess the results of simulations with the pyHMT2D's SRH_2D_Model and SRH_2D_Data classes, for the purpose of preparing the data for DeepONet training.
 
 The postprocessing is done in the following steps:
 1. Extract the results (h, u, v) at cell centers from the SRH-2D simulation results.
