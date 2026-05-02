@@ -1,0 +1,78 @@
+# SR-C — Time-window FVM-PINN (10 windows) on Savannah River
+#
+# Purpose: study the "more windows is not always better" trade-off.
+# Expected to be worse than SR-B (5 windows) because each window now
+# spans only 360 s and the accumulation of 10 handoff errors outweighs
+# the benefit of shorter per-window intervals. Fewer reference
+# snapshots per window also starves the data loss.
+#
+# This is a deliberate "over-windowing" demonstration.
+
+device:
+  type: "cuda"
+  index: 0
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 0.5
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  wse_still: 29.3
+  h_dry: 0.1
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 187.4}
+  2: {type: "exit-h",  value: 29.3}
+  3: {type: "wall"}
+  4: {type: "wall"}
+
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 29.3
+
+data:
+  srhhydro: "data/savana_SI.srhhydro"
+  srh2d_h5_file: "data/Savana_XMDFC.h5"
+
+training:
+  strategy: "window"
+  t_start: 0.0
+  t_end:   3600.0
+
+  adam_epochs: 3000         # per window -> 10 * 3000 = 30k total
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.5
+  adam_decay_every: 1000
+  lbfgs_epochs: 200
+  n_time_samples: 10
+
+  window:
+    n_windows: 10           # <-- over-windowing (SR-C defining switch)
+    overlap_frac: 0.10
+    warm_start: true
+    lambda_continuity: 5.0
+
+  loss_weights:
+    lambda_fvm:  1.0
+    lambda_ic:   10.0
+    lambda_bc:   30.0
+    lambda_data: 10.0
+
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  use_grad_checkpoint: false
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints/SR_C"

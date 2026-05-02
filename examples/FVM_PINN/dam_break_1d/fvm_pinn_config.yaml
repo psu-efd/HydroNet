@@ -1,0 +1,68 @@
+# FVM-PINN: 1D Dam-Break Validation
+#
+# Classical 1D Riemann problem with analytical Stoker solution. No SRH-2D
+# files — the mesh is a programmatic 1D strip of quad cells built inside
+# dam_break_1d_FVM_PINN.py and handed to FVM_PINNDataset.from_mesh().
+
+device:
+  type: "cpu"
+  index: 0
+
+# Case geometry + Riemann states (consumed by the script, not the library).
+case:
+  L: 20.0                # domain length [m]
+  x_dam: 10.0            # dam location [m]
+  h_L: 2.0               # upstream depth [m]
+  h_R: 0.5               # downstream depth [m]
+  n_cells: 100
+  width: 1.0             # strip width (arbitrary for 1D)
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 64
+  n_layers: 5
+  n_fourier: 32
+  fourier_scale: 2.0
+  activation: "tanh"
+  use_residual: false
+
+physics:
+  # Flat bed + strong shock: well-balancing is moot, so wse_still = 0 means
+  # xi = h (standard SWE form). Matches the original fvm_pinn_swe run.
+  wse_still: 0.0
+  h_dry: 1.0e-4
+  gravity: 9.81
+
+# No boundary_conditions block: the strip ends fall through to the FVM
+# residual's default reflective walls. The domain is long enough that the
+# dam-break waves do not reach the walls before t_end = 1 s.
+
+# No initial_condition block: the example script builds the analytical
+# Riemann IC (h_L/h_R split at x_dam) and hands it to
+# FVM_PINNDataset.from_mesh().
+
+training:
+  strategy: "standard"
+  t_start: 0.0
+  t_end:   1.0
+
+  adam_epochs: 5000
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.9
+  adam_decay_every: 1000
+
+  lbfgs_epochs: 0         # matches the fvm_pinn_swe baseline
+
+  n_time_samples: 5
+
+  loss_weights:
+    lambda_fvm:  1.0
+    lambda_ic:   20.0
+    lambda_bc:   5.0      # unused (no soft BCs) but harmless
+    lambda_data: 0.0      # no reference data — relies on IC + FVM physics
+
+  logging:
+    print_freq: 500
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints"

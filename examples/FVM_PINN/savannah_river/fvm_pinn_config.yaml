@@ -1,0 +1,89 @@
+# FVM-PINN: Savannah River reach (~1 km)
+#
+# Real-world unstructured mesh with non-trivial bathymetry (z_b ∈ [22, 29] m),
+# five Manning zones (n ∈ [0.02, 0.05]), and an SRH-2D XMDFC reference at
+# five snapshots [720, 1440, 2160, 2880, 3600] s.
+#
+# Training uses a cold flat-WSE IC at t=0 (stable under the well-balanced
+# perturbation form + Manning-conveyance inlet). The SRH-2D snapshots
+# serve as anchor data. Driving the IC from SRH-2D t=720 would trigger an
+# inlet-feedback blow-up in the FVM teacher — don't.
+#
+# Strategy: teacher — FVM-trajectory distillation over the full
+# [0, 3600] s window with a soft SRH-2D anchor across all 5 snapshots.
+#
+# Notes
+# -----
+# - Flow: subcritical throughout the reach. Inlet 187.4 m³/s distributed
+#   by Manning conveyance across the inlet faces; exit held at
+#   WSE = 29.3 m.
+# - wse_still = exit_wse → xi ≈ 0 over the bulk of the channel at steady
+#   state; the network sees small perturbations to learn around the
+#   transient fill-up.
+# - Small fourier_scale (0.5) because the domain is ~1 km — larger
+#   spatial features dominate, and a smaller scale keeps the Fourier
+#   frequencies resolvable by the network.
+
+device:
+  type: "cuda"                       # GPU strongly recommended for 1306 cells
+  index: 0
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 0.5                 # smaller scale for a km-scale domain
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  wse_still: 29.3                    # still-water reference WSE (= exit_wse)
+  h_dry: 0.1                         # larger threshold for this real-world case
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 187.4}   # total discharge [m^3/s]
+  2: {type: "exit-h",  value: 29.3}    # exit WSE [m]
+  3: {type: "wall"}                    # river banks
+  4: {type: "wall"}                    # river banks
+
+initial_condition:
+  mode: "flat-wse"                   # cold start — avoids inlet-feedback blow-up
+  wse_init: 29.3                     # flat water surface at the reference stage
+
+data:
+  srhhydro: "data/savana_SI.srhhydro"
+  srh2d_h5_file: "data/Savana_XMDFC.h5"
+
+training:
+  strategy: "teacher"
+  t_start: 0.0
+  t_end:   3600.0                    # 1 hour of simulation
+
+  teacher:
+    n_snapshots: 30                   # 31 total; ~120 s interval
+    cfl: 0.1                          # more conservative on this real mesh
+    adam_epochs: 3000
+    lbfgs_steps: 200
+    phys_warmup: 200
+    lr: 1.0e-3
+    lambda_bc:     1.0
+    lambda_phys:   0.05
+    lambda_anchor: 1.0                # SRH-2D snapshots matter here —
+                                       # flat-WSE IC disagrees with SRH-2D
+                                       # at t=720, the anchor pulls the
+                                       # PINN back toward the reference
+    regen_trajectory: false
+    trajectory_cache: ""
+
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints"

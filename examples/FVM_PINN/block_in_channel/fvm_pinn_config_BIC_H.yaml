@@ -1,0 +1,82 @@
+# BIC-H — Data-only baseline (no FVM loss) with dense SRH-2D snapshots
+#
+# Purpose: pre-empt the reviewer question "would a plain supervised MLP
+# match data-guided FVM-PINN?". With dense reference data (all SRH-2D
+# snapshots across the full [0, 360] s window) and lambda_fvm = 0, this
+# run isolates the contribution of the FVM residual to (i) extrapolation
+# to unobserved times/cells, (ii) physical consistency in the wet/dry
+# fringe.
+#
+# Difference from base config:
+#   - strategy:   teacher -> standard (no FVM residual in the inner loop)
+#   - lambda_fvm = 0.0     -> FVM residual turned OFF
+#   - lambda_data = 10.0   -> SRH-2D snapshots (all wet cells, all times)
+#                              drive the training
+#
+# Compare accuracy and wet-cell / unseen-time error distributions against
+# BIC-D (teacher mode with the same h5 file) to argue that the FVM loss
+# contributes beyond raw supervision.
+
+device:
+  type: "cuda"
+  index: 0
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 1.0
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  wse_still: 0.4
+  h_dry: 0.01
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 0.38}
+  2: {type: "exit-h",  value: 0.4}
+  3: {type: "wall"}
+  4: {type: "wall"}
+  5: {type: "wall"}
+
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 0.4
+
+data:
+  srhhydro: "data/block_in_channel.srhhydro"
+  srh2d_h5_file: "data/block_in_channel_XMDFC.h5"
+
+training:
+  strategy: "standard"
+  t_start: 0.0
+  t_end:   360.0
+
+  adam_epochs: 8000
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.5
+  adam_decay_every: 2000
+  lbfgs_epochs: 500
+  n_time_samples: 10
+
+  loss_weights:
+    lambda_fvm:  0.0        # <-- FVM residual OFF (BIC-H defining switch)
+    lambda_ic:   10.0
+    lambda_bc:   30.0
+    lambda_data: 10.0       # <-- supervised learning from SRH-2D anchor data
+
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  use_grad_checkpoint: false
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints/BIC_H"

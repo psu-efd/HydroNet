@@ -1,0 +1,138 @@
+# Configuration for FVM-PINN (Finite-Volume Method-augmented PINN) for 2D
+# Shallow Water Equations.
+#
+# FVM-PINN pairs a SWENet (MLP with Fourier positional encoding) with a
+# differentiable well-balanced Roe Riemann solver on an unstructured mesh.
+# The network internally predicts the perturbation-form conserved variables
+# [xi, hu, hv] where xi = h - h_still; the public forward returns
+# [h, u, v] for compatibility with HydroNet's evaluation pipeline.
+#
+# Four training strategies are available via ``training.strategy``:
+#   "standard"  — full-batch baseline
+#   "minibatch" — cell mini-batching (Strategy 1; for larger meshes)
+#   "window"    — time-window decomposition (Strategy 2; long horizons)
+#   "teacher"   — FVM-trajectory distillation (robust for transcritical flow)
+
+# Device configuration
+device:
+  type: "cuda"     # "cuda" or "cpu"
+  index: 0         # which GPU if multiple are available
+
+# Architecture
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"                # "mlp" (SWENet) or "siren" (SirenSWENet)
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64              # number of Fourier-feature pairs
+  fourier_scale: 0.5         # scale of random Fourier frequencies (smaller
+                             # for large spatial domains)
+  activation: "tanh"         # "tanh" | "gelu" | "silu" (mlp arch only)
+  use_residual: true         # residual connections every 2 layers
+  siren_w0: 30.0             # first-layer frequency scale (siren arch only)
+
+# Physics parameters (well-balanced perturbation form)
+physics:
+  wse_still: 29.3            # reference still-water WSE; h_still = max(0, wse_still - bed)
+  h_dry: 0.01                # depth threshold for wet/dry cell classification
+  gravity: 9.81              # gravitational acceleration (m/s²)
+
+# Boundary conditions: keys are SRH-2D node-string IDs from the .srhhydro file.
+# Each entry has a ``type`` and an associated ``value``. Unlisted IDs default to
+# reflective walls in the FVM residual.
+boundary_conditions:
+  1: {type: "inlet-q", value: 187.4}    # total discharge [m³/s]
+  2: {type: "exit-h",  value: 29.3}     # exit WSE [m]
+  3: {type: "wall"}
+  4: {type: "wall"}
+
+# Initial condition
+initial_condition:
+  mode: "flat-wse"           # "flat-wse" | "uniform-h" | "srh2d-snapshot"
+  wse_init: 29.3             # flat-wse: uniform WSE at t=t_start
+  # For "uniform-h":
+  #   h: 1.0
+  #   u: 0.0
+  #   v: 0.0
+  # For "srh2d-snapshot": picks the nearest snapshot at t=t_start from data.srh2d_h5_file.
+
+# Data (SRH-2D raw files; reference h5 optional)
+data:
+  srhhydro: "path/to/case.srhhydro"
+  srh2d_h5_file: "path/to/case_XMDFC.h5"    # optional; used for anchor/ref data
+
+# Training parameters
+training:
+  strategy: "standard"       # "standard" | "minibatch" | "window" | "teacher"
+
+  # Time interval (for the physics loss / trajectory)
+  t_start: 0.0
+  t_end:   3600.0
+
+  # Adam phase
+  adam_epochs: 5000
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.9
+  adam_decay_every: 1000
+
+  # L-BFGS phase
+  lbfgs_epochs: 500
+  lbfgs_max_iter: 20
+  lbfgs_lr: 1.0
+
+  # Time sampling per step
+  n_time_samples: 8
+
+  # Gradient checkpointing (Strategy 3). Trades ~20% extra compute for
+  # reduced memory; enable for large meshes.
+  use_grad_checkpoint: false
+
+  # Loss weights (used by standard / minibatch / window strategies)
+  loss_weights:
+    lambda_fvm:  1.0    # FVM residual
+    lambda_ic:   10.0   # initial condition
+    lambda_bc:   30.0   # boundary condition
+    lambda_data: 10.0   # optional reference/measurement data
+
+  # Per-SWE-component weights. Applied inside the elementwise losses
+  # (FVM residual, IC MSE, data MSE for standard/minibatch/window;
+  # distill + physics-residual for teacher) to balance the scale
+  # mismatch between xi (small in perturbation form) and hu/hv (typically
+  # larger). Defaults 1.0 are uniform.
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  # Strategy 1 settings (only used when strategy: "minibatch")
+  minibatch:
+    cell_sample_frac: 0.2  # fraction of cells sampled per step
+    sampling: "random"     # "random" | ...
+
+  # Strategy 2 settings (only used when strategy: "window")
+  window:
+    n_windows: 5
+    overlap_frac: 0.10
+    warm_start: true
+    lambda_continuity: 5.0
+
+  # Strategy 4 settings (only used when strategy: "teacher")
+  teacher:
+    n_snapshots: 30         # M+1 FVM snapshots generated in [t_start, t_end]
+    cfl: 0.1                # CFL for the FVM trajectory generator
+    adam_epochs: 3000       # teacher-specific Adam epochs (overrides training.adam_epochs)
+    lbfgs_steps: 200
+    phys_warmup: 200        # epochs before lambda_phys ramps in
+    lr: 1.0e-3
+    lambda_bc:     1.0
+    lambda_phys:   0.05      # weight on ||dQ/dt + R(Q)||²
+    lambda_anchor: 1.0       # weight on MSE against reference snapshots
+    regen_trajectory: false  # force re-run FVM trajectory (ignore cache)
+    trajectory_cache: ""     # empty → {output_dir}/fvm_trajectory.pt
+
+  # Logging / checkpointing
+  logging:
+    tensorboard_log_dir: "./logs/tensorboard"
+    save_freq: 1000          # save checkpoint every N epochs
+    checkpoint_dir: "./checkpoints"
+    print_freq: 200          # log every N epochs

@@ -1,0 +1,85 @@
+# FVM-PINN: 2D Block-in-Channel
+#
+# Rectangular channel (15 m × 5 m) with a block obstruction. Unsteady 2D
+# flow: subcritical uniform upstream → wake with flow separation and
+# recirculation behind the block → reattachment downstream. Mesh: 1326
+# unstructured cells from SRH-2D.
+#
+# Reference: SRH-2D XMDFC at t = 360 s (quasi-steady within [0, 360]).
+# Strategy: teacher — FVM-trajectory distillation from a uniform h=0.4
+# cold start, same setup as fvm_pinn_swe/run_block_channel_guided.py.
+#
+# Notes
+# -----
+# - Bed is flat (z_b = 0 everywhere), so wse_still = exit_h makes xi ≈ 0
+#   in the undisturbed subcritical region — the network sees small
+#   perturbations to learn around the wake.
+# - With 1326 cells the case is GPU-friendly; set device.type: cuda for
+#   a ~3–5× speedup on a Quadro-class card vs CPU.
+
+device:
+  type: "cpu"          # switch to "cuda" for faster runs
+  index: 0
+
+# Network — 6×128 MLP with 64 Fourier features. Matches
+# fvm_pinn_swe's block_in_channel defaults.
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 1.0
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  # Flat bed; wse_still = downstream stage keeps xi ≈ 0 in the bulk.
+  wse_still: 0.4
+  h_dry: 0.01
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 0.38}      # total discharge [m^3/s]
+  2: {type: "exit-h",  value: 0.4}       # exit WSE [m]
+  3: {type: "wall"}                      # side walls + block faces
+  4: {type: "wall"}
+  5: {type: "wall"}
+
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 0.4                          # uniform depth 0.4 m at rest
+
+data:
+  srhhydro: "data/block_in_channel.srhhydro"
+  srh2d_h5_file: "data/block_in_channel_XMDFC.h5"   # anchor at t=360s
+
+training:
+  strategy: "teacher"
+  t_start: 0.0
+  t_end:   360.0                         # 0.1 hours; matches original
+
+  teacher:
+    n_snapshots: 30                      # 31 total, every 12 s
+    cfl: 0.3
+    adam_epochs: 3000
+    lbfgs_steps: 200
+    phys_warmup: 200
+    lr: 1.0e-3
+    lambda_bc:     1.0
+    lambda_phys:   0.05
+    lambda_anchor: 0.1                   # soft anchor on SRH-2D t=360 snapshot
+    regen_trajectory: false
+    trajectory_cache: ""
+
+  # Component weights are 1.0 by default; raise lambda_xi if xi << hu/hv
+  # on your first run (check the per-component history plot).
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints"

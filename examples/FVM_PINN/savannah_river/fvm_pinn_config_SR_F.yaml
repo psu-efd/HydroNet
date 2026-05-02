@@ -1,0 +1,74 @@
+# SR-F — Data-only baseline (no FVM loss) on Savannah River
+#
+# Purpose: pre-empt the reviewer question "is a supervised MLP fit to
+# SRH-2D snapshots enough?" for the real-world reach. Same SRH-2D anchor
+# snapshots as SR-A, same network, lambda_fvm = 0 so only the data loss
+# drives training.
+#
+# Expected behaviour: fits the 5 anchor times well, but diverges in
+# between — the lack of physics prevents the network from interpolating
+# consistently between snapshots. Compare time-series L2 against SR-A
+# (standard + FVM) and SR-B (window + FVM).
+
+device:
+  type: "cuda"
+  index: 0
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 0.5
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  wse_still: 29.3
+  h_dry: 0.1
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 187.4}
+  2: {type: "exit-h",  value: 29.3}
+  3: {type: "wall"}
+  4: {type: "wall"}
+
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 29.3
+
+data:
+  srhhydro: "data/savana_SI.srhhydro"
+  srh2d_h5_file: "data/Savana_XMDFC.h5"
+
+training:
+  strategy: "standard"
+  t_start: 0.0
+  t_end:   3600.0
+
+  adam_epochs: 10000
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.5
+  adam_decay_every: 2500
+  lbfgs_epochs: 500
+  n_time_samples: 10
+
+  loss_weights:
+    lambda_fvm:  0.0        # <-- FVM residual OFF (SR-F defining switch)
+    lambda_ic:   10.0
+    lambda_bc:   30.0
+    lambda_data: 10.0
+
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0
+    lambda_hv: 1.0
+
+  use_grad_checkpoint: false
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints/SR_F"

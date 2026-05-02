@@ -1,5 +1,5 @@
 """
-HydroNet: Physics-informed (PI) machine learning for hydrodynamics and hydraulics modeling. PINN and PI-DeepONet are supported.
+HydroNet: Physics-informed (PI) machine learning for hydrodynamics and hydraulics modeling. PINN, PI-DeepONet, and FVM-PINN are supported.
 """
 
 # Version
@@ -8,14 +8,17 @@ from .__about__ import __version__
 # Models
 from .models.PINN.model import SWE_PINN
 from .models.PI_DeepONet.model import PI_SWE_DeepONetModel
+from .models.FVM_PINN.model import FVM_SWE_PINN
 
 # Trainers
 from .models.PINN.trainer import PINNTrainer
 from .models.PI_DeepONet.trainer import PI_SWE_DeepONetTrainer
+from .models.FVM_PINN.trainer import FVM_PINNTrainer
 
 # Datasets
 from .models.PINN.data import PINNDataset
 from .models.PI_DeepONet.data import PI_SWE_DeepONetDataset
+from .models.FVM_PINN.data import FVM_PINNDataset
 
 # Data loaders
 from .models.PINN.data import get_pinn_dataloader
@@ -43,15 +46,18 @@ __all__ = [
     # Models
     "SWE_PINN",
     "PI_SWE_DeepONetModel",
-    
+    "FVM_SWE_PINN",
+
     # Trainers
     "PINNTrainer",
     "PI_SWE_DeepONetTrainer",
-    
+    "FVM_PINNTrainer",
+
     # Datasets
     "PINNDataset",
     "PI_SWE_DeepONetDataset",
-    
+    "FVM_PINNDataset",
+
     # Data loaders
     "get_pinn_dataloader",
     "create_pi_deeponet_dataloader",

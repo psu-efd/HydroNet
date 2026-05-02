@@ -1,6 +1,17 @@
+
+.env
+.env.local
+.mcp.json
+settings*.json
+settings*.json.bak
+*.backup
+
+plan/
+
 # Project specific ignores
 *.slurm.o*
 *.slurm.e*
+papers/
 examples/PI_DeepONet/SacramentoRiver_steady_N_100/
 examples/PI_DeepONet/SacramentoRiver_steady_N_1000_relu_tanh/
 examples/PI_DeepONet/SacramentoRiver_steady_N_200/
@@ -42,6 +53,7 @@ logs/
 *.h5
 *.npz
 *.npy
+.cursor/
 .cursorrules
 project_spec.md
 
