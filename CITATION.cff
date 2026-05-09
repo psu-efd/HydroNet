@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use HydroNet, please cite this software."
+title: "HydroNet: A PyTorch Framework for Physics-Informed Deep Learning of the 2D Shallow Water Equations"
+abstract: >-
+  HydroNet is a PyTorch framework for solving the 2D shallow water equations (SWE)
+  with physics-informed deep learning. It provides several model families that share
+  a common Config/Dataset/Trainer pattern: a strong-form PINN (SWE_PINN), a
+  physics-informed DeepONet operator surrogate (PI-SWE-DeepONet), and an FVM-PINN
+  whose physics loss is a differentiable, well-balanced Roe finite-volume residual
+  on unstructured SRH-2D meshes.
+authors:
+  - family-names: Liu
+    given-names: Xiaofeng
+    email: xiaofengliu19@gmail.com
+    affiliation: "Department of Civil and Environmental Engineering, Pennsylvania State University, USA"
+    # TODO: replace with your ORCID iD (e.g. 0000-0002-XXXX-XXXX)
+    orcid: "https://orcid.org/0000-0002-8296-7076"
+version: "1.0.0-fvm-pinn"
+date-released: "2026-05-09"
+license: MIT
+type: software
+repository-code: "https://github.com/psu-efd/HydroNet"
+url: "https://github.com/psu-efd/HydroNet"
+keywords:
+  - shallow water equations
+  - physics-informed neural networks
+  - PINN
+  - DeepONet
+  - finite volume method
+  - Roe Riemann solver
+  - computational hydraulics
+  - scientific machine learning
+  - PyTorch
+  - SRH-2D
