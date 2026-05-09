@@ -45,6 +45,7 @@ from ..fvm.time_stepping import run_fvm_rk2
 from ..pinn.network import SWENet, SirenSWENet, NetworkConfig
 from ..pinn.loss import LossConfig
 from .base_trainer import _to_device
+from .memory_tracker import MemoryTracker
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ class TeacherTrainer:
         self.output_dir = Path(teacher_cfg.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Optional GPU memory tracker (attached externally by FVM_PINNTrainer).
+        self.memory_tracker: Optional[MemoryTracker] = None
+
     # ------------------------------------------------------------------
     # Public API (parity with BaseTrainer / TimeWindowTrainer)
     # ------------------------------------------------------------------
@@ -275,6 +279,10 @@ class TeacherTrainer:
             f"phys_warmup={self.cfg.phys_warmup}"
         )
 
+        if self.memory_tracker is not None:
+            self.memory_tracker.reset_peak("teacher-adam-start")
+            self.memory_tracker.sample("adam", 0)
+
         optimizer = optim.Adam(self.network.parameters(), lr=self.cfg.adam_lr)
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, step_size=self.cfg.adam_decay_every,
@@ -339,6 +347,8 @@ class TeacherTrainer:
                     f"d_hv={avgs['distill_hv']:.3e}  p_xi={avgs['phys_xi']:.3e}  "
                     f"p_hu={avgs['phys_hu']:.3e}  p_hv={avgs['phys_hv']:.3e}"
                 )
+                if self.memory_tracker is not None:
+                    self.memory_tracker.sample("adam", epoch)
             if epoch % self.cfg.checkpoint_every == 0:
                 self._save_checkpoint(f"adam_{epoch}")
 
@@ -347,6 +357,9 @@ class TeacherTrainer:
             return
         has_anchor = self.ref_data is not None and self.cfg.lambda_anchor > 0
         logger.info(f"L-BFGS polish: {self.cfg.lbfgs_steps} outer steps")
+        if self.memory_tracker is not None:
+            self.memory_tracker.reset_peak("teacher-lbfgs-start")
+            self.memory_tracker.sample("lbfgs", 0)
         optimizer = optim.LBFGS(
             self.network.parameters(),
             lr=self.cfg.lbfgs_lr,
@@ -408,6 +421,8 @@ class TeacherTrainer:
                     f"d_hv={avgs['distill_hv']:.3e}  p_xi={avgs['phys_xi']:.3e}  "
                     f"p_hu={avgs['phys_hu']:.3e}  p_hv={avgs['phys_hv']:.3e}"
                 )
+                if self.memory_tracker is not None:
+                    self.memory_tracker.sample("lbfgs", counter[0])
             return torch.tensor(total, device=self.device, dtype=self.dtype)
 
         for _ in range(self.cfg.lbfgs_steps):

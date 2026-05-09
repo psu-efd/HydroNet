@@ -25,13 +25,14 @@ block-in-channel case; no training is performed).
 
 Usage
 -----
-    cd <HydroNet root>
-    python scripts/diagnose_loss_landscape.py \\
-        --config  examples/FVM_PINN/block_in_channel/fvm_pinn_config_BIC_B.yaml \\
-        --checkpoint examples/FVM_PINN/block_in_channel/checkpoints/BIC_B/ckpt_final.pt \\
-        --out plan/figures/
+    cd examples/FVM_PINN/block_in_channel
+    python diagnose_loss_landscape.py \\
+        --config     fvm_pinn_config_BIC_B.yaml \\
+        --checkpoint checkpoints/BIC_B/ckpt_final.pt \\
+        --out        ../../../plan/figures/
 
-Defaults target BIC-B when invoked with no arguments.
+Defaults (resolved from this script's location) target BIC-B when invoked
+with no arguments.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ import torch
 import torch.nn as nn
 
 # Make HydroNet importable when running from the repo root.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -59,6 +60,9 @@ from HydroNet import Config, FVM_SWE_PINN, FVM_PINNDataset  # noqa: E402
 from HydroNet.models.FVM_PINN._internal.pinn.loss import (  # noqa: E402
     FVMPINNLoss, LossConfig,
 )
+
+plt.rc('text', usetex=True)  #allow the use of Latex for math expressions and equations
+plt.rc('font', family='serif') #specify the default font family to be "serif"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
@@ -217,18 +221,20 @@ def save_plot(curves: Dict[str, list], out_path: Path) -> None:
     data = np.array(curves["data"])
     total = np.array(curves["total"])
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, axes = plt.subplots(2, 1, figsize=(6, 6))
 
     ax = axes[0]
     ax.semilogy(alpha, np.maximum(fvm, 1e-20), "-", color="tab:blue", lw=2,
-                label=r"$\mathcal{L}_{\mathrm{fvm}}(\alpha)$")
+                label=r"$\mathcal{L}_{\mathrm{fvm-pinn}}(\alpha)$")
     ax.semilogy(alpha, np.maximum(data, 1e-20), "-", color="tab:orange", lw=2,
                 label=r"$\mathcal{L}_{\mathrm{data}}(\alpha)$")
     ax.axvline(0.0, color="gray", ls=":", lw=1)
     ax.axvline(1.0, color="gray", ls=":", lw=1)
-    ax.set_xlabel(r"momentum scale $\alpha$ (1 = trained, 0 = zero-momentum)")
-    ax.set_ylabel(r"loss (log scale)")
-    ax.set_title("FVM and data losses along the momentum-scaling line")
+    ax.set_xlabel(r"momentum scale $\alpha$ (1 = trained, 0 = zero-momentum)", fontsize=16)
+    ax.set_ylabel(r"loss", fontsize=16)
+    #set tick label size
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_title("FVM-PINN and data losses along the momentum-scaling line", fontsize=16)
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(loc="best")
 
@@ -237,9 +243,11 @@ def save_plot(curves: Dict[str, list], out_path: Path) -> None:
             label=r"$\mathcal{L}_{\mathrm{total}}(\alpha)$")
     ax.axvline(0.0, color="gray", ls=":", lw=1)
     ax.axvline(1.0, color="gray", ls=":", lw=1)
-    ax.set_xlabel(r"momentum scale $\alpha$")
-    ax.set_ylabel(r"weighted total loss")
-    ax.set_title("Total loss along the momentum-scaling line")
+    ax.set_xlabel(r"momentum scale $\alpha$", fontsize=16)
+    ax.set_ylabel(r"weighted total loss", fontsize=16)
+    #set tick label size
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_title("Total loss along the momentum-scaling line", fontsize=16)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
 

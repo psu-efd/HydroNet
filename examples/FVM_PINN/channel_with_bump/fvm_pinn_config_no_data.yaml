@@ -1,0 +1,73 @@
+# FVM-PINN: 1D Transcritical Flow Over a Parabolic Bump
+#
+# Classic SWE benchmark (Goutal & Maurel 1997): subcritical → supercritical
+# transition over a parabolic bump at x=10m with z_b,max = 0.2m, then a
+# hydraulic jump back to subcritical downstream. Inlet discharge q=0.18 m^2/s
+# and exit stage h=0.33 m.
+#
+# Reference: FullSWOF analytical steady-state solution (1D) —
+#   data/analytical_solution_from_FullSWOF.dat (x, h, z_b, wse).
+# Also on-disk: SRH-2D XMDFC h5 (optional anchor / secondary reference).
+#
+# Strategy: teacher (FVM-trajectory distillation). Runs the FVM solver from a
+# flat-WSE IC for t=72 s → steady state, then fits the network to 51 cached
+# snapshots. This matches fvm_pinn_swe/examples/run_channel_bump.py defaults.
+
+device:
+  type: "cpu"
+  index: 0
+
+# Architecture — small net, plenty for a 1D steady profile.
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 64
+  n_layers: 6
+  n_fourier: 32
+  fourier_scale: 1.0
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  # Downstream flat bed with exit stage h=0.33. wse_still = 0.33 makes
+  # xi = h - h_still ≈ 0 everywhere in the subcritical region — good for
+  # well-balanced cancellation and numerically tight network targets.
+  wse_still: 0.33
+  h_dry: 0.01
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 0.18}    # m^2/s (unit discharge; q = Q/width)
+  2: {type: "exit-h",  value: 0.33}    # exit water surface elevation [m]
+  3: {type: "symmetry"}
+  4: {type: "symmetry"}
+
+# Flat-WSE cold start. The teacher FVM integrates to steady state, the
+# network regresses to the full trajectory.
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 0.33
+
+data:
+  srhhydro: "data/oneD_channel_with_bump_refined.srhhydro"
+  srh2d_h5_file: "data/oneD_channel_with_bump_refined_XMDFC.h5"   # optional data anchor
+
+training:
+  strategy: "standard"        # <-- was "teacher"
+  t_start: 0.0
+  t_end:   72.0
+  adam_epochs: 3000
+  adam_lr:     1.0e-3
+  lbfgs_epochs: 200
+  n_time_samples: 36
+
+  loss_weights:
+    lambda_fvm:  1.0
+    lambda_ic:   10.0
+    lambda_bc:   30.0
+    lambda_data: 0.0          # <-- KEY: disables data guidance
+
+  logging:
+    print_freq: 100
+    save_freq:  1000
+    checkpoint_dir: "./checkpoints_no_data"   # don't clobber teacher ckpt

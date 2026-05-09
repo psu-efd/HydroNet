@@ -47,6 +47,9 @@ if project_root not in sys.path:
 
 from HydroNet import Config, FVM_SWE_PINN, FVM_PINNTrainer, FVM_PINNDataset
 
+plt.rc('text', usetex=True)  #allow the use of Latex for math expressions and equations
+plt.rc('font', family='serif') #specify the default font family to be "serif"
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -78,8 +81,29 @@ def interp_at_x(analytical, xq):
 # Evaluation / plotting
 # ---------------------------------------------------------------------------
 
-def evaluate_and_plot(model, config, dataset, out_dir: Path):
-    """Compare trained model with FullSWOF analytical at t = t_end."""
+def evaluate_and_plot(
+    model,
+    config,
+    dataset,
+    out_dir: Path,
+    ckpt_with_data: Path = Path("./checkpoints_with_data_guide/teacher_final.pt"),
+    ckpt_no_data: Path = Path("./checkpoints_no_data/ckpt_final.pt"),
+):
+    """Compare trained models with the FullSWOF analytical at ``t = t_end``.
+
+    Two reference checkpoints are loaded into fresh ``FVM_SWE_PINN``
+    instances for a deterministic side-by-side comparison:
+
+      - ``ckpt_with_data``  (data-guided / teacher run, default
+        ``./checkpoints_with_data_guide/teacher_final.pt``)
+      - ``ckpt_no_data``    (physics-only run, default
+        ``./checkpoints_no_data/ckpt_final.pt``)
+
+    Either checkpoint may be missing — its line is then skipped with a
+    warning. If neither named checkpoint exists, the function falls back
+    to the passed-in ``model`` so the original single-line behaviour is
+    preserved when this script is run in standalone mode.
+    """
     t_end = float(config.get_required_config("training.t_end"))
 
     # Cell centres (from dataset) and bed elevation from mesh_data
@@ -96,20 +120,59 @@ def evaluate_and_plot(model, config, dataset, out_dir: Path):
     h_exact = ref["h"]
     wse_exact = ref["wse"]
 
-    # PINN prediction — public forward returns [h, u, v]
+    # Common (x, y, t_end) query points
     device = model.get_device()
     xyt = torch.column_stack([
         torch.tensor(xc, dtype=torch.float64, device=device),
         torch.tensor(yc, dtype=torch.float64, device=device),
         torch.full((n,), t_end, dtype=torch.float64, device=device),
     ])
-    with torch.no_grad():
-        Q_phys = model(xyt).cpu().numpy()
-    h_pred = Q_phys[:, 0]
-    u_pred = Q_phys[:, 1]
-    wse_pred = h_pred + bed
 
-    # Expected analytical velocity: q = inlet_q (conservation). u_exact = q/h_exact
+    # ---- Helper: load a checkpoint into a fresh model and predict ----
+    def _predict_from_ckpt(ckpt_path: Path):
+        if not ckpt_path.exists():
+            logger.warning(f"Checkpoint not found, skipping: {ckpt_path}")
+            return None
+        m = FVM_SWE_PINN(config)
+        m.set_mesh_context(
+            h_still_cells=dataset.get_h_still(),
+            cell_xy=dataset.get_cell_xy(),
+        )
+        ck = torch.load(ckpt_path, map_location=m.get_device(), weights_only=False)
+        net = m.get_internal_network()
+        net.load_state_dict(ck["network_state"])
+        net.set_normalisation(ck["x_mean"], ck["x_std"])
+        with torch.no_grad():
+            Q = m(xyt).cpu().numpy()
+        logger.info(f"Loaded comparison checkpoint: {ckpt_path}")
+        return Q
+
+    Q_dg = _predict_from_ckpt(ckpt_with_data)
+    Q_nd = _predict_from_ckpt(ckpt_no_data)
+
+    # Fallback: if neither named checkpoint is present, treat the in-memory
+    # model as the data-guided line so the original single-line behaviour
+    # is preserved when this script is run standalone.
+    if Q_dg is None and Q_nd is None:
+        logger.warning(
+            "Neither comparison checkpoint found — falling back to the "
+            "in-memory model for the FVM-PINN line."
+        )
+        with torch.no_grad():
+            Q_dg = model(xyt).cpu().numpy()
+
+    # Unpack [h, u, v] -> h, u, wse for whichever runs were loaded
+    def _unpack(Q):
+        if Q is None:
+            return None, None, None
+        h_p = Q[:, 0]
+        u_p = Q[:, 1]
+        return h_p, u_p, h_p + bed
+
+    h_dg, u_dg, wse_dg = _unpack(Q_dg)
+    h_nd, u_nd, wse_nd = _unpack(Q_nd)
+
+    # Expected analytical velocity from steady-state conservation: q = inlet_q.
     # ``Config.get`` can't traverse integer-keyed sub-dicts via dotted
     # strings, so read the whole BC block and look up the inlet-q entry.
     bc_block = config.get_required_config("boundary_conditions")
@@ -119,40 +182,75 @@ def evaluate_and_plot(model, config, dataset, out_dir: Path):
     )
     u_exact = np.where(h_exact > 1e-6, inlet_q / h_exact, 0.0)
 
-    # Errors — sort by x first so profiles plot cleanly
+    # Sort by x for clean profile plotting
     order = np.argsort(xc)
     xc_s = xc[order]
-    h_pred_s, h_exact_s = h_pred[order], h_exact[order]
-    u_pred_s, u_exact_s = u_pred[order], u_exact[order]
-    wse_pred_s, wse_exact_s = wse_pred[order], wse_exact[order]
     bed_s = bed[order]
+    wse_exact_s = wse_exact[order]
+    u_exact_s = u_exact[order]
 
-    l2_h = float(np.sqrt(np.mean((h_pred - h_exact) ** 2)))
-    max_h = float(np.max(np.abs(h_pred - h_exact)))
-    l2_u = float(np.sqrt(np.mean((u_pred - u_exact) ** 2)))
-    max_u = float(np.max(np.abs(u_pred - u_exact)))
-    l2_wse = float(np.sqrt(np.mean((wse_pred - wse_exact) ** 2)))
-    logger.info(f"h:   L2={l2_h:.4e}, max={max_h:.4e}")
-    logger.info(f"u:   L2={l2_u:.4e}, max={max_u:.4e}")
-    logger.info(f"WSE: L2={l2_wse:.4e}")
+    # ---- Per-run error metrics ----
+    def _metrics(label, h_p, u_p, wse_p):
+        if h_p is None:
+            return None
+        m = {
+            "L2_h":   float(np.sqrt(np.mean((h_p   - h_exact) ** 2))),
+            "max_h":  float(np.max(np.abs(h_p   - h_exact))),
+            "L2_u":   float(np.sqrt(np.mean((u_p   - u_exact) ** 2))),
+            "max_u":  float(np.max(np.abs(u_p   - u_exact))),
+            "L2_wse": float(np.sqrt(np.mean((wse_p - wse_exact) ** 2))),
+        }
+        logger.info(
+            f"[{label}] h: L2={m['L2_h']:.4e}, max={m['max_h']:.4e} | "
+            f"u: L2={m['L2_u']:.4e}, max={m['max_u']:.4e} | "
+            f"WSE: L2={m['L2_wse']:.4e}"
+        )
+        return m
+
+    metrics_dg = _metrics("with data guide", h_dg, u_dg, wse_dg)
+    metrics_nd = _metrics("no data guide",   h_nd, u_nd, wse_nd)
 
     # ---- Profile plot ----
     out_dir.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+
+    # Panel (a) — Water surface elevation
     ax = axes[0]
     ax.fill_between(xc_s, 0, bed_s, color="#d2b48c", alpha=0.5, label="Bed")
     ax.plot(xc_s, wse_exact_s, "k-", lw=2, label="Analytical WSE")
-    ax.plot(xc_s, wse_pred_s, "r--", lw=1.6, label="FVM-PINN WSE")
-    ax.set_xlabel("x [m]"); ax.set_ylabel("Elevation [m]")
-    ax.set_title(f"Water surface elevation at t = {t_end} s")
-    ax.legend(); ax.grid(True, alpha=0.3)
+    if wse_dg is not None:
+        ax.plot(xc_s, wse_dg[order], "r--", lw=1.8,
+                label="FVM-PINN (with data guide)")
+    if wse_nd is not None:
+        ax.plot(xc_s, wse_nd[order], "b:", lw=1.8,
+                label="FVM-PINN (no data guide)")
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_xlabel("x (m)", fontsize=16)
+    ax.set_ylabel("Elevation (m)", fontsize=16)
+    ax.set_title("Water surface elevation", fontsize=16)
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
 
+    # Panel (b) — Velocity
     ax = axes[1]
     ax.plot(xc_s, u_exact_s, "k-", lw=2, label="Analytical u")
-    ax.plot(xc_s, u_pred_s, "r--", lw=1.6, label="FVM-PINN u")
-    ax.set_xlabel("x [m]"); ax.set_ylabel("u [m/s]")
-    ax.set_title(f"Velocity at t = {t_end} s")
-    ax.legend(); ax.grid(True, alpha=0.3)
+    if u_dg is not None:
+        ax.plot(xc_s, u_dg[order], "r--", lw=1.8,
+                label="FVM-PINN (with data guide)")
+    if u_nd is not None:
+        ax.plot(xc_s, u_nd[order], "b:", lw=1.8,
+                label="FVM-PINN (no data guide)")
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_xlabel("x (m)", fontsize=16)
+    ax.set_ylabel("u (m/s)", fontsize=16)
+    ax.set_title("Velocity", fontsize=16)
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
+
+    axes[0].text(-0.1, 1.05, "(a)", transform=axes[0].transAxes,
+                 fontsize=16, fontweight='bold')
+    axes[1].text(-0.1, 1.05, "(b)", transform=axes[1].transAxes,
+                 fontsize=16, fontweight='bold')
 
     plt.tight_layout()
     path = out_dir / "bump_comparison.png"
@@ -160,16 +258,26 @@ def evaluate_and_plot(model, config, dataset, out_dir: Path):
     plt.close(fig)
     logger.info(f"Profile plot: {path}")
 
-    np.savez(
-        out_dir / "predictions.npz",
-        x=xc, bed=bed,
-        h_pred=h_pred, u_pred=u_pred, wse_pred=wse_pred,
-        h_exact=h_exact, u_exact=u_exact, wse_exact=wse_exact,
-        L2_h=l2_h, max_h=max_h, L2_u=l2_u, max_u=max_u, L2_wse=l2_wse,
-    )
+    # ---- Save predictions for both runs ----
+    npz_kwargs = {
+        "x": xc, "bed": bed,
+        "h_exact": h_exact, "u_exact": u_exact, "wse_exact": wse_exact,
+    }
+    if h_dg is not None:
+        npz_kwargs.update({
+            "h_pred_with_data":   h_dg,
+            "u_pred_with_data":   u_dg,
+            "wse_pred_with_data": wse_dg,
+        })
+    if h_nd is not None:
+        npz_kwargs.update({
+            "h_pred_no_data":   h_nd,
+            "u_pred_no_data":   u_nd,
+            "wse_pred_no_data": wse_nd,
+        })
+    np.savez(out_dir / "predictions.npz", **npz_kwargs)
 
-    return {"L2_h": l2_h, "max_h": max_h, "L2_u": l2_u, "max_u": max_u,
-            "L2_wse": l2_wse}
+    return {"with_data_guide": metrics_dg, "no_data_guide": metrics_nd}
 
 
 def plot_loss_history(history: dict, out_dir: Path) -> None:

@@ -416,13 +416,13 @@ class FVM_PINNDataset(Dataset):
         ``measurements`` absent, or ``mode: "dense"`` (default)
             Load every wet cell at every in-window snapshot (backward-
             compatible behaviour). Used by teacher-mode anchors and by the
-            BIC-D / BIC-H / SR-A/B/C/F runs.
+            BIC-D / BIC-H / SR-B/C/D/G runs.
 
         ``mode: "sparse"``
             Subsample ``n_points`` random cells at each snapshot listed in
             ``times`` (or at all in-window snapshots if ``times`` is
             empty/absent). Used by the sparse-measurement ablation runs
-            (BIC-B/C/F/G, SR-E). Optional ``variables`` restricts which
+            (BIC-B/C/F/G, SR-F). Optional ``variables`` restricts which
             conserved components are supervised via ``var_mask``; optional
             ``noise_sigma`` adds Gaussian noise with standard deviation
             equal to ``noise_sigma * max|U_ref|`` per component.

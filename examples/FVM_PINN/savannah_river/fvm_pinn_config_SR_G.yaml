@@ -1,13 +1,14 @@
-# SR-B — Standard (full-batch) FVM-PINN on Savannah River with SRH-2D anchor
+# SR-G — Data-only baseline (no FVM loss) on Savannah River
 #
-# Purpose: single-window baseline for the long-simulation Savannah case.
-# Expected to produce noticeable drift at late times because 2880 s is
-# long for a single PINN to enforce temporal causality.
+# Purpose: pre-empt the reviewer question "is a supervised MLP fit to
+# SRH-2D snapshots enough?" for the real-world reach. Same SRH-2D anchor
+# snapshots as SR-B, same network, lambda_fvm = 0 so only the data loss
+# drives training.
 #
-# Difference from base (teacher) config:
-#   - strategy: teacher -> standard (use explicit FVM residual + data loss
-#                                    instead of FVM-trajectory distillation)
-#   - loss_weights block replaces teacher.lambda_*  weights
+# Expected behaviour: fits the 5 anchor times well, but diverges in
+# between — the lack of physics prevents the network from interpolating
+# consistently between snapshots. Compare time-series L2 against SR-B
+# (standard + FVM) and SR-C (window + FVM).
 
 device:
   type: "cuda"
@@ -55,10 +56,10 @@ training:
   n_time_samples: 10
 
   loss_weights:
-    lambda_fvm:  1.0
+    lambda_fvm:  0.0        # <-- FVM residual OFF (SR-F defining switch)
     lambda_ic:   10.0
     lambda_bc:   30.0
-    lambda_data: 10.0       # SRH-2D snapshots (5 anchor times) as training data
+    lambda_data: 10.0
 
   component_weights:
     lambda_xi: 1.0
@@ -70,4 +71,4 @@ training:
   logging:
     print_freq: 100
     save_freq: 1000
-    checkpoint_dir: "./checkpoints/SR_B"
+    checkpoint_dir: "./checkpoints/SR_G"

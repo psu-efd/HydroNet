@@ -6,18 +6,22 @@ trained checkpoint is re-loaded, the network is evaluated at every cell
 centre at the relevant snapshot time, and per-figure matplotlib code
 assembles the panels into PDFs that the LaTeX manuscript references.
 
-Outputs (written to ``papers/fvm_pinn_swe/figures/``):
-    fig_ablation_contours.pdf / .png
-    fig_ablation_bar.pdf       / .png
-    fig_ablation_profiles.pdf  / .png
-    fig_savannah_contours.pdf  / .png
-    fig_savannah_l2_by_time.pdf / .png
+Outputs:
+    examples/FVM_PINN/block_in_channel/plots/
+        fig_ablation_contours.pdf / .png
+        fig_ablation_bar.pdf       / .png
+        fig_ablation_profiles.pdf  / .png
+    examples/FVM_PINN/savannah_river/plots/
+        fig_savannah_contours.pdf   / .png
+        fig_savannah_l2_by_time.pdf / .png
+
+Copy the desired figures into ``papers/fvm_pinn_swe/figures/`` manually.
 
 Usage
 -----
-    python scripts/build_manuscript_figures.py            # everything
-    python scripts/build_manuscript_figures.py --skip-sr  # only Case 3
-    python scripts/build_manuscript_figures.py --skip-bic # only Case 4
+    python examples/FVM_PINN/build_manuscript_figures.py            # everything
+    python examples/FVM_PINN/build_manuscript_figures.py --skip-sr  # only Case 3
+    python examples/FVM_PINN/build_manuscript_figures.py --skip-bic # only Case 4
 
 Each subcommand caches per-run prediction arrays in
 ``plan/figures/_data/<case>_predictions.npz`` so subsequent runs are
@@ -43,18 +47,19 @@ import matplotlib.tri as mtri
 import numpy as np
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from HydroNet import Config, FVM_SWE_PINN, FVM_PINNDataset  # noqa: E402
 
+plt.rc('text', usetex=True)  #allow the use of Latex for math expressions and equations
+plt.rc('font', family='serif') #specify the default font family to be "serif"
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-OUT_DIR = REPO_ROOT / "papers" / "fvm_pinn_swe" / "figures"
 CACHE_DIR = REPO_ROOT / "plan" / "figures" / "_data"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -64,6 +69,11 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 BIC_DIR = REPO_ROOT / "examples" / "FVM_PINN" / "block_in_channel"
 SR_DIR = REPO_ROOT / "examples" / "FVM_PINN" / "savannah_river"
+
+BIC_OUT_DIR = BIC_DIR / "plots"
+SR_OUT_DIR = SR_DIR / "plots"
+BIC_OUT_DIR.mkdir(parents=True, exist_ok=True)
+SR_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 BIC_RUNS = [
     ("BIC_A", "fvm_pinn_config_BIC_A.yaml", "ckpt_final.pt"),
@@ -79,12 +89,24 @@ BIC_T_END = 360.0
 
 SR_RUNS = [
     ("SR_A", "fvm_pinn_config_SR_A.yaml", "ckpt_final.pt"),
-    ("SR_B", "fvm_pinn_config_SR_B.yaml", "window_004/ckpt_final.pt"),
-    ("SR_C", "fvm_pinn_config_SR_C.yaml", "window_009/ckpt_final.pt"),
-    ("SR_E", "fvm_pinn_config_SR_E.yaml", "ckpt_final.pt"),
+    ("SR_B", "fvm_pinn_config_SR_B.yaml", "ckpt_final.pt"),
+    ("SR_C", "fvm_pinn_config_SR_C.yaml", "window_004/ckpt_final.pt"),
+    ("SR_D", "fvm_pinn_config_SR_D.yaml", "window_009/ckpt_final.pt"),
+    ("SR_E", "fvm_pinn_config_SR_E.yaml", "teacher_final.pt"),
     ("SR_F", "fvm_pinn_config_SR_F.yaml", "ckpt_final.pt"),
+    ("SR_G", "fvm_pinn_config_SR_G.yaml", "ckpt_final.pt"),
 ]
 SR_T_END = 3600.0
+
+# Per-time L2 source per Savannah run. Each run persists a printable
+# "PINN vs SRH-2D at each anchor time" table to ``runs/<id>/stdout.log``.
+SR_PER_TIME_SOURCES: Dict[str, Tuple[str, str]] = {
+    "SR_A": ("log",  "runs/SR_A/stdout.log"),
+    "SR_B": ("log",  "runs/SR_B/stdout.log"),
+    "SR_C": ("log",  "runs/SR_C/stdout.log"),
+    "SR_D": ("log",  "runs/SR_D/stdout.log"),
+    "SR_E": ("log",  "runs/SR_E/stdout.log"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +297,7 @@ def fig_ablation_contours(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
         ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
     cbar = fig.colorbar(tcf, ax=axes.ravel().tolist(), shrink=0.85, label=r"$|\mathbf{V}|$ [m/s]")
 
-    out = OUT_DIR / "fig_ablation_contours"
+    out = BIC_OUT_DIR / "fig_ablation_contours"
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -306,7 +328,7 @@ def fig_ablation_bar(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
             ax.text(b.get_x() + b.get_width() / 2, v * 1.10, f"{v:.2e}",
                     ha="center", va="bottom", fontsize=8)
 
-    out = OUT_DIR / "fig_ablation_bar"
+    out = BIC_OUT_DIR / "fig_ablation_bar"
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -349,7 +371,7 @@ def fig_ablation_profiles(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
     for ax in axes:
         ax.grid(True, alpha=0.3); ax.legend(fontsize=8, loc="best")
 
-    out = OUT_DIR / "fig_ablation_profiles"
+    out = BIC_OUT_DIR / "fig_ablation_profiles"
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -361,20 +383,20 @@ def fig_ablation_profiles(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
 # ---------------------------------------------------------------------------
 
 def fig_savannah_contours(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
-    """2x2 contours: SR_C h and |V|, vs SRH-2D h and |V|."""
+    """2x2 contours: best run (SR_D, window 10) h and |V|, vs SRH-2D h and |V|."""
     ref = preds["_ref"]
-    sr_c = preds.get("SR_C")
-    if sr_c is None:
-        logger.warning("SR_C predictions unavailable; skipping savannah contours")
+    best = preds.get("SR_D")
+    if best is None:
+        logger.warning("SR_D predictions unavailable; skipping savannah contours")
         return
 
     triang = _triangulation_from_meta(ref["node_xy"], ref["cell_nodes"])
     speed_ref = np.sqrt(ref["u"] ** 2 + ref["v"] ** 2)
-    speed_pred = np.sqrt(sr_c["u"] ** 2 + sr_c["v"] ** 2)
+    speed_pred = np.sqrt(best["u"] ** 2 + best["v"] ** 2)
 
     panels = [
-        ("FVM-PINN (SR-C)  h [m]",  sr_c["h"], "viridis"),
-        (r"FVM-PINN (SR-C)  $|\mathbf{V}|$ [m/s]", speed_pred, "hot_r"),
+        ("FVM-PINN (SR-D)  h [m]",  best["h"], "viridis"),
+        (r"FVM-PINN (SR-D)  $|\mathbf{V}|$ [m/s]", speed_pred, "hot_r"),
         ("SRH-2D  h [m]",  ref["h"], "viridis"),
         (r"SRH-2D  $|\mathbf{V}|$ [m/s]", speed_ref, "hot_r"),
     ]
@@ -386,7 +408,7 @@ def fig_savannah_contours(preds: Dict[str, Dict[str, np.ndarray]]) -> None:
         ax.set_aspect("equal"); ax.set_title(title, fontsize=10)
         ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
 
-    out = OUT_DIR / "fig_savannah_contours"
+    out = SR_OUT_DIR / "fig_savannah_contours"
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -409,19 +431,64 @@ def _parse_per_time_l2(stdout_path: Path) -> Dict[float, Tuple[float, float]]:
     return out
 
 
-def fig_savannah_l2_by_time() -> None:
-    """L2(h) and L2(|V|) vs time, for SR-A, SR-B, SR-C."""
-    runs = [("SR_A", "single net"),
-            ("SR_B", "window(5)"),
-            ("SR_C", "window(10)")]
-    colors = {"SR_A": "#d62728", "SR_B": "#1f77b4", "SR_C": "#2ca02c"}
+def _per_time_l2_from_json(json_path: Path) -> Dict[float, Tuple[float, float]]:
+    """Read the per-time L2 table from a HydroNet ``history_fvm_pinn_*.json``.
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.6), constrained_layout=True)
+    The file's ``metrics.per_time`` field is a list of
+    ``{"t": ..., "L2_h": ..., "L2_vel": ...}`` dicts (written by the
+    standard / teacher example scripts). Used as a fallback for runs
+    whose stdout was not preserved (e.g. SR-E).
+    """
+    if not json_path.exists():
+        return {}
+    with json_path.open() as f:
+        data = json.load(f)
+    out: Dict[float, Tuple[float, float]] = {}
+    for entry in (data.get("metrics") or {}).get("per_time", []) or []:
+        try:
+            t = float(entry["t"])
+            lh = float(entry["L2_h"])
+            lv = float(entry["L2_vel"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[t] = (lh, lv)
+    return out
+
+
+def _load_per_time_l2(run_id: str) -> Dict[float, Tuple[float, float]]:
+    """Dispatch to the log parser or JSON parser per ``SR_PER_TIME_SOURCES``."""
+    src = SR_PER_TIME_SOURCES.get(run_id)
+    if src is None:
+        return {}
+    kind, relpath = src
+    full = SR_DIR / relpath
+    if kind == "log":
+        return _parse_per_time_l2(full)
+    if kind == "json":
+        return _per_time_l2_from_json(full)
+    raise ValueError(f"Unknown per-time source kind {kind!r} for {run_id}")
+
+
+def fig_savannah_l2_by_time() -> None:
+    """L2(h) and L2(|V|) vs time, for SR-A...SR-E (the strategy ablation set)."""
+    runs = [("SR_A", "physics only"),
+            ("SR_B", "single net"),
+            ("SR_C", "window(5)"),
+            ("SR_D", "window(10)"),
+            ("SR_E", "FVM teacher")]
+    colors = {
+        "SR_A": "#7f7f7f",
+        "SR_B": "#d62728",
+        "SR_C": "#1f77b4",
+        "SR_D": "#2ca02c",
+        "SR_E": "#ff7f0e",
+    }
+
+    fig, axes = plt.subplots(2, 1, figsize=(5.5, 7.4), constrained_layout=True)
     for rid, label in runs:
-        log_path = SR_DIR / "runs" / rid / "stdout.log"
-        per_t = _parse_per_time_l2(log_path)
+        per_t = _load_per_time_l2(rid)
         if not per_t:
-            logger.warning("No per-time L2 data found for %s in %s", rid, log_path)
+            logger.warning("No per-time L2 data found for %s", rid)
             continue
         ts = sorted(per_t.keys())
         l2h = [per_t[t][0] for t in ts]
@@ -432,16 +499,25 @@ def fig_savannah_l2_by_time() -> None:
         l2v_clean = [per_t[t][1] for t in ts_v]
         axes[1].plot(ts_v, l2v_clean, "o-", color=colors[rid], label=f"{rid} ({label})", lw=1.6, ms=5)
 
-    axes[0].set_xlabel("t [s]"); axes[0].set_ylabel(r"$L_2(h)$ [m]")
-    axes[0].set_title(r"Depth error vs time")
+    axes[0].set_xlabel("t (s)", fontsize=18); 
+    axes[0].set_ylabel(r"$L_2(h)$ [m]", fontsize=18)
+    axes[0].set_title(r"Depth error vs time", fontsize=16)
     axes[0].set_yscale("log"); axes[0].grid(True, which="both", alpha=0.3)
-    axes[0].legend(fontsize=8)
-    axes[1].set_xlabel("t [s]"); axes[1].set_ylabel(r"$L_2(|\mathbf{V}|)$ [m/s]")
-    axes[1].set_title(r"Velocity error vs time (t=720 spike excluded)")
+    #set tick label font size
+    axes[0].tick_params(axis='both', which='major', labelsize=14)
+    axes[0].legend(fontsize=10)
+    axes[1].set_xlabel("t (s)", fontsize=18); 
+    axes[1].set_ylabel(r"$L_2(|\mathbf{u}|)$ (m/s)", fontsize=18)
+    axes[1].set_title(r"Velocity error vs time (t=720 s spike excluded)", fontsize=16)
+    axes[1].tick_params(axis='both', which='major', labelsize=14)
     axes[1].set_yscale("log"); axes[1].grid(True, which="both", alpha=0.3)
-    axes[1].legend(fontsize=8)
+    axes[1].legend(fontsize=10)
 
-    out = OUT_DIR / "fig_savannah_l2_by_time"
+    #add (a) and (b) labels to the subplots at the upper left corner
+    axes[0].text(-0.15, 1.05, "(a)", transform=axes[0].transAxes, fontsize=18)
+    axes[1].text(-0.15, 1.05, "(b)", transform=axes[1].transAxes, fontsize=18)
+
+    out = SR_OUT_DIR / "fig_savannah_l2_by_time"
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -478,7 +554,7 @@ def main() -> int:
             CACHE_DIR / "sr_predictions.npz",
             regenerate=args.regenerate,
         )
-        fig_savannah_contours(sr_preds)
+        #fig_savannah_contours(sr_preds)
         fig_savannah_l2_by_time()
 
     return 0

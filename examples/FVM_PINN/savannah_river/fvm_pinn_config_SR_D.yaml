@@ -1,13 +1,12 @@
-# SR-B — Standard (full-batch) FVM-PINN on Savannah River with SRH-2D anchor
+# SR-D — Time-window FVM-PINN (10 windows) on Savannah River
 #
-# Purpose: single-window baseline for the long-simulation Savannah case.
-# Expected to produce noticeable drift at late times because 2880 s is
-# long for a single PINN to enforce temporal causality.
+# Purpose: study the "more windows is not always better" trade-off.
+# Expected to be worse than SR-C (5 windows) because each window now
+# spans only 360 s and the accumulation of 10 handoff errors outweighs
+# the benefit of shorter per-window intervals. Fewer reference
+# snapshots per window also starves the data loss.
 #
-# Difference from base (teacher) config:
-#   - strategy: teacher -> standard (use explicit FVM residual + data loss
-#                                    instead of FVM-trajectory distillation)
-#   - loss_weights block replaces teacher.lambda_*  weights
+# This is a deliberate "over-windowing" demonstration.
 
 device:
   type: "cuda"
@@ -43,22 +42,28 @@ data:
   srh2d_h5_file: "data/Savana_XMDFC.h5"
 
 training:
-  strategy: "standard"
+  strategy: "window"
   t_start: 0.0
   t_end:   3600.0
 
-  adam_epochs: 10000
+  adam_epochs: 3000         # per window -> 10 * 3000 = 30k total
   adam_lr: 1.0e-3
   adam_lr_decay: 0.5
-  adam_decay_every: 2500
-  lbfgs_epochs: 500
+  adam_decay_every: 1000
+  lbfgs_epochs: 200
   n_time_samples: 10
+
+  window:
+    n_windows: 10           # <-- over-windowing (SR-C defining switch)
+    overlap_frac: 0.10
+    warm_start: true
+    lambda_continuity: 5.0
 
   loss_weights:
     lambda_fvm:  1.0
     lambda_ic:   10.0
     lambda_bc:   30.0
-    lambda_data: 10.0       # SRH-2D snapshots (5 anchor times) as training data
+    lambda_data: 10.0
 
   component_weights:
     lambda_xi: 1.0
@@ -70,4 +75,4 @@ training:
   logging:
     print_freq: 100
     save_freq: 1000
-    checkpoint_dir: "./checkpoints/SR_B"
+    checkpoint_dir: "./checkpoints/SR_D"

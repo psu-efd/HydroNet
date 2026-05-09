@@ -6,9 +6,9 @@
 #
 # Usage
 # -----
-#   bash scripts/run_all_experiments.sh                 # run everything
-#   bash scripts/run_all_experiments.sh BIC_A BIC_H     # run a subset
-#   DRY_RUN=1 bash scripts/run_all_experiments.sh       # print commands only
+#   bash examples/FVM_PINN/run_all_experiments.sh                 # run everything
+#   bash examples/FVM_PINN/run_all_experiments.sh BIC_A BIC_H     # run a subset
+#   DRY_RUN=1 bash examples/FVM_PINN/run_all_experiments.sh       # print commands only
 #
 # Pre-reqs
 # --------
@@ -38,15 +38,17 @@
 #   BIC-F   : 2D block, standard + 200 sparse measurements with 5% noise
 #   BIC-G   : 2D block, data-only (lambda_fvm = 0) + 200 sparse measurements
 #   BIC-H   : 2D block, data-only (lambda_fvm = 0) + dense SRH-2D snapshots
-#   SR-A    : Savannah, standard + SRH-2D dense
-#   SR-B    : Savannah, window(5) + SRH-2D dense
-#   SR-C    : Savannah, window(10) + SRH-2D dense (over-windowing)
-#   SR-E    : Savannah, standard + 200 sparse velocity measurements only
-#   SR-F    : Savannah, standard, lambda_fvm = 0 + dense SRH-2D
+#   SR-A    : Savannah, physics only (no data of any kind) — analogue of BIC-A
+#   SR-B    : Savannah, standard + SRH-2D dense
+#   SR-C    : Savannah, window(5) + SRH-2D dense
+#   SR-D    : Savannah, window(10) + SRH-2D dense (over-windowing)
+#   SR-E    : Savannah, teacher mode — in-loop FVM trajectory + SRH-2D anchor
+#   SR-F    : Savannah, standard + 200 sparse velocity measurements only
+#   SR-G    : Savannah, standard, lambda_fvm = 0 + dense SRH-2D
 
 set -euo pipefail
 
-REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." &>/dev/null && pwd)"
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
 EXAMPLES="$REPO_ROOT/examples/FVM_PINN"
 LOG_CSV="$REPO_ROOT/plan/experiment_log.csv"
 
@@ -80,8 +82,10 @@ declare -a RUN_SPEC=(
   "SR_A   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_A.yaml"
   "SR_B   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_B.yaml"
   "SR_C   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_C.yaml"
+  "SR_D   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_D.yaml"
   "SR_E   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_E.yaml"
   "SR_F   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_F.yaml"
+  "SR_G   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_G.yaml"
 )
 
 # Parse filter args (if any)

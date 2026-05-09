@@ -50,6 +50,9 @@ from HydroNet import Config, FVM_SWE_PINN, FVM_PINNTrainer, FVM_PINNDataset
 from HydroNet.models.FVM_PINN._internal.mesh.mesh_topology import build_mesh
 from HydroNet.models.FVM_PINN._internal.mesh.srh2d_reader import SRH2DRawData
 
+plt.rc('text', usetex=True)  #allow the use of Latex for math expressions and equations
+plt.rc('font', family='serif') #specify the default font family to be "serif"
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -211,18 +214,29 @@ def evaluate_and_plot(model, config, mesh, out_dir: Path):
     # Profiles
     out_dir.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    axes[0].plot(xc, h_exact, "k-",  lw=2, label="Stoker (exact)")
+    axes[0].plot(xc, h_exact, "k-",  lw=2, label="Exact solution")
     axes[0].plot(xc, h_pred,  "r--", lw=2, label="FVM-PINN")
-    axes[0].set_xlabel("x [m]"); axes[0].set_ylabel("h [m]")
-    axes[0].set_title(f"Water depth at t = {t_end} s")
-    axes[0].legend(); axes[0].grid(True, alpha=0.3)
+    #tick label sizes
+    axes[0].tick_params(axis='both', which='major', labelsize=14)
+    axes[0].set_xlabel("x (m)", fontsize=16); 
+    axes[0].set_ylabel("h (m)", fontsize=16)
+    axes[0].set_title(f"Water depth", fontsize=16)
+    axes[0].legend(fontsize=14); 
+    axes[0].grid(True, alpha=0.3)
 
-    axes[1].plot(xc, u_exact, "k-",  lw=2, label="Stoker (exact)")
+    axes[1].plot(xc, u_exact, "k-",  lw=2, label="Exact solution")
     axes[1].plot(xc, u_pred,  "r--", lw=2, label="FVM-PINN")
-    axes[1].set_xlabel("x [m]"); axes[1].set_ylabel("u [m/s]")
-    axes[1].set_title(f"Velocity at t = {t_end} s")
-    axes[1].legend(); axes[1].grid(True, alpha=0.3)
+    #tick label sizes
+    axes[1].tick_params(axis='both', which='major', labelsize=14)
+    axes[1].set_xlabel("x (m)", fontsize=16); axes[1].set_ylabel("u (m/s)", fontsize=16)
+    axes[1].set_title(f"Velocity", fontsize=16)
+    axes[1].legend(fontsize=14); 
+    axes[1].grid(True, alpha=0.3)
     plt.tight_layout()
+
+    #add (a) and (b) labels to the subplots on the top left corner
+    axes[0].text(-0.1, 1.05, "(a)", transform=axes[0].transAxes, fontsize=14, fontweight='bold')
+    axes[1].text(-0.1, 1.05, "(b)", transform=axes[1].transAxes, fontsize=14, fontweight='bold')
 
     path = out_dir / "dam_break_comparison.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")

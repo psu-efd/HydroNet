@@ -25,6 +25,7 @@ import torch.optim as optim
 
 from ..pinn.network import SWENet, NetworkConfig
 from ..pinn.loss import FVMPINNLoss, LossConfig
+from .memory_tracker import MemoryTracker
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,12 @@ class BaseTrainer(ABC):
         self.output_dir = Path(trainer_cfg.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Optional GPU memory tracker; attached externally by the
+        # FVM_PINNTrainer wrapper or by TimeWindowTrainer (shared across
+        # per-window trainers). None by default so non-instrumented callers
+        # see no behavioural change.
+        self.memory_tracker: Optional[MemoryTracker] = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -223,6 +230,9 @@ class BaseTrainer(ABC):
         if self.cfg.adam_epochs <= 0:
             return
         logger.info(f"Adam: {self.cfg.adam_epochs} epochs, lr={self.cfg.adam_lr}")
+        if self.memory_tracker is not None:
+            self.memory_tracker.reset_peak("adam-start")
+            self.memory_tracker.sample("adam", 0)
         optimizer = optim.Adam(self.network.parameters(), lr=self.cfg.adam_lr)
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, self.cfg.adam_decay_every, self.cfg.adam_lr_decay
@@ -238,6 +248,8 @@ class BaseTrainer(ABC):
             if (epoch + 1) % self.cfg.log_every == 0:
                 lr = optimizer.param_groups[0]["lr"]
                 self._log(f"Adam [{epoch+1}/{self.cfg.adam_epochs}]", losses, lr)
+                if self.memory_tracker is not None:
+                    self.memory_tracker.sample("adam", epoch + 1)
             if (epoch + 1) % self.cfg.checkpoint_every == 0:
                 self._save_checkpoint(f"adam_{epoch+1}")
 
@@ -245,6 +257,9 @@ class BaseTrainer(ABC):
         if self.cfg.lbfgs_epochs <= 0:
             return
         logger.info(f"L-BFGS: {self.cfg.lbfgs_epochs} steps")
+        if self.memory_tracker is not None:
+            self.memory_tracker.reset_peak("lbfgs-start")
+            self.memory_tracker.sample("lbfgs", 0)
         optimizer = optim.LBFGS(
             self.network.parameters(),
             lr=self.cfg.lbfgs_lr,
@@ -262,6 +277,8 @@ class BaseTrainer(ABC):
             counter[0] += 1
             if counter[0] % self.cfg.log_every == 0:
                 self._log(f"L-BFGS [{counter[0]}]", losses)
+                if self.memory_tracker is not None:
+                    self.memory_tracker.sample("lbfgs", counter[0])
             return losses["total"]
 
         for _ in range(self.cfg.lbfgs_epochs):

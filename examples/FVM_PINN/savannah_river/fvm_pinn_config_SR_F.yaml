@@ -1,14 +1,12 @@
-# SR-F — Data-only baseline (no FVM loss) on Savannah River
+# SR-F — FVM-PINN + 200 sparse velocity measurements (Savannah River)
 #
-# Purpose: pre-empt the reviewer question "is a supervised MLP fit to
-# SRH-2D snapshots enough?" for the real-world reach. Same SRH-2D anchor
-# snapshots as SR-A, same network, lambda_fvm = 0 so only the data loss
-# drives training.
+# Analogue of BIC-B on the real-world Savannah reach. The question is
+# whether the simple-case "200 measurements rescue the training" result
+# generalises to 1306 cells + complex bathymetry + 3600 s simulation.
 #
-# Expected behaviour: fits the 5 anchor times well, but diverges in
-# between — the lack of physics prevents the network from interpolating
-# consistently between snapshots. Compare time-series L2 against SR-A
-# (standard + FVM) and SR-B (window + FVM).
+# Expected to perform noticeably worse than SR-B (which uses 4 dense
+# SRH-2D snapshots across the full time window); this contrast is the
+# paper's argument for multi-snapshot reference data on real cases.
 
 device:
   type: "cuda"
@@ -42,6 +40,13 @@ initial_condition:
 data:
   srhhydro: "data/savana_SI.srhhydro"
   srh2d_h5_file: "data/Savana_XMDFC.h5"
+  measurements:
+    mode: "sparse"
+    n_points: 200
+    times: [3600.0]            # sparse measurements at the final snapshot only
+    variables: ["hu", "hv"]
+    noise_sigma: 0.0
+    seed: 42
 
 training:
   strategy: "standard"
@@ -56,7 +61,7 @@ training:
   n_time_samples: 10
 
   loss_weights:
-    lambda_fvm:  0.0        # <-- FVM residual OFF (SR-F defining switch)
+    lambda_fvm:  1.0
     lambda_ic:   10.0
     lambda_bc:   30.0
     lambda_data: 10.0

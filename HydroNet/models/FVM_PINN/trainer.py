@@ -41,6 +41,7 @@ from ._internal.trainers import (
     TimeWindowTrainer, TimeWindowConfig,
     TeacherTrainer, TeacherTrainerConfig,
 )
+from ._internal.trainers.memory_tracker import MemoryTracker
 from ._internal.pinn.loss import LossConfig, FVMPINNLoss
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,19 @@ class FVM_PINNTrainer:
             ref_data=dataset.get_ref_data(),
         )
 
+        # ---- GPU memory tracking ----
+        # Always attach a tracker. On CPU it is a no-op; on CUDA it logs a
+        # ``MEM`` line every ``log_every`` epochs and saves
+        # ``memory_history.json`` next to the checkpoints when train() finishes.
+        ckpt_dir = Path(
+            config.get('training.logging.checkpoint_dir',
+                       config.get('training.output_dir', 'outputs'))
+        )
+        run_label = ckpt_dir.name or "fvm_pinn"
+        self._memory_tracker = MemoryTracker(self.device, label=run_label)
+        self._trainer.memory_tracker = self._memory_tracker
+        self._memory_history_path = ckpt_dir / "memory_history.json"
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -148,6 +162,12 @@ class FVM_PINNTrainer:
             checkpoint.
         """
         final_loss = self._trainer.train()
+
+        # Persist GPU memory history (no-op on CPU — empty records list).
+        try:
+            self._memory_tracker.save_json(self._memory_history_path)
+        except Exception as exc:  # noqa: BLE001 — memory log is best-effort
+            logger.warning(f"Could not save memory_history.json: {exc}")
 
         # Build a lightweight predictions/targets bundle in the same spirit
         # as PINNTrainer (which returns a JSON-serialisable dict the example

@@ -42,6 +42,7 @@ import numpy as np
 import torch
 
 from .base_trainer import BaseTrainer, BaseTrainerConfig, _to_device
+from .memory_tracker import MemoryTracker
 from .standard_trainer import StandardTrainer, StandardTrainerConfig
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,10 @@ class TimeWindowTrainer:
 
         self.windows: List[Tuple[float, float]] = []   # (t_lo, t_hi) per window
         self.trainers: List[BaseTrainer] = []
+
+        # Optional GPU memory tracker; shared across all per-window trainers
+        # so all samples land on the same global wall-clock origin.
+        self.memory_tracker: Optional[MemoryTracker] = None
 
         # Combined history (concatenated across windows)
         self.history: Dict[str, List[float]] = {
@@ -186,6 +191,13 @@ class TimeWindowTrainer:
 
             # Reset normalisation to this window's time range
             trainer._set_normalisation()
+
+            # Share the global memory tracker (if any) with this window so
+            # its Adam/L-BFGS samples land on the orchestrator's wall-clock
+            # origin. Each window's reset_peak() only spans that window.
+            if self.memory_tracker is not None:
+                trainer.memory_tracker = self.memory_tracker
+                self.memory_tracker.sample(f"window-{wk}-start", 0)
 
             final_loss = trainer.train()
             self.trainers.append(trainer)

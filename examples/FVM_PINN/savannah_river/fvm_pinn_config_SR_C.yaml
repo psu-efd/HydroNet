@@ -1,12 +1,11 @@
-# SR-C — Time-window FVM-PINN (10 windows) on Savannah River
+# SR-C — Time-window FVM-PINN (5 windows) on Savannah River
 #
-# Purpose: study the "more windows is not always better" trade-off.
-# Expected to be worse than SR-B (5 windows) because each window now
-# spans only 360 s and the accumulation of 10 handoff errors outweighs
-# the benefit of shorter per-window intervals. Fewer reference
-# snapshots per window also starves the data loss.
+# Purpose: demonstrate causality enforcement via time-window decomposition
+# on a long simulation. Expected to beat SR-B (single-window standard) by
+# ~5-7x on L2(h) because each sub-network spans only ~720 s (vs 3600 s).
 #
-# This is a deliberate "over-windowing" demonstration.
+# Per-window trainer inherits the shared training.* block; only
+# training.window.* controls the window decomposition.
 
 device:
   type: "cuda"
@@ -46,15 +45,16 @@ training:
   t_start: 0.0
   t_end:   3600.0
 
-  adam_epochs: 3000         # per window -> 10 * 3000 = 30k total
+  # Per-window budgets (StandardTrainer runs inside each window)
+  adam_epochs: 4000         # per window -> 5 * 4000 = 20k total
   adam_lr: 1.0e-3
   adam_lr_decay: 0.5
-  adam_decay_every: 1000
-  lbfgs_epochs: 200
+  adam_decay_every: 1500
+  lbfgs_epochs: 300
   n_time_samples: 10
 
   window:
-    n_windows: 10           # <-- over-windowing (SR-C defining switch)
+    n_windows: 5
     overlap_frac: 0.10
     warm_start: true
     lambda_continuity: 5.0

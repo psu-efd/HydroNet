@@ -1,13 +1,22 @@
-# SR-A — Standard (full-batch) FVM-PINN on Savannah River with SRH-2D anchor
+# SR-A — Physics-only FVM-PINN on Savannah River (no data guidance)
 #
-# Purpose: single-window baseline for the long-simulation Savannah case.
-# Expected to produce noticeable drift at late times because 2880 s is
-# long for a single PINN to enforce temporal causality.
+# Purpose: real-world counterpart to BIC-A. The network is trained with
+# the FVM residual + initial condition + boundary conditions only —
+# no SRH-2D anchor, no sparse measurements, no teacher trajectory.
 #
-# Difference from base (teacher) config:
-#   - strategy: teacher -> standard (use explicit FVM residual + data loss
-#                                    instead of FVM-trajectory distillation)
-#   - loss_weights block replaces teacher.lambda_*  weights
+# Expected behaviour: poor accuracy at t = 3600 s. With a 1-hour
+# simulation horizon on a 1306-cell unstructured mesh, a single PINN
+# without any data signal struggles to enforce temporal causality and
+# typically drifts at late times (the well-known long-horizon PINN
+# failure mode). This run is included specifically to motivate the
+# data-guided variants (SR-B...SR-G) and to mirror the BIC-A vs.
+# BIC-B...H contrast in Case 3.
+#
+# Difference from SR-B (standard + SRH-2D anchor):
+#   - lambda_data: 10.0 -> 0.0  (the only structural change)
+#
+# All other settings (network, IC, BC, optimizer schedule) are
+# identical to SR-B for a clean ablation.
 
 device:
   type: "cuda"
@@ -58,7 +67,7 @@ training:
     lambda_fvm:  1.0
     lambda_ic:   10.0
     lambda_bc:   30.0
-    lambda_data: 10.0       # SRH-2D snapshots (5 anchor times) as training data
+    lambda_data: 0.0        # <-- physics-only: SR-A defining switch
 
   component_weights:
     lambda_xi: 1.0
