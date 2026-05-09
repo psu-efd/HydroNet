@@ -7,6 +7,9 @@ settings*.json.bak
 *.backup
 
 plan/
+temp/
+.claude/
+examples/FVM_PINN/**/checkpoints_*/
 
 # Project specific ignores
 *.slurm.o*
