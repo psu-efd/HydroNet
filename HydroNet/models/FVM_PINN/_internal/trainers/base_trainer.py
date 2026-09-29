@@ -268,10 +268,11 @@ class BaseTrainer(ABC):
             line_search_fn="strong_wolfe",
         )
         counter = [0]
+        batch = {}
 
         def closure():
             optimizer.zero_grad()
-            losses = self._step()
+            losses = self._step(t=batch["t"], cell_mask=batch["cell_mask"])
             losses["total"].backward()
             self._record(losses)
             counter[0] += 1
@@ -282,13 +283,33 @@ class BaseTrainer(ABC):
             return losses["total"]
 
         for _ in range(self.cfg.lbfgs_epochs):
+            # L-BFGS evaluates the closure many times per step (inner iterations
+            # + strong-Wolfe line search) and compares losses/gradients across
+            # those evaluations, so the objective must be fixed within a step.
+            # Draw the time samples and cell mask once per outer step; they
+            # still vary between steps so the whole time window is covered.
+            batch["t"] = self._sample_times().detach()
+            batch["cell_mask"] = self._make_cell_mask()
             optimizer.step(closure)
 
-    def _step(self) -> Dict[str, torch.Tensor]:
-        """Single training step: sample times + cell mask, compute losses."""
+    def _step(
+        self,
+        t: Optional[torch.Tensor] = None,
+        cell_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Single training step: compute losses.
+
+        Samples fresh times and a fresh cell mask unless they are given
+        (the L-BFGS phase passes the same ones to every closure evaluation
+        within an outer step).
+        """
         self.network.train()
-        t = self._sample_times()
-        cell_mask = self._make_cell_mask()
+        if t is None:
+            t = self._sample_times()
+            cell_mask = self._make_cell_mask()
+        else:
+            t = t.clone().requires_grad_(True)
         return self.loss_fn(
             self.network, t,
             ic_data=self.ic_data,
