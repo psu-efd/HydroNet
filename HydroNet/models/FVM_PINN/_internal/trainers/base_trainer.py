@@ -370,6 +370,9 @@ class BaseTrainer(ABC):
         ]
         if losses.get("data", None) is not None and losses["data"].item() > 0:
             parts.append(f"data={losses['data'].item():.3e}")
+        if "mass" in losses:
+            parts.append(f"mass={losses['mass'].item():.3e}")
+            parts.append(f"imbal={100 * losses['mass_global'].item():.1f}%")
         if lr is not None:
             parts.append(f"lr={lr:.2e}")
         logger.info(f"{prefix}  " + "  ".join(parts))

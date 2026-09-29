@@ -16,12 +16,13 @@ where:
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
+from ..fvm.conservation import MassBalance
 from ..fvm.riemann_solver import compute_fvm_residual
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,13 @@ class LossConfig:
     lambda_hv: float = 1.0
     h_dry: float = 1e-4            # wet/dry threshold
     use_grad_checkpoint: bool = False
+    # Mass conservation on nested control volumes along the channel
+    # (see fvm/conservation.py). Full-batch only.
+    use_mass: bool = False
+    lambda_mass: float = 1.0
+    mass_n_regions: int = 10
+    mass_upstream_bc: Tuple[int, ...] = ()   # default: inlet-q BC ids
+    mass_flux_scale: Optional[float] = None  # m³/s; default: prescribed inlet Q
 
 
 class FVMPINNLoss(nn.Module):
@@ -93,6 +101,31 @@ class FVMPINNLoss(nn.Module):
         else:
             self.h_still = torch.zeros(n_cells, device=device, dtype=dtype)
 
+        self.mass_balance: Optional[MassBalance] = None
+        if cfg.use_mass:
+            self.mass_balance = MassBalance(
+                mesh_data, cfg.mass_upstream_bc or None, cfg.mass_n_regions
+            )
+            if cfg.mass_flux_scale is not None:
+                self.mass_flux_scale = float(cfg.mass_flux_scale)
+            else:
+                q_in = [
+                    float(mesh_data["bc_ghost"][b]["value"])
+                    for b in self.mass_balance.upstream_bc
+                    if mesh_data.get("bc_ghost", {}).get(b, {}).get("type") == "inlet-q"
+                ]
+                if not q_in:
+                    raise ValueError(
+                        "training.mass_conservation.flux_scale is required when "
+                        "the upstream BC has no prescribed inlet discharge."
+                    )
+                self.mass_flux_scale = sum(q_in)
+            logger.info(
+                f"Mass conservation: {self.mass_balance.n_regions} nested regions "
+                f"from BC {self.mass_balance.upstream_bc}, "
+                f"flux scale {self.mass_flux_scale:.3g} m³/s"
+            )
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -118,6 +151,9 @@ class FVMPINNLoss(nn.Module):
             "fvm_hu":    fvm_result["fvm_hu"],
             "fvm_hv":    fvm_result["fvm_hv"],
         }
+        if "mass" in fvm_result:
+            losses["mass"] = fvm_result["mass"]
+            losses["mass_global"] = fvm_result["mass_global"]
 
         # IC loss with per-equation breakdown
         if ic_data is not None:
@@ -162,6 +198,8 @@ class FVMPINNLoss(nn.Module):
             + cfg.lambda_bc   * losses["bc"]
             + cfg.lambda_data * losses["data"]
         )
+        if "mass" in losses:
+            losses["total"] = losses["total"] + cfg.lambda_mass * losses["mass"]
         return losses
 
     # ------------------------------------------------------------------
@@ -193,6 +231,11 @@ class FVMPINNLoss(nn.Module):
         n_cells = cell_xy.shape[0]
 
         if cell_mask is not None:
+            if self.mass_balance is not None:
+                raise ValueError(
+                    "Mass-conservation loss needs every cell of each region; it is "
+                    "not supported with a cell mask (minibatch strategy)."
+                )
             stencil_idx, eval_mask = _build_stencil(
                 cell_mask, self.mesh_data["face_left"], self.mesh_data["face_right"]
             )
@@ -251,12 +294,22 @@ class FVMPINNLoss(nn.Module):
             + self.cfg.lambda_hv * l_hv
         )
 
-        return {
+        out = {
             "fvm": total_res.sum() / n_t,
             "fvm_xi": l_xi.sum() / n_t,
             "fvm_hu": l_hu.sum() / n_t,
             "fvm_hv": l_hv.sum() / n_t,
         }
+
+        # Region mass balances: area-weighted signed sums of the continuity
+        # residual over all cells (wet or not) — a systematic loss or gain of
+        # water cannot average out here the way it does cell-by-cell.
+        if self.mass_balance is not None:
+            E = self.mass_balance.imbalance(residual[..., 0])     # [n_t, N]
+            E_rel = E / self.mass_flux_scale
+            out["mass"] = (E_rel ** 2).mean()
+            out["mass_global"] = E_rel[:, -1].abs().mean().detach()
+        return out
 
     def _network_forward(self, network: nn.Module, xyt: torch.Tensor) -> torch.Tensor:
         if self.cfg.use_grad_checkpoint:

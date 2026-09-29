@@ -28,6 +28,7 @@ from .models.PI_DeepONet.data import create_pi_deeponet_dataloader
 from .utils.config import Config
 from .utils.gmsh_to_points import gmsh2D_to_points
 from .utils.predict_on_gmsh import predict_on_gmsh2d_mesh
+from .models.FVM_PINN.conservation import mass_balance_report, plot_mass_balance
 from .utils.pi_deeponet_utils import (
     pi_deeponet_train,
     pi_deeponet_test,
@@ -66,6 +67,8 @@ __all__ = [
     "Config",
     "gmsh2D_to_points",
     "predict_on_gmsh2d_mesh",
+    "mass_balance_report",
+    "plot_mass_balance",
     "plot_solution",
     "plot_loss_history",
     "pi_deeponet_train",

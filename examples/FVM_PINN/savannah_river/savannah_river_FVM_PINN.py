@@ -46,7 +46,10 @@ project_root = os.path.dirname(examples_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from HydroNet import Config, FVM_SWE_PINN, FVM_PINNTrainer, FVM_PINNDataset
+from HydroNet import (
+    Config, FVM_SWE_PINN, FVM_PINNTrainer, FVM_PINNDataset,
+    mass_balance_report, plot_mass_balance,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
@@ -340,6 +343,28 @@ def main() -> None:
     metrics = evaluate_and_plot(model, config, dataset, out_dir, trainer=trainer)
     if history:
         plot_loss_history(history, out_dir)
+
+    # ---- Mass balance (SRH-2D states through the same fluxes as reference) ----
+    if str(config.get("training.strategy", "standard")) == "window":
+        logger.info("Mass balance skipped: window strategy has one network per window.")
+    else:
+        snaps = load_all_srh2d_snapshots(
+            Path(str(config.get_required_config("data.srh2d_h5_file")))
+        )
+        mb = mass_balance_report(
+            model, dataset, snaps["times"], ref_states=snaps,
+            n_regions=int(config.get("training.mass_conservation.n_regions", 10)),
+        )
+        plot_mass_balance(mb, out_dir / "mass_balance.png")
+        logger.info("Mass balance (PINN | SRH-2D through the same fluxes):")
+        for e in mb["per_time"]:
+            logger.info(
+                f"  t={e['t']:7.1f}s  Q_in={e['Q_in']:8.2f}  Q_out={e['Q_out']:8.2f}  "
+                f"dV/dt={e['dVdt']:8.2f}  imbalance={e['imbalance_pct']:6.1f}%  "
+                f"Q mid-reach={e['Q_cut'][len(e['Q_cut']) // 2]:8.2f} | "
+                f"SRH Q mid-reach={e['ref_Q_cut'][len(e['ref_Q_cut']) // 2]:8.2f}"
+            )
+        metrics["mass_balance"] = mb
 
     if not args.post_only or history:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

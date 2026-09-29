@@ -323,7 +323,8 @@ def compute_fvm_residual(
     mesh_data: dict,
     h_still: torch.Tensor,
     h_small: float = 1e-2,
-) -> torch.Tensor:
+    return_face_flux: bool = False,
+):
     """
     Compute FVM residual for the well-balanced SWE.
 
@@ -343,10 +344,14 @@ def compute_fvm_residual(
     mesh_data : dict with face/cell topology and bed data
     h_still : [n_cells]  still water depth reference
     h_small : float  dry threshold
+    return_face_flux : bool  also return the face fluxes (for mass-balance
+        diagnostics)
 
     Returns
     -------
     residual : [..., n_cells, 3]  R = flux_divergence - source
+    face_flux : [..., n_faces, 3]  numerical flux × face length, oriented
+        left → right (only when ``return_face_flux``)
     """
     face_left = mesh_data["face_left"]
     face_normal = mesh_data["face_normal"]
@@ -400,6 +405,8 @@ def compute_fvm_residual(
     source = compute_source_terms(Q_cells, mesh_data, h_still, h_small)
 
     # Residual: R = flux_divergence - source
+    if return_face_flux:
+        return flux_div - source, flux_scaled
     return flux_div - source
 
 

@@ -242,6 +242,33 @@ class FVM_PINNTrainer:
             use_grad_checkpoint=bool(
                 cfg.get('training.use_grad_checkpoint', False)
             ),
+            **self._mass_conservation_kwargs(),
+        )
+
+    def _mass_conservation_kwargs(self) -> dict:
+        """LossConfig fields from the optional ``training.mass_conservation`` block."""
+        mc = 'training.mass_conservation'
+        cfg = self.config
+        if not bool(cfg.get(f'{mc}.enabled', False)):
+            return {}
+        if self.strategy == 'minibatch':
+            raise ValueError(
+                "training.mass_conservation needs full-batch residuals; it is not "
+                "supported with training.strategy: minibatch."
+            )
+        if self.strategy == 'teacher':
+            logger.warning(
+                "training.mass_conservation is ignored by the teacher strategy "
+                "(it uses its own distillation loss)."
+            )
+            return {}
+        flux_scale = cfg.get(f'{mc}.flux_scale', None)
+        return dict(
+            use_mass=True,
+            lambda_mass=float(cfg.get(f'{mc}.lambda_mass', 1.0)),
+            mass_n_regions=int(cfg.get(f'{mc}.n_regions', 10)),
+            mass_upstream_bc=tuple(int(b) for b in (cfg.get(f'{mc}.upstream_bc', None) or ())),
+            mass_flux_scale=None if flux_scale is None else float(flux_scale),
         )
 
     def _fill_base_cfg(self, cfg_obj: BaseTrainerConfig) -> BaseTrainerConfig:
