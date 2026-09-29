@@ -18,9 +18,9 @@ import vtk
 from vtk import vtkUnstructuredGridReader, vtkUnstructuredGrid
 from vtk.util import numpy_support as VN
 
-def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileName, bNodal, 
+def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileName, bNodal,
                           mesh_stats=None, data_stats=None,
-                          time_pred=None, device=None):
+                          time_pred=None, device=None, gradients_vtkFileName=None):
     """Make prediction on a 2D unstructured vtk mesh.
 
     Parameters
@@ -43,6 +43,10 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
         Time value for unsteady predictions. If None, assumes steady state
     device : torch.device, optional
         Device to run predictions on. If None, uses model's device
+    gradients_vtkFileName : str, optional
+        If provided, also compute the dimensional spatial gradients of h, u, v
+        (via autograd) and save them to this VTK file. The caller must not wrap
+        this function in torch.no_grad() in that case.
 
     Returns
     -------
@@ -119,9 +123,6 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
 
     print(f"prediction_coordinates after normalization: {prediction_coordinates}")
 
-    with torch.no_grad():
-        predictions = model(prediction_coordinates)
-
     #denormalize the predictions
     h_mean = data_stats['h_mean']
     h_std = data_stats['h_std']
@@ -129,7 +130,32 @@ def predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list,
     u_std = data_stats['u_std']
     v_mean = data_stats['v_mean']
     v_std = data_stats['v_std']
-    
+
+    if gradients_vtkFileName is None:
+        with torch.no_grad():
+            predictions = model(prediction_coordinates)
+    else:
+        prediction_coordinates.requires_grad_(True)
+        with torch.enable_grad():
+            predictions = model(prediction_coordinates)
+
+            # d(normalized output)/d(normalized input), then convert to dimensional gradients
+            Lx = x_max - x_min
+            Ly = y_max - y_min
+            pde_gradients = {}
+            for name, idx, std in (('h', 0, h_std), ('u', 1, u_std), ('v', 2, v_std)):
+                grad = torch.autograd.grad(predictions[:, idx], prediction_coordinates,
+                                           grad_outputs=torch.ones_like(predictions[:, idx]),
+                                           retain_graph=True)[0]
+                pde_gradients[f'd{name}_dx'] = grad[:, 0] * std / Lx
+                pde_gradients[f'd{name}_dy'] = grad[:, 1] * std / Ly
+
+        predictions = predictions.detach()
+
+        gradients_to_vtk(pde_gradients, mesh=mesh, cells_list=cells_list,
+                         vtkFileName=gradients_vtkFileName, bNodal=bNodal)
+        print(f"Gradients saved to {gradients_vtkFileName}")
+
     predictions[:, 0] = predictions[:, 0] * h_std + h_mean
     predictions[:, 1] = predictions[:, 1] * u_std + u_mean
     predictions[:, 2] = predictions[:, 2] * v_std + v_mean
@@ -275,6 +301,50 @@ def write_to_vtk(mesh, cells_list, prediction_variable_names_list, predictions, 
     )
 
     # Write to VTK
+    meshio.write(vtkFileName, out_mesh, binary=False)
+
+
+def gradients_to_vtk(fields, mesh, cells_list, vtkFileName, bNodal):
+    """Write a dictionary of scalar fields (e.g. PDE gradients/residuals) to a VTK file.
+
+    Parameters
+    ----------
+    fields : dict
+        Mapping of field name -> 1D tensor/array (or [N, 1]). N must equal the number
+        of mesh points (bNodal=True) or the total number of cells (bNodal=False),
+        in the same order as returned by get_prediction_coordinates.
+    mesh : meshio.Mesh
+        Original mesh object
+    cells_list : list
+        List of cell blocks
+    vtkFileName : str
+        Output VTK file name
+    bNodal : bool
+        If True, write nodal data; if False, write cell data
+    """
+    fields_np = {}
+    for name, value in fields.items():
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        fields_np[name] = np.asarray(value).reshape(-1)
+
+    point_data = {}
+    cell_data = {}
+
+    if bNodal:
+        point_data = fields_np
+    else:
+        # Split the flat per-cell arrays into one array per cell block
+        block_ends = np.cumsum([cell_block.data.shape[0] for cell_block in cells_list])[:-1]
+        cell_data = {name: np.split(data, block_ends) for name, data in fields_np.items()}
+
+    out_mesh = meshio.Mesh(
+        points=mesh.points,
+        cells=cells_list,
+        point_data=point_data,
+        cell_data=cell_data
+    )
+
     meshio.write(vtkFileName, out_mesh, binary=False)
 
 

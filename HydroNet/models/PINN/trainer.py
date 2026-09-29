@@ -10,8 +10,10 @@ from tqdm import tqdm
 import numpy as np
 import time
 import shutil
+import meshio
 
 from ...utils.config import Config
+from ...utils.predict_on_vtk import get_prediction_coordinates, gradients_to_vtk
 from .data import PINNDataset
 from .model import SWE_PINN  # Direct import instead of relative import
 
@@ -155,6 +157,26 @@ class PINNTrainer:
         self.checkpoint_dir = self.config.get_required_config('training.logging.checkpoint_dir')
         self.save_freq = self.config.get_required_config('training.logging.save_freq')
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # Diagnostic output: dimensional PDE gradients/residuals at the PDE points written
+        # onto a reference VTK mesh (PDE points must be that mesh's cell centers, in order).
+        # Enabled only when training.logging.vtk_file is set and exists.
+        self.gradients_save_freq = self.config.get('training.logging.gradients_save_freq', 100)
+        self._gradients_vtk_mesh = None
+        self._gradients_vtk_cells_list = None
+        vtk_file = self.config.get('training.logging.vtk_file', None)
+        if vtk_file:
+            if os.path.exists(vtk_file):
+                self._gradients_vtk_mesh = meshio.read(vtk_file)
+                _, _, self._gradients_vtk_cells_list = get_prediction_coordinates(
+                    self._gradients_vtk_mesh, bNodal=False)
+                # Sibling of the checkpoint dir, so all outputs of a run stay together
+                self.gradients_dir = os.path.join(
+                    os.path.dirname(self.checkpoint_dir), 'plots', 'gradients')
+                os.makedirs(self.gradients_dir, exist_ok=True)
+            else:
+                print(f"Warning: training.logging.vtk_file '{vtk_file}' not found; "
+                      f"PDE gradient VTK output disabled.")
         
         # Training history
         self.loss_history = []
@@ -297,7 +319,7 @@ class PINNTrainer:
             self.optimizer.zero_grad()
             
             # Forward pass and compute loss using all points
-            total_loss, loss_components, predictions_and_true_values = self.model.compute_total_loss(
+            total_loss, loss_components, predictions_and_true_values, pde_gradients = self.model.compute_total_loss(
                     pde_points,
                     pde_data,
                     initial_points,
@@ -309,6 +331,10 @@ class PINNTrainer:
                     mesh_stats,
                     data_stats
                 )
+
+            # Save PDE gradients/residuals to VTK (first epoch, every N epochs, last epoch)
+            if epoch % self.gradients_save_freq == 0 or epoch == self.epochs - 1:
+                self._save_gradients_to_vtk(pde_gradients, epoch)
                 
             # Backward pass
             total_loss.backward()
@@ -360,6 +386,7 @@ class PINNTrainer:
             if self.early_stopping is not None:
                 if self.early_stopping(total_loss.item()):
                     print(f"Early stopping at epoch {epoch+1}")
+                    self._save_gradients_to_vtk(pde_gradients, epoch)
                     break
 
         # Training finished
@@ -372,6 +399,24 @@ class PINNTrainer:
             'component_loss_history': self.component_loss_history            
         }, predictions_and_true_values
         
+    def _save_gradients_to_vtk(self, pde_gradients, epoch):
+        """Write the PDE gradients/residuals of one epoch to a cell-centered VTK file."""
+        if self._gradients_vtk_mesh is None or not pde_gradients:
+            return
+
+        n_cells = sum(cell_block.data.shape[0] for cell_block in self._gradients_vtk_cells_list)
+        n_points = next(iter(pde_gradients.values())).shape[0]
+        if n_points != n_cells:
+            print(f"Warning: {n_points} PDE points do not match the {n_cells} cells of "
+                  f"training.logging.vtk_file; PDE gradient VTK output disabled.")
+            self._gradients_vtk_mesh = None
+            return
+
+        vtk_path = os.path.join(self.gradients_dir, f'cell_centered_gradients_epoch_{epoch}.vtk')
+        gradients_to_vtk(pde_gradients, mesh=self._gradients_vtk_mesh,
+                         cells_list=self._gradients_vtk_cells_list,
+                         vtkFileName=vtk_path, bNodal=False)
+
     def _save_checkpoint(self, epoch):
         """
         Save a model checkpoint.
@@ -578,7 +623,7 @@ class PINNTrainer:
         # but we don't call backward() so no gradients are accumulated
         if self.bPDE_loss and pde_points is not None and pde_data is not None:
             # Enable gradients for PDE loss computation
-            pde_loss, pde_loss_components, _, _, _ = self.model.compute_pde_loss(
+            pde_loss, pde_loss_components, _, _, _, _ = self.model.compute_pde_loss(
                 pde_points, pde_data, mesh_stats, data_stats
             )
             pde_losses.append(pde_loss.detach().item())
@@ -592,7 +637,7 @@ class PINNTrainer:
         # Compute initial loss if enabled
         if self.bInitial_loss and initial_points is not None and initial_values is not None:
             with torch.no_grad():
-                initial_loss, _, _ = self.model.compute_initial_loss(initial_points, initial_values)
+                initial_loss, _, _, _, _ = self.model.compute_initial_loss(initial_points, initial_values, data_stats)
                 initial_losses.append(initial_loss.item())
         
         # Compute boundary loss if enabled

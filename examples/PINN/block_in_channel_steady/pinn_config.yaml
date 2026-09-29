@@ -1,5 +1,12 @@
 # Configuration for Physics-Informed Neural Network (PINN) for 2D Shallow Water Equations
 
+# Run identification
+run:
+  # Name for this run. All outputs (checkpoints, plots, tensorboard logs, history)
+  # are grouped under runs/<name>/. Override on the command line with --run-name.
+  # Leave blank ("") to auto-generate a timestamp name.
+  name: ""
+
 # Device configuration
 device:
   type: "cuda"  # Set which device to use, "cuda" for GPU, "cpu" for CPU
@@ -77,6 +84,8 @@ training:
     save_freq: 100           # Save checkpoint every N epochs
     checkpoint_dir: "./checkpoints" # Save checkpoint to this directory
     print_freq: 1            # Print progress every N epochs
+    vtk_file: "SRH2D_block_in_channel_C_0005.vtk"  # Reference VTK mesh for PDE gradient/residual output (omit to disable)
+    gradients_save_freq: 100 # Save PDE gradients/residuals to VTK every N epochs
      
 
 # Boundary conditions (should match your case setup in your physics-based model such as SRH-2D)

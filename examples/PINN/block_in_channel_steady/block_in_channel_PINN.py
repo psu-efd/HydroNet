@@ -7,6 +7,7 @@ shallow water equations with physics and data-driven constraints.
 
 import os
 import sys
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -88,7 +89,7 @@ def save_predictions_and_true_values_to_vtk(predictions_and_true_values_file, ou
             else:
                 h_true_array.InsertNextValue(0.0)
                 velocity_true_array.InsertNextTuple3(0.0, 0.0, 0.0)
-        
+
         # Create polydata and add points and arrays
         polydata = vtkPolyData()
         polydata.SetPoints(points)
@@ -128,7 +129,7 @@ def save_predictions_and_true_values_to_vtk(predictions_and_true_values_file, ou
                             filename=os.path.join(output_dir, 'initial_points.vtk'))
     
     # Save boundary points
-    if predictions_and_true_values['bBoundary_loss']:
+    if predictions_and_true_values['bBoundary_loss'] and 'boundary_points' in predictions_and_true_values:
         boundary_points = np.array(predictions_and_true_values['boundary_points'])
         h_pred_boundary = np.array(predictions_and_true_values['h_pred_boundary_points'])
         u_pred_boundary = np.array(predictions_and_true_values['u_pred_boundary_points'])
@@ -145,26 +146,30 @@ def save_predictions_and_true_values_to_vtk(predictions_and_true_values_file, ou
         h_true_data = np.array(predictions_and_true_values['h_true_data_points'])
         u_true_data = np.array(predictions_and_true_values['u_true_data_points'])
         v_true_data = np.array(predictions_and_true_values['v_true_data_points'])
+
         save_points_to_vtk(data_points, h_pred_data, u_pred_data, v_pred_data,
                           h_true_data, u_true_data, v_true_data,
                           filename=os.path.join(output_dir, 'data_points.vtk'))
 
-def pinn_train(trainer):
+def pinn_train(trainer, run_dir='.'):
     """
     Train the PINN model.
-    
+
     Args:
         trainer (PINNTrainer): PINN trainer
+        run_dir (str): Directory for this run's outputs (history, predictions)
+
+    Returns:
+        str: Path to the saved training-history JSON file.
     """
     print("\n=== Starting PINN Training ===")
-    
+
     # Train model with boundary and initial conditions
     print("\nStarting training...")
     history, predictions_and_true_values = trainer.train()
 
     # Save training history
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    history_file = f'history_pinn_{timestamp}.json'
+    history_file = os.path.join(run_dir, 'history_pinn.json')
     with open(history_file, 'w') as f:
         json.dump(history, f, indent=4)
     print(f"\nTraining history saved to {history_file}")
@@ -178,15 +183,19 @@ def pinn_train(trainer):
             predictions_and_true_values_save[key] = value
 
     # Save predictions and true values
-    predictions_and_true_values_file = 'plots/predictions_and_true_values.json'
+    plots_dir = os.path.join(run_dir, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
+    predictions_and_true_values_file = os.path.join(plots_dir, 'predictions_and_true_values.json')
     with open(predictions_and_true_values_file, 'w') as f:
         json.dump(predictions_and_true_values_save, f, indent=4)
     print(f"\nPredictions and true values saved to {predictions_and_true_values_file}")
 
-def plot_training_history(history_file):
+    return history_file
+
+def plot_training_history(history_file, plots_dir='plots'):
     """Plot the training history."""
     print("\n=== Plotting Training History ===")
-    
+
     with open(history_file, 'r') as f:
         history = json.load(f)
 
@@ -208,39 +217,39 @@ def plot_training_history(history_file):
     # print("\n=== End of Dictionary Structure ===\n")
     
     # Create plots directory if it doesn't exist
-    os.makedirs('plots', exist_ok=True)
-    
+    os.makedirs(plots_dir, exist_ok=True)
+
     # Plot total loss
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 4))
     plt.plot(history['loss_history'], label='Total Loss')
     plt.plot(history['component_loss_history']['weighted_total_loss'], label='weighted_total_loss', linewidth=2)
     plt.plot(history['component_loss_history']['unweighted_total_loss'], label='unweighted_total_loss', linewidth=2)
     plt.yscale('log')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('PINN Training History - Total Loss')
-    plt.grid(True)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Loss', fontsize=13, weight='bold')
+    plt.title('PINN Training History - Total Loss', fontsize=14, weight='bold')
+    plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend()
-    plt.savefig('plots/total_loss.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'total_loss.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # Plot total loss components: pde, boundary, data
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 4))
     plt.plot(history['component_loss_history']['unweighted_total_loss'], label='unweighted_total_loss', linewidth=2)
     plt.plot(history['component_loss_history']['loss_components']['pde_loss'], label='pde_loss', linewidth=2)
     plt.plot(history['component_loss_history']['loss_components']['boundary_loss'], label='boundary_loss', linewidth=2)
     plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='data_loss', linewidth=2)
     plt.yscale('log')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('PINN Training History - Total Loss Components')
-    plt.grid(True)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Loss', fontsize=13, weight='bold')
+    plt.title('PINN Training History - Total Loss Components', fontsize=14, weight='bold')
+    plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend()
-    plt.savefig('plots/total_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'total_loss_components.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot PDE/BC/IC/Data losses if they exist
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 4))
     if 'continuity_loss' in history['component_loss_history']['pde_loss_components']:
         plt.plot(history['component_loss_history']['pde_loss_components']['continuity_loss'], label='PDE (continuity) Loss', linewidth=2)
         plt.plot(history['component_loss_history']['pde_loss_components']['momentum_x_loss'], label='PDE (x-momentum) Loss', linewidth=2)
@@ -250,17 +259,17 @@ def plot_training_history(history_file):
     if 'data_loss' in history['component_loss_history']:
         plt.plot(history['component_loss_history']['loss_components']['data_loss'], label='Data Loss', linewidth=2)
     plt.yscale('log')
-    plt.xlabel('Epoch', fontsize=12)
-    plt.ylabel('Loss', fontsize=12)
-    plt.title('PINN Training History - PDE/BC/IC/Data Losses', fontsize=14)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Loss', fontsize=13, weight='bold')
+    plt.title('PINN Training History - PDE/BC/IC/Data Losses', fontsize=14, weight='bold')
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend(fontsize=10)
     plt.tight_layout()
-    plt.savefig('plots/component_losses_detailed.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'component_losses_detailed.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # Plot data loss components if they exist
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 4))
     
     if 'total_data_loss' in history['component_loss_history']['data_loss_components']:
         plt.plot(history['component_loss_history']['data_loss_components']['total_data_loss'], label='Total Data Loss', linewidth=2)
@@ -272,16 +281,17 @@ def plot_training_history(history_file):
         plt.plot(history['component_loss_history']['data_loss_components']['data_v_loss'], label='Data Loss (v)', linewidth=2)
 
     plt.yscale('log')
-    plt.xlabel('Epoch', fontsize=12)
-    plt.ylabel('Loss', fontsize=12)
-    plt.title('PINN Training History - Data Loss Components', fontsize=14)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Loss', fontsize=13, weight='bold')
+    plt.title('PINN Training History - Data Loss Components', fontsize=14, weight='bold')
+    plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend(fontsize=10)
     plt.tight_layout()
-    plt.savefig('plots/data_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'data_loss_components.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # plot boundary loss components
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 4))
     
     # Define BC loss prefixes to look for
     bc_prefixes = ['wall', 'inlet-q', 'exit-h']
@@ -308,17 +318,17 @@ def plot_training_history(history_file):
              verticalalignment='top', bbox=props)
     
     plt.yscale('log')
-    plt.xlabel('Epoch', fontsize=12)
-    plt.ylabel('Loss', fontsize=12)
-    plt.title('PINN Training History - Boundary Condition Losses', fontsize=14)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Loss', fontsize=13, weight='bold')
+    plt.title('PINN Training History - Boundary Condition Losses', fontsize=14, weight='bold')
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend(fontsize=10, bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    plt.savefig('plots/boundary_loss_components.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'boundary_loss_components.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # plot the loss weights history 
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 4))
     
     # Define weight keys to plot
     weight_keys = ['pde_loss', 'boundary_loss', 'data_loss']
@@ -333,13 +343,13 @@ def plot_training_history(history_file):
                     label=f'{key} Weight', linewidth=2)
     #make y axis log scale
     plt.yscale('log')
-    plt.xlabel('Epoch', fontsize=12)
-    plt.ylabel('Weight Value', fontsize=12)
-    plt.title('PINN Training History - Loss Weights', fontsize=14)
+    plt.xlabel('Epoch', fontsize=13, weight='bold')
+    plt.ylabel('Weight Value', fontsize=13, weight='bold')
+    plt.title('PINN Training History - Loss Weights', fontsize=14, weight='bold')
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend(fontsize=10, loc='upper right')
     plt.tight_layout()
-    plt.savefig('plots/loss_weights_history.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'loss_weights_history.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions'):    
@@ -371,30 +381,62 @@ def predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, pred
     # Create time steps
     #time_points = np.linspace(t_start, t_end, num_time_steps, dtype=np.float32)    
     
-    with torch.no_grad():
-        # Loop over time steps
-        #for itime, t in enumerate(time_points):
-        #predict on the gmsh mesh for the current time step
-        if bNodal:
-            vtkFileSaveName = f'{output_dir}/solution_nodal.vtk'
-        else:
-            vtkFileSaveName = f'{output_dir}/solution_cell_centered.vtk'
+    # Loop over time steps
+    #for itime, t in enumerate(time_points):
+    #predict on the gmsh mesh for the current time step
+    if bNodal:
+        vtkFileSaveName = f'{output_dir}/solution_nodal.vtk'
+        gradientsFileSaveName = f'{output_dir}/solution_nodal_gradients.vtk'
+    else:
+        vtkFileSaveName = f'{output_dir}/solution_cell_centered.vtk'
+        gradientsFileSaveName = f'{output_dir}/solution_cell_centered_gradients.vtk'
 
-        predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal, mesh_stats=mesh_stats, data_stats=data_stats, device=device)
+    # Not under torch.no_grad(): the gradient output needs autograd
+    predict_on_vtk2d_mesh(model, vtk2d_fileName, prediction_variable_names_list, vtkFileSaveName, bNodal,
+                          mesh_stats=mesh_stats, data_stats=data_stats, device=device,
+                          gradients_vtkFileName=gradientsFileSaveName)
               
         
 
 if __name__ == "__main__":
     main_start_time = time.time()
     print("\n=== Starting PINN case ===")
-    
+
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Train the block-in-channel PINN.")
+    parser.add_argument('--run-name', type=str, default=None,
+                        help="Name for this run. Overrides run.name in the config. "
+                             "All outputs go to runs/<run-name>/. "
+                             "If neither is set, a timestamp is used.")
+    parser.add_argument('--config', type=str, default='pinn_config.yaml',
+                        help="Path to the YAML configuration file.")
+    args = parser.parse_args()
+
     # Load configuration
-    config_file = 'pinn_config.yaml'
+    config_file = args.config
     print(f"\nLoading configuration from {config_file}")
     config = Config(config_file)
 
+    # Resolve run name: CLI --run-name overrides config run.name; fall back to a timestamp.
+    run_name = args.run_name or config.get('run.name') or None
+    if not run_name:  # None or empty string
+        run_name = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir = os.path.join('runs', run_name)
+    plots_dir = os.path.join(run_dir, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
+    print(f"Run name: {run_name}")
+    print(f"All outputs will be saved under: {run_dir}")
+
+    # Point the trainer's checkpoint and tensorboard outputs at this run's directory.
+    config.set('training.logging.checkpoint_dir', os.path.join(run_dir, 'checkpoints'))
+    config.set('training.logging.tensorboard_log_dir', os.path.join(run_dir, 'logs', 'tensorboard'))
+
+    # Snapshot the config actually used for this run, including the overrides above (for reproducibility).
+    with open(os.path.join(run_dir, 'config_used.yaml'), 'w') as f:
+        yaml.safe_dump(config.config, f, sort_keys=False)
+
     # Create model
-    model = SWE_PINN(config)    
+    model = SWE_PINN(config)
     print(f"Model device: {next(model.parameters()).device}")
     
     # Load dataset
@@ -406,22 +448,20 @@ if __name__ == "__main__":
     #exit()
 
     # Create trainer
-    trainer = PINNTrainer(model, dataset, config)    
+    trainer = PINNTrainer(model, dataset, config)
     
     # Train the model
-    pinn_train(trainer)
-    
+    history_file = pinn_train(trainer, run_dir=run_dir)
+
     # Find best model checkpoint
-    best_model_path = os.path.join('./checkpoints', 'pinn_epoch_best.pt')
+    best_model_path = os.path.join(run_dir, 'checkpoints', 'pinn_epoch_best.pt')
     if os.path.exists(best_model_path):
         print(f"\nFound best model checkpoint: {best_model_path}")
-        
+
         # Plot training history
-        history_files = [f for f in os.listdir('.') if f.startswith('history_pinn_')]
-        if history_files:
-            latest_history = max(history_files)
-            plot_training_history(latest_history)
-        
+        if os.path.exists(history_file):
+            plot_training_history(history_file, plots_dir=plots_dir)
+
         # Load best model and plot solutions
         checkpoint = torch.load(best_model_path, map_location=model.get_device())  # Add map_location
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -432,17 +472,19 @@ if __name__ == "__main__":
         data_stats = dataset.get_data_stats()
 
         # Predict on the vtk file (only the points in the vtk file are used for prediction)
-        vtk2d_fileName = "SRH2D_block_in_channel_C_0005.vtk"  
+        vtk2d_fileName = "SRH2D_block_in_channel_C_0005.vtk"
         prediction_variable_names_list = ["h", "u", "v"]
 
+        solutions_dir = os.path.join(plots_dir, 'solutions')
+
         bNodal = True
-        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
+        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir=solutions_dir)
 
         bNodal = False
-        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir='plots/solutions')
+        predict_solution(config, model, mesh_stats, data_stats, vtk2d_fileName, prediction_variable_names_list, bNodal, output_dir=solutions_dir)
 
         # Save predictions and true values to VTK files
-        save_predictions_and_true_values_to_vtk("plots/predictions_and_true_values.json", output_dir='plots')
+        save_predictions_and_true_values_to_vtk(os.path.join(plots_dir, 'predictions_and_true_values.json'), output_dir=plots_dir)
     
     # Print execution time
     main_execution_time = time.time() - main_start_time

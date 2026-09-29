@@ -51,6 +51,7 @@ history_*.json
 plots/
 checkpoints/
 logs/
+runs/
 *.vtk
 *.xdmf
 *.h5

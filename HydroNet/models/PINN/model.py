@@ -355,7 +355,7 @@ class SWE_PINN(nn.Module):
             mesh_stats (dict): Statistics of the mesh points.                            
 
         Returns:
-            tuple: (mass_residual, momentum_x_residual, momentum_y_residual)
+            tuple: (mass_residual, momentum_x_residual, momentum_y_residual, h, u, v, pde_gradients)
         """       
         
         # Compute derivatives
@@ -456,12 +456,34 @@ class SWE_PINN(nn.Module):
         if not self.bSteady:
             momentum_y_residual = dv_dt + momentum_y_residual
 
+        # Dimensional fields for diagnostics (e.g. writing to VTK); residuals are unscaled
+        pde_gradients = {
+            'dh_dx': dh_dx,
+            'dh_dy': dh_dy,
+            'du_dx': du_dx,
+            'du_dy': du_dy,
+            'dv_dx': dv_dx,
+            'dv_dy': dv_dy,
+            'h': h,
+            'u': u,
+            'v': v,
+            'cty_residual': mass_residual,
+            'mom_x_residual': momentum_x_residual,
+            'mom_y_residual': momentum_y_residual
+        }
+        if not self.bSteady:
+            pde_gradients.update({
+                'dh_dt': dh_dt,
+                'du_dt': du_dt,
+                'dv_dt': dv_dt
+            })
+
         # Scale the residuals based on physics scales
         mass_residual = mass_residual / self.velocity_scale
         momentum_x_residual = momentum_x_residual / self.velocity_scale**2 * self.length_scale
         momentum_y_residual = momentum_y_residual / self.velocity_scale**2 * self.length_scale
         
-        return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v
+        return mass_residual, momentum_x_residual, momentum_y_residual, h, u, v, pde_gradients
         
     def compute_pde_loss(self, pde_points, pde_data, mesh_stats, data_stats):
         """
@@ -473,9 +495,9 @@ class SWE_PINN(nn.Module):
             mesh_stats (dict): Statistics of the mesh points.
 
         Returns:
-            torch.Tensor: PDE loss.
+            tuple: (pde_loss, pde_loss_components, h, u, v, pde_gradients)
         """
-        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v = self.compute_pde_residuals(pde_points, pde_data, mesh_stats, data_stats)
+        continuity_residual, momentum_x_residual, momentum_y_residual, h, u, v, pde_gradients = self.compute_pde_residuals(pde_points, pde_data, mesh_stats, data_stats)
         
         # Compute the loss for each equation with stability
         continuity_loss = torch.mean(continuity_residual**2)
@@ -496,7 +518,7 @@ class SWE_PINN(nn.Module):
             'momentum_y_loss': momentum_y_loss.item()
         }
         
-        return pde_loss, pde_loss_components, h, u, v
+        return pde_loss, pde_loss_components, h, u, v, pde_gradients
         
     def compute_initial_loss(self, initial_points, initial_values, data_stats):
         """
@@ -835,7 +857,9 @@ class SWE_PINN(nn.Module):
             data_stats (dict): Statistics of the data points.           
             
         Returns:
-            tuple: (total_loss, loss_components, predictions_and_true_values)
+            tuple: (total_loss, loss_components, predictions_and_true_values, pde_gradients)
+                pde_gradients is a dict of dimensional gradients/residuals at the PDE points
+                (empty if the PDE loss is not computed).
         """
         # Initialize losses with requires_grad=True
         pde_loss = torch.zeros(1, device=self.device, requires_grad=True)
@@ -848,6 +872,7 @@ class SWE_PINN(nn.Module):
         initial_loss_components = {}
         boundary_loss_components = {}
         data_loss_components = {}
+        pde_gradients = {}
         
         # Initialize predictions and true values
         if self.bSteady:    
@@ -870,7 +895,7 @@ class SWE_PINN(nn.Module):
         # Compute PDE loss
         if self.bPDE_loss:
             if pde_points is not None and pde_data is not None:
-                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points = self.compute_pde_loss(pde_points, pde_data, mesh_stats, data_stats)
+                pde_loss, pde_loss_components, h_pred_pde_points, u_pred_pde_points, v_pred_pde_points, pde_gradients = self.compute_pde_loss(pde_points, pde_data, mesh_stats, data_stats)
                 predictions_and_true_values.update({
                     'pde_points': pde_points,
                     'h_pred_pde_points': h_pred_pde_points,
@@ -993,4 +1018,4 @@ class SWE_PINN(nn.Module):
                 'loss_weights': self.loss_weights.copy()
             }
         
-        return weighted_total_loss, loss_components_for_return, predictions_and_true_values
+        return weighted_total_loss, loss_components_for_return, predictions_and_true_values, pde_gradients
