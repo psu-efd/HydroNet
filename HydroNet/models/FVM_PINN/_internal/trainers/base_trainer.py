@@ -324,11 +324,16 @@ class BaseTrainer(ABC):
         self.network.set_normalisation(x_mean, x_std)
 
     def _record(self, losses: Dict[str, torch.Tensor]) -> None:
-        for k, v in losses.items():
-            if isinstance(v, torch.Tensor):
-                if k not in self.history:
-                    self.history[k] = []
-                self.history[k].append(v.item())
+        # One device→host transfer for all loss scalars instead of one
+        # ``.item()`` sync per key.
+        keys = [k for k, v in losses.items() if isinstance(v, torch.Tensor)]
+        if not keys:
+            return
+        values = torch.stack([losses[k].detach().reshape(()) for k in keys]).tolist()
+        for k, val in zip(keys, values):
+            if k not in self.history:
+                self.history[k] = []
+            self.history[k].append(val)
 
     def _log(
         self,

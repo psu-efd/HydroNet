@@ -66,12 +66,12 @@ def roe_flux_2d(
     -------
     flux : [n_faces, 3]  numerical flux [xi_flux, hu_flux, hv_flux]
     """
-    xi_L = Q_L[:, 0]
-    hu_L = Q_L[:, 1]
-    hv_L = Q_L[:, 2]
-    xi_R = Q_R[:, 0]
-    hu_R = Q_R[:, 1]
-    hv_R = Q_R[:, 2]
+    xi_L = Q_L[..., 0]
+    hu_L = Q_L[..., 1]
+    hv_L = Q_L[..., 2]
+    xi_R = Q_R[..., 0]
+    hu_R = Q_R[..., 1]
+    hv_R = Q_R[..., 2]
 
     h_L = (xi_L + h_still_L).clamp(min=0.0)
     h_R = (xi_R + h_still_R).clamp(min=0.0)
@@ -231,9 +231,9 @@ def compute_source_terms(
     -------
     source : [n_cells, 3]  source terms [0, source_x, source_y]
     """
-    xi = Q_cells[:, 0]
-    hu = Q_cells[:, 1]
-    hv = Q_cells[:, 2]
+    xi = Q_cells[..., 0]
+    hu = Q_cells[..., 1]
+    hv = Q_cells[..., 2]
     h = (xi + h_still).clamp(min=0.0)
 
     S0 = mesh_data["S0_cells"]          # [n_cells, 2]
@@ -258,16 +258,65 @@ def compute_source_terms(
     friction_y = friction_coeff * hv
 
     # Combined source (zero for dry cells)
-    source = torch.zeros_like(Q_cells)
-    source[:, 1] = wet * (bed_x - friction_x)
-    source[:, 2] = wet * (bed_y - friction_y)
-
-    return source
+    return torch.stack([
+        torch.zeros_like(xi),
+        wet * (bed_x - friction_x),
+        wet * (bed_y - friction_y),
+    ], dim=-1)
 
 
 # ---------------------------------------------------------------------------
 # Full FVM residual
 # ---------------------------------------------------------------------------
+
+def _topology_cache(mesh_data: dict) -> dict:
+    """
+    Static face-topology quantities derived from ``face_right`` / ``face_bc_id``.
+
+    These depend only on the mesh, never on the solution, but
+    ``compute_fvm_residual`` runs every optimizer step — so deriving them
+    there costs device→host synchronisations (``.any()``) and ``nonzero``
+    calls (boolean-mask gathers/scatters) on every call. Memoise them on the
+    ``mesh_data`` dict, which lives for the whole run, as *integer* index
+    tensors: gathers and ``index_copy``/``index_add`` with long indices never
+    synchronise, whereas boolean-mask indexing always does.
+
+    ``_local_mesh_data`` builds a fresh dict per stencil, which correctly
+    gets its own cache rather than inheriting a stale one.
+    """
+    cache = mesh_data.get("_topology_cache")
+    if cache is None:
+        face_right = mesh_data["face_right"]
+        interior_mask = face_right >= 0
+        interior_idx = interior_mask.nonzero(as_tuple=False).view(-1)
+        bnd_idx = (~interior_mask).nonzero(as_tuple=False).view(-1)
+        cache = {
+            "interior_idx": interior_idx,
+            "interior_right_idx": face_right[interior_idx],
+            # Right-cell gather index with boundary faces pointed at cell 0 as a
+            # placeholder; those entries are overwritten by the ghost states.
+            "right_idx_safe": face_right.clamp(min=0),
+            "bnd_idx": bnd_idx,
+            "has_interior": interior_idx.numel() > 0,
+            "has_boundary": bnd_idx.numel() > 0,
+            # Per-BC positions *within the boundary-face list*, for BCs that
+            # override the default reflective ghost. BCs with no faces are
+            # dropped here, replacing the per-call ``if not mask.any()`` check.
+            "bc_faces": {},
+        }
+        bc_ghost = mesh_data.get("bc_ghost", {})
+        if bc_ghost and "face_bc_id" in mesh_data and cache["has_boundary"]:
+            bc_ids_at_bnd = mesh_data["face_bc_id"][bnd_idx]
+            for bc_id in bc_ghost:
+                idx = (bc_ids_at_bnd == bc_id).nonzero(as_tuple=False).view(-1)
+                if idx.numel() > 0:
+                    cache["bc_faces"][bc_id] = idx
+            # Per-face length and Manning n at boundary faces (conveyance BC)
+            cache["face_length_bnd"] = mesh_data["face_length"][bnd_idx]
+            cache["manning_bnd"] = mesh_data["cell_manning"][mesh_data["face_left"][bnd_idx]]
+        mesh_data["_topology_cache"] = cache
+    return cache
+
 
 def compute_fvm_residual(
     Q_cells: torch.Tensor,
@@ -282,52 +331,54 @@ def compute_fvm_residual(
     Residual R = flux_divergence - source_terms
     PINN loss enforces: dQ/dt + R = 0
 
+    ``Q_cells`` may carry leading batch dimensions (e.g. one per time level,
+    ``[n_t, n_cells, 3]``) so several time levels are evaluated in one pass;
+    mesh quantities and ``h_still`` are shared and broadcast. Each leading
+    index is an independent residual evaluation — nothing is reduced across
+    them (in particular the inlet-Q conveyance distribution).
+
     Parameters
     ----------
-    Q_cells : [n_cells, 3]  conserved vars [xi, hu, hv]
+    Q_cells : [..., n_cells, 3]  conserved vars [xi, hu, hv]
     mesh_data : dict with face/cell topology and bed data
     h_still : [n_cells]  still water depth reference
     h_small : float  dry threshold
 
     Returns
     -------
-    residual : [n_cells, 3]  R = flux_divergence - source
+    residual : [..., n_cells, 3]  R = flux_divergence - source
     """
     face_left = mesh_data["face_left"]
-    face_right = mesh_data["face_right"]
     face_normal = mesh_data["face_normal"]
     nx = face_normal[:, 0]
     ny = face_normal[:, 1]
     face_length = mesh_data["face_length"]
     cell_area = mesh_data["cell_area"]
     bed_elev = mesh_data["bed_elev"]
-    n_cells = Q_cells.shape[0]
 
-    interior_mask = face_right >= 0
+    topo = _topology_cache(mesh_data)
 
     # --- Gather left/right states ---
-    Q_L = Q_cells[face_left]
+    Q_L = Q_cells.index_select(-2, face_left)
     hs_L = h_still[face_left]
     zb_L = bed_elev[face_left]
 
-    Q_R = torch.zeros_like(Q_L)
-    hs_R = torch.zeros_like(hs_L)
-    zb_R = torch.zeros_like(zb_L)
+    right_idx = topo["right_idx_safe"]
+    Q_R = Q_cells.index_select(-2, right_idx)
+    hs_R = h_still[right_idx]
+    zb_R = bed_elev[right_idx]
 
-    if interior_mask.any():
-        idx_r = face_right[interior_mask]
-        Q_R[interior_mask] = Q_cells[idx_r]
-        hs_R[interior_mask] = h_still[idx_r]
-        zb_R[interior_mask] = bed_elev[idx_r]
-
-    # --- Boundary ghost cells ---
-    bnd_mask = ~interior_mask
-    if bnd_mask.any():
-        Q_R[bnd_mask], hs_R[bnd_mask], zb_R[bnd_mask] = _build_ghost_states(
-            Q_L[bnd_mask], hs_L[bnd_mask], zb_L[bnd_mask],
-            nx[bnd_mask], ny[bnd_mask],
-            mesh_data, bnd_mask, h_small,
+    # --- Boundary ghost cells (overwrite the placeholder right states) ---
+    if topo["has_boundary"]:
+        bnd_idx = topo["bnd_idx"]
+        Q_ghost, hs_ghost, zb_ghost = _build_ghost_states(
+            Q_L.index_select(-2, bnd_idx), hs_L[bnd_idx], zb_L[bnd_idx],
+            nx[bnd_idx], ny[bnd_idx],
+            mesh_data, topo, h_small,
         )
+        Q_R = Q_R.index_copy(-2, bnd_idx, Q_ghost)
+        hs_R = hs_R.index_copy(0, bnd_idx, hs_ghost)
+        zb_R = zb_R.index_copy(0, bnd_idx, zb_ghost)
 
     # --- Roe flux ---
     flux = roe_flux_2d(Q_L, Q_R, hs_L, hs_R, zb_L, zb_R, nx, ny, h_small)
@@ -335,14 +386,12 @@ def compute_fvm_residual(
     # --- Scatter fluxes to cells ---
     flux_scaled = flux * face_length.unsqueeze(-1)
 
-    flux_div = torch.zeros(n_cells, 3, dtype=Q_cells.dtype, device=Q_cells.device)
-    flux_div.scatter_add_(0, face_left.unsqueeze(-1).expand_as(flux_scaled), flux_scaled)
+    flux_div = torch.zeros_like(Q_cells).index_add(-2, face_left, flux_scaled)
 
-    if interior_mask.any():
-        idx_r = face_right[interior_mask]
-        flux_div.scatter_add_(
-            0, idx_r.unsqueeze(-1).expand(-1, 3),
-            -flux_scaled[interior_mask],
+    if topo["has_interior"]:
+        flux_div = flux_div.index_add(
+            -2, topo["interior_right_idx"],
+            -flux_scaled.index_select(-2, topo["interior_idx"]),
         )
 
     flux_div = flux_div / cell_area.unsqueeze(-1)
@@ -365,53 +414,43 @@ def _build_ghost_states(
     nx: torch.Tensor,
     ny: torch.Tensor,
     mesh_data: dict,
-    bnd_mask: torch.Tensor,
+    topo: dict,
     h_small: float,
 ):
     """
     Build ghost states for boundary faces.
 
     Default: reflective (wall/symmetry).
-    Overrides for inlet-q and exit-h via mesh_data["bc_ghost"].
+    Overrides for inlet-q and exit-h via mesh_data["bc_ghost"], applied on
+    the per-BC boundary-face positions precomputed in ``topo["bc_faces"]``.
     """
     # Default: reflective ghost (wall/symmetry)
     Q_ghost = _reflective_ghost(Q_L, nx, ny)
-    hs_ghost = hs_L.clone()
-    zb_ghost = zb_L.clone()
+    hs_ghost = hs_L
+    zb_ghost = zb_L
 
     # Override for specific BC types
     bc_ghost = mesh_data.get("bc_ghost", {})
-    if bc_ghost and "face_bc_id" in mesh_data:
-        face_bc_id = mesh_data["face_bc_id"]
-        # Get the bc_ids for the boundary faces only
-        bc_ids_at_bnd = face_bc_id[bnd_mask]
+    for bc_id, idx in topo["bc_faces"].items():
+        bc_info = bc_ghost[bc_id]
+        bc_type = bc_info["type"]
+        bc_val = bc_info.get("value", 0.0)
 
-        # Per-face length and Manning n at boundary faces (for conveyance BC)
-        face_length_bnd = mesh_data["face_length"][bnd_mask]
-        manning_bnd = mesh_data["cell_manning"][mesh_data["face_left"][bnd_mask]]
-
-        for bc_id, bc_info in bc_ghost.items():
-            bc_type = bc_info["type"]
-            bc_val = bc_info.get("value", 0.0)
-
-            # Which boundary faces have this BC ID
-            local_mask = (bc_ids_at_bnd == bc_id)
-            if not local_mask.any():
-                continue
-
-            if bc_type == "inlet-q":
-                Q_ghost[local_mask] = _inlet_q_ghost(
-                    Q_L[local_mask], hs_L[local_mask],
-                    nx[local_mask], ny[local_mask],
-                    face_length_bnd[local_mask],
-                    manning_bnd[local_mask],
-                    bc_val, h_small,
-                )
-            elif bc_type == "exit-h":
-                Q_ghost[local_mask], hs_ghost[local_mask] = _exit_h_ghost(
-                    Q_L[local_mask], hs_L[local_mask],
-                    zb_L[local_mask], bc_val,
-                )
+        if bc_type == "inlet-q":
+            Q_ghost = Q_ghost.index_copy(-2, idx, _inlet_q_ghost(
+                Q_L.index_select(-2, idx), hs_L[idx],
+                nx[idx], ny[idx],
+                topo["face_length_bnd"][idx],
+                topo["manning_bnd"][idx],
+                bc_val, h_small,
+            ))
+        elif bc_type == "exit-h":
+            Q_exit, hs_exit = _exit_h_ghost(
+                Q_L.index_select(-2, idx), hs_L[idx],
+                zb_L[idx], bc_val,
+            )
+            Q_ghost = Q_ghost.index_copy(-2, idx, Q_exit)
+            hs_ghost = hs_ghost.index_copy(0, idx, hs_exit)
 
     return Q_ghost, hs_ghost, zb_ghost
 
@@ -420,9 +459,9 @@ def _reflective_ghost(
     Q_L: torch.Tensor, nx: torch.Tensor, ny: torch.Tensor
 ) -> torch.Tensor:
     """Reflective (wall/symmetry) ghost: mirror normal momentum."""
-    xi = Q_L[:, 0]
-    hu = Q_L[:, 1]
-    hv = Q_L[:, 2]
+    xi = Q_L[..., 0]
+    hu = Q_L[..., 1]
+    hv = Q_L[..., 2]
 
     # Normal momentum component
     hun = hu * nx + hv * ny
@@ -466,14 +505,16 @@ def _inlet_q_ghost(
     Q_total     : float        total volumetric discharge into the domain (m^3/s)
     h_small     : float        wet/dry depth threshold
     """
-    xi_L = Q_L[:, 0]
+    xi_L = Q_L[..., 0]
     h_L = (xi_L + hs_L).clamp(min=0.0)
 
     wet = (h_L > h_small).to(h_L.dtype)
 
     # Conveyance weight per face: L^(5/3) * h / n, zero on dry faces
     conveyance = face_length.pow(5.0 / 3.0) * h_L / manning_n * wet
-    total_A = conveyance.sum().clamp(min=1e-12)
+    # Sum over the inlet faces only (last dim), separately for each leading
+    # (time) index — Q_total is distributed per time level, never across them.
+    total_A = conveyance.sum(dim=-1, keepdim=True).clamp(min=1e-12)
 
     # Manning velocity (normal, positive into domain) per face
     v_n = (Q_total / total_A) * face_length.pow(2.0 / 3.0) / manning_n
@@ -504,15 +545,16 @@ def _exit_h_ghost(
 
     Returns (Q_ghost, hs_ghost).
     """
-    hu_L = Q_L[:, 1]
-    hv_L = Q_L[:, 2]
+    hu_L = Q_L[..., 1]
+    hv_L = Q_L[..., 2]
 
     # Ghost depth from prescribed WSE and local bed
     h_ghost = (wse_exit - zb_L).clamp(min=0.0)
     xi_ghost = h_ghost - hs_L
 
-    # Zero-gradient on momentum (not velocity)
-    Q_ghost = torch.stack([xi_ghost, hu_L, hv_L], dim=-1)
+    # Zero-gradient on momentum (not velocity). xi_ghost is per-face only,
+    # so broadcast it over any leading (time) dims of Q_L.
+    Q_ghost = torch.stack([xi_ghost.expand_as(hu_L), hu_L, hv_L], dim=-1)
     hs_ghost = hs_L   # same reference
 
     return Q_ghost, hs_ghost

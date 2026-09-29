@@ -16,7 +16,7 @@ where:
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -180,81 +180,82 @@ class FVMPINNLoss(nn.Module):
         Network outputs Q = [xi, hu, hv].
         R = flux_divergence - source (bed slope + friction).
 
+        All sampled time levels are evaluated in one batch: a single network
+        forward over [n_t * n_stencil] points, a single dQ/dt backward, and a
+        single residual evaluation on [n_t, n_stencil, 3]. The loss is the
+        same as evaluating each time level separately: per time level, the
+        mean squared residual over its *wet* cells (0 if none are wet), then
+        averaged over the n_t time levels.
+
         Returns dict with 'fvm' (total) and per-equation 'fvm_xi', 'fvm_hu', 'fvm_hv'.
         """
         cell_xy = self.mesh_data["cell_center"]
         n_cells = cell_xy.shape[0]
-        device = cell_xy.device
 
         if cell_mask is not None:
             stencil_idx, eval_mask = _build_stencil(
                 cell_mask, self.mesh_data["face_left"], self.mesh_data["face_right"]
             )
+            eval_idx = eval_mask.nonzero(as_tuple=False).view(-1)
             stencil_xy = cell_xy[stencil_idx]
             stencil_hs = self.h_still[stencil_idx]
+            md = _local_mesh_data(self.mesh_data, stencil_idx, n_cells)
         else:
-            stencil_idx = None
+            eval_idx = None
             stencil_xy = cell_xy
             stencil_hs = self.h_still
+            md = self.mesh_data
 
-        zero = torch.tensor(0.0, device=device, dtype=cell_xy.dtype)
-        total_res = zero.clone()
-        total_xi = zero.clone()
-        total_hu = zero.clone()
-        total_hv = zero.clone()
         n_t = len(t)
+        n_s = stencil_xy.shape[0]
 
-        for ti in range(n_t):
-            t_k = t[ti : ti + 1].expand(stencil_xy.shape[0])
-            xyt = torch.cat([stencil_xy, t_k.unsqueeze(-1)], dim=-1)
-            xyt = xyt.requires_grad_(True)
+        # Time-major batch: rows [k * n_s, (k + 1) * n_s) hold time level t[k]
+        xy_all = stencil_xy.unsqueeze(0).expand(n_t, n_s, 2)
+        t_all = t.view(n_t, 1, 1).expand(n_t, n_s, 1)
+        xyt = torch.cat([xy_all, t_all], dim=-1).reshape(n_t * n_s, 3)
+        xyt = xyt.requires_grad_(True)
 
-            # Network forward: outputs [xi, hu, hv]
-            Q_stencil = self._network_forward(network, xyt)
+        # Network forward: outputs [xi, hu, hv]
+        Q_flat = self._network_forward(network, xyt)
 
-            # dQ/dt via autograd
-            dQ_dt = _batch_time_grad(Q_stencil, xyt)
+        # dQ/dt via autograd (each output row depends only on its own input row)
+        dQ_dt = _batch_time_grad(Q_flat, xyt).view(n_t, n_s, 3)
+        Q_stencil = Q_flat.view(n_t, n_s, 3)
 
-            # FVM residual (well-balanced, includes bed slope + friction)
-            if stencil_idx is not None:
-                local_md = _local_mesh_data(self.mesh_data, stencil_idx, n_cells)
-                R = compute_fvm_residual(Q_stencil, local_md, stencil_hs, self.cfg.h_dry)
-            else:
-                R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry)
+        # FVM residual (well-balanced, includes bed slope + friction)
+        R = compute_fvm_residual(Q_stencil, md, stencil_hs, self.cfg.h_dry)
 
-            residual = dQ_dt + R
+        residual = dQ_dt + R                                  # [n_t, n_s, 3]
+        h_check = Q_stencil[..., 0].detach() + stencil_hs     # [n_t, n_s]
 
-            # Restrict to sampled cells
-            if cell_mask is not None:
-                residual = residual[eval_mask]
-                xi_check = Q_stencil[eval_mask, 0].detach()
-                h_check = (xi_check + stencil_hs[eval_mask]).detach()
-            else:
-                h_check = (Q_stencil[:, 0].detach() + stencil_hs).detach()
+        # Restrict to sampled cells
+        if eval_idx is not None:
+            residual = residual.index_select(1, eval_idx)
+            h_check = h_check.index_select(1, eval_idx)
 
-            wet = h_check > self.cfg.h_dry
-            if wet.any():
-                r_wet = residual[wet]
-                l_xi = (r_wet[:, 0] ** 2).mean()
-                l_hu = (r_wet[:, 1] ** 2).mean()
-                l_hv = (r_wet[:, 2] ** 2).mean()
-                # Weighted sum across conserved variables. Component weights
-                # default to 1.0 (uniform), but can be tuned per case to
-                # balance scale mismatches between xi and hu/hv.
-                total_res = total_res + (
-                    self.cfg.lambda_xi * l_xi
-                    + self.cfg.lambda_hu * l_hu
-                    + self.cfg.lambda_hv * l_hv
-                )
-                total_xi = total_xi + l_xi
-                total_hu = total_hu + l_hu
-                total_hv = total_hv + l_hv
+        # Per-time-level mean over wet cells, without a host sync. torch.where
+        # (not multiplication by the mask) keeps any non-finite residual at a
+        # dry cell out of the forward value, exactly like boolean indexing did.
+        wet = h_check > self.cfg.h_dry                        # [n_t, n_e]
+        n_wet = wet.sum(dim=-1).clamp(min=1).to(residual.dtype)
+        r_sq = torch.where(wet.unsqueeze(-1), residual, torch.zeros_like(residual)) ** 2
+        per_t = r_sq.sum(dim=1) / n_wet.unsqueeze(-1)         # [n_t, 3]; 0 if no wet cell
+        l_xi, l_hu, l_hv = per_t.unbind(dim=-1)               # each [n_t]
+
+        # Weighted sum across conserved variables. Component weights
+        # default to 1.0 (uniform), but can be tuned per case to
+        # balance scale mismatches between xi and hu/hv.
+        total_res = (
+            self.cfg.lambda_xi * l_xi
+            + self.cfg.lambda_hu * l_hu
+            + self.cfg.lambda_hv * l_hv
+        )
 
         return {
-            "fvm": total_res / n_t,
-            "fvm_xi": total_xi / n_t,
-            "fvm_hu": total_hu / n_t,
-            "fvm_hv": total_hv / n_t,
+            "fvm": total_res.sum() / n_t,
+            "fvm_xi": l_xi.sum() / n_t,
+            "fvm_hu": l_hu.sum() / n_t,
+            "fvm_hv": l_hv.sum() / n_t,
         }
 
     def _network_forward(self, network: nn.Module, xyt: torch.Tensor) -> torch.Tensor:
@@ -379,13 +380,29 @@ class FVMPINNLoss(nn.Module):
 # ---------------------------------------------------------------------------
 
 def _batch_time_grad(Q: torch.Tensor, xyt: torch.Tensor) -> torch.Tensor:
-    """Compute dQ/dt for all 3 components."""
-    grads: List[torch.Tensor] = []
-    for col in range(Q.shape[-1]):
-        s = Q[:, col].sum()
-        g = torch.autograd.grad(s, xyt, create_graph=True, retain_graph=True)[0]
-        grads.append(g[:, 2:3])
-    return torch.cat(grads, dim=-1)
+    """
+    Compute dQ/dt for all 3 conserved components.
+
+    Uses a single vmapped backward pass (``is_grads_batched``) seeded with
+    the 3×3 identity rather than one ``autograd.grad`` call per component.
+    The FLOP count is the same, but the three cotangents propagate through
+    the network graph as batched matmuls instead of three separate small
+    ones — fewer kernel launches and better BLAS utilisation. This runs
+    once per time level per optimizer step, so the saving compounds.
+    """
+    n_out = Q.shape[-1]
+    # basis[j] is the cotangent selecting output component j, broadcast
+    # over all rows: shape [n_out, n_points, n_out].
+    basis = torch.eye(n_out, dtype=Q.dtype, device=Q.device)
+    grad_outputs = basis.unsqueeze(1).expand(n_out, Q.shape[0], n_out)
+    g = torch.autograd.grad(
+        Q, xyt,
+        grad_outputs=grad_outputs,
+        create_graph=True,
+        retain_graph=True,
+        is_grads_batched=True,
+    )[0]                      # [n_out, n_points, 3] — last dim is (x, y, t)
+    return g[..., 2].transpose(0, 1)     # [n_points, n_out]
 
 
 def _build_stencil(

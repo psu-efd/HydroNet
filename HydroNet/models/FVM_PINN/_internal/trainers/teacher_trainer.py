@@ -470,12 +470,20 @@ class TeacherTrainer:
             )
             xyt_p = torch.cat([cell_xy, t_col], dim=-1)
             Q_pred_p = self.network(xyt_p)
-            dQ_dt = torch.zeros_like(Q_pred_p)
-            for j in range(3):
-                grads = torch.autograd.grad(
-                    Q_pred_p[:, j].sum(), t_col, create_graph=True,
-                )[0]
-                dQ_dt[:, j] = grads.squeeze(-1)
+            # Single vmapped backward seeded with the 3×3 identity, instead of
+            # one autograd.grad call per conserved variable. Same FLOPs, but
+            # the three cotangents propagate as batched matmuls rather than
+            # three separate small ones — and this sits inside the per-snapshot
+            # loop, so it runs n_snapshots times per epoch.
+            basis = torch.eye(3, dtype=self.dtype, device=self.device)
+            grad_outputs = basis.unsqueeze(1).expand(3, n_cells, 3)
+            grads = torch.autograd.grad(
+                Q_pred_p, t_col,
+                grad_outputs=grad_outputs,
+                create_graph=True,
+                is_grads_batched=True,
+            )[0]                                  # [3, n_cells, 1]
+            dQ_dt = grads.squeeze(-1).transpose(0, 1)    # [n_cells, 3]
             R = compute_fvm_residual(Q_pred_p, self.mesh_data, self.h_still,
                                      self.cfg.h_dry)
             diff_p = (dQ_dt + R) ** 2
