@@ -361,7 +361,18 @@ class SWE_PINN(nn.Module):
         # Compute derivatives
         x.requires_grad_(True)
         predictions = self.forward(x)
-        h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]      
+        h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
+
+        mu_h = data_stats['h_mean']
+        sigma_h = data_stats['h_std']
+        mu_u = data_stats['u_mean']
+        sigma_u = data_stats['u_std']
+        mu_v = data_stats['v_mean']
+        sigma_v = data_stats['v_std']
+
+        # Enforce h >= 1e-3 in normalized space (before autograd) so the clamp is
+        # reflected in the derivatives rather than applied after denormalization
+        h_hat = torch.clamp(h_hat, min=(1e-3 - mu_h) / sigma_h)
 
         # Compute all gradients at once
         h_hat_grad = torch.autograd.grad(h_hat, x, grad_outputs=torch.ones_like(h_hat),
@@ -398,13 +409,6 @@ class SWE_PINN(nn.Module):
         if not self.bSteady:
             Lt = t_max - t_min
 
-        mu_h = data_stats['h_mean']
-        sigma_h = data_stats['h_std']
-        mu_u = data_stats['u_mean']
-        sigma_u = data_stats['u_std']
-        mu_v = data_stats['v_mean']
-        sigma_v = data_stats['v_std']
-
         # Extract PDE data (zb, Sx, Sy, ManningN on PDE points)
         zb = pde_data[:, 0:1]
         Sx = pde_data[:, 1:2]
@@ -420,10 +424,7 @@ class SWE_PINN(nn.Module):
         #denormalize the outputs (which are normalized with z-score)
         h = h_hat * sigma_h + mu_h
         u = u_hat * sigma_u + mu_u
-        v = v_hat * sigma_v + mu_v        
-
-        #clip water depth to be positive
-        h = torch.clamp(h, min=1e-3)
+        v = v_hat * sigma_v + mu_v
 
         # Compute velocity magnitude
         u_mag = torch.sqrt(u*u + v*v + 1e-8)
@@ -497,29 +498,41 @@ class SWE_PINN(nn.Module):
         
         return pde_loss, pde_loss_components, h, u, v
         
-    def compute_initial_loss(self, initial_points, initial_values):
+    def compute_initial_loss(self, initial_points, initial_values, data_stats):
         """
         Compute the loss for initial conditions.
-        
+
         Args:
             initial_points (torch.Tensor): Points at initial time.
-            initial_values (torch.Tensor): True values at initial points.
-            
+            initial_values (torch.Tensor): True values at initial points (normalized).
+            data_stats (dict): Statistics of the data points.
+
         Returns:
-            torch.Tensor: Initial condition loss.
+            tuple: (initial_loss, initial_loss_components, h_hat, u_hat, v_hat) with predictions normalized.
         """
         # Get model predictions at initial points
         predictions = self.forward(initial_points)
 
-        h, u, v = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
+        h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
 
-        #clip h to be positive
-        h = torch.clip(h, min=1e-3)
-        
-        # Compute MSE loss
-        initial_loss = torch.mean((predictions - initial_values)**2)
-        
-        return initial_loss, h, u, v
+        mu_h = data_stats['h_mean']
+        sigma_h = data_stats['h_std']
+
+        # Enforce h >= 1e-3 in normalized space so the constraint affects the loss gradient
+        # (mirrors the clamp in compute_pde_residuals)
+        h_hat = torch.clamp(h_hat, min=(1e-3 - mu_h) / sigma_h)
+
+        # Compute MSE loss in normalized space on the clamped predictions
+        predictions_clamped = torch.cat([h_hat, u_hat, v_hat], dim=-1)
+        initial_loss = torch.mean((predictions_clamped - initial_values)**2)
+
+        initial_loss_components = {
+            'initial_loss': initial_loss.item()
+        }
+
+        # Return normalized predictions so they are comparable with the (normalized)
+        # initial_values stored alongside them, as in compute_data_loss
+        return initial_loss, initial_loss_components, h_hat, u_hat, v_hat
         
     def compute_boundary_loss(self, boundary_info, mesh_stats, data_stats):
         """
@@ -541,9 +554,9 @@ class SWE_PINN(nn.Module):
         """
 
         # Get the stats
-        x_min = mesh_stats['x_mean']
+        x_min = mesh_stats['x_min']
         x_max = mesh_stats['x_max']
-        y_min = mesh_stats['y_mean']
+        y_min = mesh_stats['y_min']
         y_max = mesh_stats['y_max']
         if not self.bSteady:
             t_min = mesh_stats['t_min']
@@ -652,12 +665,12 @@ class SWE_PINN(nn.Module):
                 q_computed_per_point = -h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask]
                 
                 # Loss is the squared difference between computed and specified discharge per point
-                discharge_loss = torch.mean((q_computed_per_point - q_specified_per_point)**2 + eps)
+                discharge_loss = torch.mean((q_computed_per_point - q_specified_per_point)**2) + eps
 
                 boundary_loss += discharge_loss
 
                 # Zero normal gradient for h at inlet
-                h_grad_loss = torch.mean(dh_dn[bc_mask]**2 + eps)
+                h_grad_loss = torch.mean(dh_dn[bc_mask]**2) + eps
                 boundary_loss += h_grad_loss
 
                 #store loss components
@@ -710,12 +723,12 @@ class SWE_PINN(nn.Module):
                 h_specified = torch.clip(wse_tensor - bed_tensor, min=1e-3)
                 
                 # Loss is the difference between computed and specified water depth
-                h_loss = torch.mean((h[bc_mask] - h_specified)**2 + eps)
+                h_loss = torch.mean((h[bc_mask] - h_specified)**2) + eps
                 boundary_loss += h_loss
 
                 # Zero normal gradient for velocities at outlet
-                u_grad_loss = torch.mean(du_dn[bc_mask]**2 + eps)
-                v_grad_loss = torch.mean(dv_dn[bc_mask]**2 + eps)
+                u_grad_loss = torch.mean(du_dn[bc_mask]**2) + eps
+                v_grad_loss = torch.mean(dv_dn[bc_mask]**2) + eps
                 boundary_loss += u_grad_loss + v_grad_loss
                 
                 #store loss components
@@ -724,25 +737,25 @@ class SWE_PINN(nn.Module):
                 boundary_loss_components['exit-h_v_grad_loss_bc_id_'+str(bc_id)] = v_grad_loss
                 
             elif bc_type == "wall":
-                # No-slip condition: zero velocity
-                u_loss = torch.mean((u[bc_mask]**2 + eps))
-                v_loss = torch.mean((v[bc_mask]**2 + eps))
-                boundary_loss += u_loss + v_loss
-                
+                # Slip + impermeability: only the normal velocity component is zero.
+                # SWE are depth-averaged and do not resolve boundary layers,
+                # so the tangential velocity must remain free.
+                u_normal_loss = torch.mean(u_normal[bc_mask]**2) + eps
+                boundary_loss += u_normal_loss
+
                 # Zero gradient for h along normal direction
-                h_grad_loss = torch.mean(dh_dn[bc_mask]**2 + eps)
+                h_grad_loss = torch.mean(dh_dn[bc_mask]**2) + eps
                 boundary_loss += h_grad_loss
-                
+
                 #store loss components
                 boundary_loss_components['wall_h_grad_loss_bc_id_'+str(bc_id)] = h_grad_loss
-                boundary_loss_components['wall_u_loss_bc_id_'+str(bc_id)] = u_loss
-                boundary_loss_components['wall_v_loss_bc_id_'+str(bc_id)] = v_loss      
+                boundary_loss_components['wall_u_normal_loss_bc_id_'+str(bc_id)] = u_normal_loss
 
             elif bc_type == "symm":
                 # Symmetry condition: zero normal velocity and zero normal gradient for h
-                velocity_normal_loss = torch.mean((u_normal[bc_mask]**2 + eps))                
+                velocity_normal_loss = torch.mean(u_normal[bc_mask]**2) + eps
 
-                h_grad_loss = torch.mean(dh_dn[bc_mask]**2 + eps)
+                h_grad_loss = torch.mean(dh_dn[bc_mask]**2) + eps
                 boundary_loss += velocity_normal_loss + h_grad_loss
                 
                 #store loss components
@@ -872,7 +885,7 @@ class SWE_PINN(nn.Module):
         # Compute initial loss
         if self.bInitial_loss:
             if initial_points is not None and initial_values is not None:
-                initial_loss, initial_loss_components, h_pred_initial_points, u_pred_initial_points, v_pred_initial_points = self.compute_initial_loss(initial_points, initial_values)
+                initial_loss, initial_loss_components, h_pred_initial_points, u_pred_initial_points, v_pred_initial_points = self.compute_initial_loss(initial_points, initial_values, data_stats)
                 predictions_and_true_values.update({
                     'initial_points': initial_points,
                     'h_pred_initial_points': h_pred_initial_points,
