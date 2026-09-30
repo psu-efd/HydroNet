@@ -169,6 +169,8 @@ data:
   random wet cells are drawn per time, as before.
 - A 3-column `flags_file` gives per-variable flags in `[xi, u, v]` order
   (AND-ed with `variables`), like PINN's `data_flags.npy`.
+- Preview the measurements before training (no model is built):
+  `cd examples/FVM_PINN/<case> && python ../plot_measurements.py --config <yaml>`.
 - Each data component is averaged over the rows that supervise it, so
   sparse rows are not diluted by rows masked out for that variable.
 - In velocity mode the history keys `data_hu` / `data_hv` hold the `u` / `v`
