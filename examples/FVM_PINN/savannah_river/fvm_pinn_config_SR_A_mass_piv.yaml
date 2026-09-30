@@ -1,0 +1,96 @@
+# SR-A-mass-PIV — SR-A-mass + sparse image-velocimetry-style velocities
+#
+# Identical to SR-A-mass (FVM residual + IC + BC + nested control-volume
+# mass balance) plus sparse depth-averaged velocity measurements taken
+# from the SRH-2D reference at the cells flagged in data/piv_flags.npy.
+# Targets are u, v only: the data loss compares them with the network's
+# hu/h, hv/h, so no SRH-2D depth enters the data term -- mimicking image
+# velocimetry, which gives surface velocities but no depth.
+#
+# Before training, create the flags file (one row per cell, [xi, u, v]):
+#   python -m HydroNet.utils.edit_flags_interactive --fvm-config fvm_pinn_config_SR_A_mass_piv.yaml
+# and preview what the model will see:
+#   python ../plot_measurements.py --config fvm_pinn_config_SR_A_mass_piv.yaml
+#
+# Difference from SR-A-mass:
+#   - data.measurements: sparse u/v at flagged cells, all five snapshots
+#   - loss_weights.lambda_data: 0.0 -> 10.0 (SR-F's value; re-tune -- the
+#     data term is velocity, averaged over flagged cells only)
+#   - checkpoint_dir: ./checkpoints/SR_A_mass_piv
+
+device:
+  type: "cuda"
+  index: 0
+
+model:
+  name: "FVM_SWE_PINN"
+  arch: "mlp"
+  hidden_dim: 128
+  n_layers: 6
+  n_fourier: 64
+  fourier_scale: 0.5
+  activation: "tanh"
+  use_residual: true
+
+physics:
+  wse_still: 29.3
+  h_dry: 0.1
+  gravity: 9.81
+
+boundary_conditions:
+  1: {type: "inlet-q", value: 187.4}
+  2: {type: "exit-h",  value: 29.3}
+  3: {type: "wall"}
+  4: {type: "wall"}
+
+initial_condition:
+  mode: "flat-wse"
+  wse_init: 29.3
+
+data:
+  srhhydro: "data/savana_SI.srhhydro"
+  srh2d_h5_file: "data/Savana_XMDFC.h5"
+  measurements:
+    mode: "sparse"
+    times: [720.0, 1440.0, 2160.0, 2880.0, 3600.0]   # SRH-2D snapshots; trim to fewer frames if desired
+    variables: ["u", "v"]          # depth-averaged velocity only (no depth)
+    flags_file: "data/piv_flags.npy"   # (n_cells, 3) 0/1 flags [xi, u, v]; row i = SRH-2D element i+1
+    noise_sigma: 0.0               # e.g. 0.05 = Gaussian noise, 5 % of max |u| per snapshot
+    seed: 42
+
+training:
+  strategy: "standard"
+  t_start: 0.0
+  t_end:   3600.0
+
+  adam_epochs: 10000
+  adam_lr: 1.0e-3
+  adam_lr_decay: 0.5
+  adam_decay_every: 2500
+  lbfgs_epochs: 500
+  n_time_samples: 10
+
+  loss_weights:
+    lambda_fvm:  1.0
+    lambda_ic:   10.0
+    lambda_bc:   30.0
+    lambda_data: 10.0       # <-- sparse u/v measurements on (SR-A-mass: 0.0)
+
+  component_weights:
+    lambda_xi: 1.0
+    lambda_hu: 1.0          # weights the u misfit in velocity mode
+    lambda_hv: 1.0          # weights the v misfit in velocity mode
+
+  use_grad_checkpoint: false
+
+  mass_conservation:
+    enabled: true
+    lambda_mass: 1.0      # weight of mean((E_k / flux_scale)^2)
+    n_regions: 10         # nested regions along the channel (last = whole domain)
+    upstream_bc: [1]      # BC id(s) marking the upstream end
+    flux_scale: null      # m^3/s; null = prescribed inlet Q (187.4)
+
+  logging:
+    print_freq: 100
+    save_freq: 1000
+    checkpoint_dir: "./checkpoints/SR_A_mass_piv"
