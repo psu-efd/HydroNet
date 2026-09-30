@@ -822,10 +822,11 @@ class SWE_PINN(nn.Module):
         # Compute component-wise losses with numerical stability
         eps = torch.tensor(1e-8, device=self.device)
         
-        # Only compute loss for points where the variable is available (flag = 1)
-        h_loss = torch.mean(h_flag * (h_pred - h_true)**2) + eps
-        u_loss = torch.mean(u_flag * (u_pred - u_true)**2) + eps
-        v_loss = torch.mean(v_flag * (v_pred - v_true)**2) + eps
+        # Only compute loss for points where the variable is available (flag = 1),
+        # averaged over those points so unflagged points don't dilute the loss
+        h_loss = torch.sum(h_flag * (h_pred - h_true)**2) / h_flag.sum().clamp(min=1.0) + eps
+        u_loss = torch.sum(u_flag * (u_pred - u_true)**2) / u_flag.sum().clamp(min=1.0) + eps
+        v_loss = torch.sum(v_flag * (v_pred - v_true)**2) / v_flag.sum().clamp(min=1.0) + eps
         
         # Combine losses with weights (currently equal weights)
         data_loss = h_loss + u_loss + v_loss

@@ -142,6 +142,40 @@ makes this useful. Good defaults:
 See [`HydroNet/config/fvm_pinn_config.yaml`](../../config/fvm_pinn_config.yaml)
 for the full schema with comments.
 
+## Sparse velocity measurements (image velocimetry)
+
+`data.measurements` in `sparse` / `both` mode can mimic image-velocimetry
+data taken from the SRH-2D reference:
+
+```yaml
+data:
+  measurements:
+    mode: "sparse"
+    times: [1440.0, 3600.0]
+    variables: ["u", "v"]                    # velocity, not hu/hv
+    points_file: "data/piv_points.csv"       # x, y per row -> nearest cell
+    # points_file: "data/piv_cells.npy"      # or 1 column of cell IDs
+    # cell_id_base: 1                        #   (1 = SRH-2D numbering)
+    # flags_file: "data/piv_flags.npy"       # or per-cell 0/1 flags,
+    #                                        #   (n_cells,) or (n_cells, 3)
+```
+
+- With `u` / `v` the targets are SRH-2D depth-averaged velocities, and the
+  loss compares them with the network's `hu/h`, `hv/h` (with
+  `h = xi + h_still`, clamped at `physics.h_dry`). No SRH-2D depth reaches
+  the data term. `u`/`v` cannot be mixed with `hu`/`hv`; `xi` can be added.
+- The same cells are used at every selected time; cells that are dry at a
+  given time are skipped. Without `points_file` / `flags_file`, `n_points`
+  random wet cells are drawn per time, as before.
+- A 3-column `flags_file` gives per-variable flags in `[xi, u, v]` order
+  (AND-ed with `variables`), like PINN's `data_flags.npy`.
+- Each data component is averaged over the rows that supervise it, so
+  sparse rows are not diluted by rows masked out for that variable.
+- In velocity mode the history keys `data_hu` / `data_hv` hold the `u` / `v`
+  misfits, and `lambda_hu` / `lambda_hv` weight them. Velocities are
+  smaller than unit discharges wherever `h > 1 m`, so you may need to
+  re-tune these weights or `lambda_data`.
+
 ## Example cases
 
 Four reference cases are bundled under `examples/FVM_PINN/`. Each has a

@@ -14,6 +14,7 @@ dataset is therefore "one case per instance" and the ``__len__`` /
 training is full-batch, driven by ``get_*_data()`` accessors.
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,8 @@ from ...utils.config import Config
 from ._internal.mesh.srh2d_reader import SRH2DMeshReader
 from ._internal.mesh.mesh_topology import build_mesh
 from ._internal.fvm.geometry import compute_cell_geometry
+
+logger = logging.getLogger(__name__)
 
 
 class FVM_PINNDataset(Dataset):
@@ -434,6 +437,31 @@ class FVM_PINNDataset(Dataset):
             ``[N, 3]`` so sparse rows can be velocity-only while dense rows
             supervise all three components. Used by BIC-E.
 
+        Velocity measurements (``sparse`` / ``both``)
+            ``variables`` may list ``u`` / ``v`` (depth-averaged velocity)
+            instead of ``hu`` / ``hv``. Those rows are compared against the
+            network's ``hu/h``, ``hv/h`` in the loss, so the targets carry no
+            SRH-2D depth -- mimicking image-velocimetry data. ``u``/``v`` and
+            ``hu``/``hv`` cannot be mixed in one ``variables`` list.
+
+        Fixed measurement locations (``sparse`` / ``both``)
+            By default ``n_points`` wet cells are drawn at random per
+            snapshot. Instead, give exactly one of:
+
+            ``points_file``
+                ``.npy`` / ``.csv`` / ``.txt``. One column: cell IDs
+                (offset by ``cell_id_base``, default 0; use 1 for SRH-2D
+                numbering). Two columns: ``x, y`` coordinates, snapped to
+                the nearest cell centre.
+            ``flags_file``
+                ``.npy`` / ``.csv`` / ``.txt`` with one row per mesh cell,
+                like PINN's ``data_flags.npy``. One column: 0/1 selects the
+                cell. Three columns: per-variable 0/1 flags in
+                ``[xi, u|hu, v|hv]`` order, AND-ed with ``variables``.
+
+            The same cells are used at every selected snapshot (only those
+            that are wet at that time); ``n_points`` is ignored.
+
         Returns None when neither an h5 file nor the measurements block
         provides usable reference data.
         """
@@ -472,6 +500,7 @@ class FVM_PINNDataset(Dataset):
         default_seed = int(meas_cfg.get("seed", 42))
         default_noise = float(meas_cfg.get("noise_sigma", 0.0))
         default_vars = list(meas_cfg.get("variables", ["xi", "hu", "hv"]))
+        fixed_cells, cell_flags = self._measurement_cells(meas_cfg)
 
         if mode == "sparse":
             return self._ref_data_sparse(
@@ -481,6 +510,8 @@ class FVM_PINNDataset(Dataset):
                 variables=default_vars,
                 noise_sigma=default_noise,
                 seed=default_seed,
+                fixed_cells=fixed_cells,
+                cell_flags=cell_flags,
             )
 
         # mode == "both"
@@ -493,6 +524,8 @@ class FVM_PINNDataset(Dataset):
             variables=default_vars,
             noise_sigma=default_noise,
             seed=default_seed,
+            fixed_cells=fixed_cells,
+            cell_flags=cell_flags,
         )
         dense_block = self._ref_data_dense(
             times_all, h_all, vel_all, xc, yc, h_still_np,
@@ -567,8 +600,17 @@ class FVM_PINNDataset(Dataset):
         variables: list,
         noise_sigma: float,
         seed: int,
+        fixed_cells: Optional[np.ndarray] = None,
+        cell_flags: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, torch.Tensor]]:
-        """Subsample ``n_points`` wet cells at each selected snapshot time."""
+        """Measurement rows at each selected snapshot time.
+
+        Rows are ``n_points`` random wet cells, or the wet subset of
+        ``fixed_cells`` when given (``cell_flags`` [len(fixed_cells), 3]
+        then refines the per-row variable mask). With ``u``/``v`` in
+        ``variables`` the momentum columns of ``U_ref`` hold velocity and
+        the block carries ``vel_target`` / ``h_still`` for the loss.
+        """
         # Resolve requested times: empty list => all in-window snapshots.
         tol = 0.01 * max(self.t_end - self.t_start, 1.0)
         if not req_times:
@@ -587,43 +629,79 @@ class FVM_PINNDataset(Dataset):
                     )
                 sel_ti.append(ti)
 
-        # Variable mask: [xi, hu, hv] in that order
-        var_ix = {"xi": 0, "hu": 1, "hv": 2}
+        # Variable mask over U_ref columns [xi, hu|u, hv|v]. u/v select
+        # velocity targets for the momentum columns (no SRH-2D depth leaks
+        # into them); they cannot be mixed with hu/hv.
+        var_ix = {"xi": 0, "hu": 1, "hv": 2, "u": 1, "v": 2}
         mask_vec = np.zeros(3, dtype=np.float64)
         for v in variables:
             if v not in var_ix:
                 raise ValueError(
                     f"data.measurements.variables entry {v!r} must be one of "
-                    f"'xi', 'hu', 'hv'"
+                    f"'xi', 'hu', 'hv', 'u', 'v'"
                 )
             mask_vec[var_ix[v]] = 1.0
         if mask_vec.sum() == 0:
             raise ValueError("data.measurements.variables cannot be empty.")
+        use_vel = bool({"u", "v"} & set(variables))
+        if use_vel and {"hu", "hv"} & set(variables):
+            raise ValueError(
+                "data.measurements.variables cannot mix velocity ('u', 'v') "
+                "with unit discharge ('hu', 'hv')."
+            )
 
         rng = np.random.default_rng(seed)
         all_xyt: list = []
         all_U: list = []
+        all_vm: list = []
+        all_hs: list = []
         for ti in sel_ti:
             t_val = float(times_all[ti])
             h_ref = h_all[ti]
             vel_ref = vel_all[ti]
-            wet = np.where(h_ref > self.h_dry)[0]
-            if len(wet) == 0:
-                continue
-            take = min(n_points, len(wet))
-            pick = rng.choice(wet, size=take, replace=False)
+            if fixed_cells is not None:
+                wet_sel = h_ref[fixed_cells] > self.h_dry
+                pick = fixed_cells[wet_sel]
+                row_vm = mask_vec[None, :] * (
+                    cell_flags[wet_sel] if cell_flags is not None
+                    else np.ones((len(pick), 1))
+                )
+                # Drop cells whose flags select no variable in `variables`.
+                has_var = row_vm.sum(axis=1) > 0
+                pick, row_vm = pick[has_var], row_vm[has_var]
+                take = len(pick)
+                if take == 0:
+                    continue
+            else:
+                wet = np.where(h_ref > self.h_dry)[0]
+                if len(wet) == 0:
+                    continue
+                take = min(n_points, len(wet))
+                pick = rng.choice(wet, size=take, replace=False)
+                row_vm = np.broadcast_to(mask_vec[None, :], (take, 3))
 
             xi_t = h_ref[pick] - h_still_np[pick]
-            hu_t = h_ref[pick] * vel_ref[pick, 0]
-            hv_t = h_ref[pick] * vel_ref[pick, 1]
-            U_t = np.column_stack([xi_t, hu_t, hv_t])
+            if use_vel:
+                m1_t = vel_ref[pick, 0]
+                m2_t = vel_ref[pick, 1]
+            else:
+                m1_t = h_ref[pick] * vel_ref[pick, 0]
+                m2_t = h_ref[pick] * vel_ref[pick, 1]
+            U_t = np.column_stack([xi_t, m1_t, m2_t])
 
             if noise_sigma > 0.0:
                 # Per-component noise scaled by the max |U| in the snapshot.
+                if use_vel:
+                    wet_all = h_ref > self.h_dry
+                    m1_all = np.where(wet_all, vel_ref[:, 0], 0.0)
+                    m2_all = np.where(wet_all, vel_ref[:, 1], 0.0)
+                else:
+                    m1_all = h_ref * vel_ref[:, 0]
+                    m2_all = h_ref * vel_ref[:, 1]
                 scales = np.array([
                     np.abs(h_ref - h_still_np).max(),
-                    np.abs(h_ref * vel_ref[:, 0]).max(),
-                    np.abs(h_ref * vel_ref[:, 1]).max(),
+                    np.abs(m1_all).max(),
+                    np.abs(m2_all).max(),
                 ], dtype=np.float64)
                 scales = np.where(scales > 0, scales, 1.0)
                 U_t = U_t + noise_sigma * scales * rng.standard_normal(U_t.shape)
@@ -633,36 +711,145 @@ class FVM_PINNDataset(Dataset):
             ])
             all_xyt.append(xyt_t)
             all_U.append(U_t)
+            all_vm.append(row_vm)
+            all_hs.append(h_still_np[pick])
 
         if not all_xyt:
             return None
 
         xyt = np.concatenate(all_xyt)
         U = np.concatenate(all_U)
-        # Broadcast per-point var_mask of shape [N, 3] so it can be stacked
-        # with dense blocks that use different variable subsets.
-        vm = np.broadcast_to(mask_vec[None, :], (xyt.shape[0], 3)).copy()
-        return {
+        # Per-point var_mask of shape [N, 3] so it can be stacked with dense
+        # blocks that use different variable subsets.
+        vm = np.concatenate(all_vm)
+        block = {
             "xyt":      torch.tensor(xyt, dtype=self.dtype, device=self.device),
             "U_ref":    torch.tensor(U,   dtype=self.dtype, device=self.device),
             "var_mask": torch.tensor(vm,  dtype=self.dtype, device=self.device),
         }
+        if use_vel:
+            block["vel_target"] = torch.ones(
+                xyt.shape[0], dtype=self.dtype, device=self.device
+            )
+            block["h_still"] = torch.tensor(
+                np.concatenate(all_hs), dtype=self.dtype, device=self.device
+            )
+        return block
+
+    def _measurement_cells(self, meas_cfg):
+        """Resolve ``points_file`` / ``flags_file`` into mesh cell indices.
+
+        Returns ``(cells, flags)``: ``cells`` is an int array of 0-based cell
+        indices (None -> random sampling); ``flags`` is a [len(cells), 3]
+        per-variable 0/1 mask, or None when every variable listed in
+        ``variables`` applies to every cell.
+        """
+        points_file = meas_cfg.get("points_file", None)
+        flags_file = meas_cfg.get("flags_file", None)
+        if points_file and flags_file:
+            raise ValueError(
+                "data.measurements: give either points_file or flags_file, not both."
+            )
+        if not points_file and not flags_file:
+            return None, None
+
+        n_cells = self._mesh_data["cell_center"].shape[0]
+        arr = self._load_table(points_file or flags_file)
+
+        if flags_file:
+            if arr.ndim == 2 and arr.shape[1] == 1:
+                arr = arr[:, 0]
+            if arr.shape[0] != n_cells or arr.ndim not in (1, 2) or (
+                arr.ndim == 2 and arr.shape[1] != 3
+            ):
+                raise ValueError(
+                    f"flags_file {flags_file!r} must have shape ({n_cells},) or "
+                    f"({n_cells}, 3); got {arr.shape}"
+                )
+            flags = (arr != 0).astype(np.float64)
+            if flags.ndim == 1:
+                cells = np.where(flags > 0)[0]
+                flags3 = None
+            else:
+                cells = np.where(flags.any(axis=1))[0]
+                flags3 = flags[cells]
+            if len(cells) == 0:
+                raise ValueError(f"flags_file {flags_file!r} selects no cells.")
+            logger.info(f"Measurement cells from flags_file: {len(cells)}/{n_cells}")
+            return cells, flags3
+
+        if arr.ndim == 1 or arr.shape[1] == 1:
+            ids = arr.reshape(-1)
+            if not np.all(ids == np.round(ids)):
+                raise ValueError(
+                    f"points_file {points_file!r}: a single column must hold "
+                    f"integer cell IDs."
+                )
+            cells = ids.astype(np.int64) - int(meas_cfg.get("cell_id_base", 0))
+            if cells.min() < 0 or cells.max() >= n_cells:
+                raise ValueError(
+                    f"points_file {points_file!r}: cell IDs out of range for a "
+                    f"{n_cells}-cell mesh (check cell_id_base)."
+                )
+        elif arr.shape[1] == 2:
+            from scipy.spatial import cKDTree
+            centres = self._mesh_data["cell_center"].detach().cpu().numpy()
+            dist, cells = cKDTree(centres).query(arr)
+            logger.info(
+                f"Snapped {len(arr)} measurement points to cell centres "
+                f"(max distance {dist.max():.3g} m)"
+            )
+        else:
+            raise ValueError(
+                f"points_file {points_file!r} must have 1 column (cell IDs) or "
+                f"2 columns (x, y); got shape {arr.shape}"
+            )
+
+        # Several points may land in the same cell; keep each cell once.
+        _, first = np.unique(cells, return_index=True)
+        cells = np.asarray(cells)[np.sort(first)]
+        logger.info(f"Measurement cells from points_file: {len(cells)}")
+        return cells, None
+
+    @staticmethod
+    def _load_table(path) -> np.ndarray:
+        """Load a numeric table from ``.npy`` or delimited text."""
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Measurement file not found: {path}")
+        if path.suffix.lower() == ".npy":
+            return np.asarray(np.load(path), dtype=np.float64)
+        delimiter = "," if path.suffix.lower() == ".csv" else None
+        return np.loadtxt(path, delimiter=delimiter, ndmin=1)
 
     @staticmethod
     def _concat_ref_blocks(
         a: Optional[Dict[str, torch.Tensor]],
         b: Optional[Dict[str, torch.Tensor]],
     ) -> Optional[Dict[str, torch.Tensor]]:
-        """Concatenate two ref_data blocks along the point dimension."""
+        """Concatenate two ref_data blocks along the point dimension.
+
+        ``vel_target`` / ``h_still`` exist only on velocity blocks; a block
+        without them is padded with zeros (``vel_target = 0`` means the row
+        is compared in conserved form, so its ``h_still`` is unused).
+        """
         if a is None:
             return b
         if b is None:
             return a
-        return {
+        out = {
             "xyt":      torch.cat([a["xyt"],      b["xyt"]],      dim=0),
             "U_ref":    torch.cat([a["U_ref"],    b["U_ref"]],    dim=0),
             "var_mask": torch.cat([a["var_mask"], b["var_mask"]], dim=0),
         }
+        for key in ("vel_target", "h_still"):
+            if key in a or key in b:
+                parts = [
+                    blk[key] if key in blk else blk["xyt"].new_zeros(blk["xyt"].shape[0])
+                    for blk in (a, b)
+                ]
+                out[key] = torch.cat(parts, dim=0)
+        return out
 
     def _load_srh2d_ic_at(self, t_target: float):
         """Load h/hu/hv from an SRH-2D h5 snapshot nearest to ``t_target``."""

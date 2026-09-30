@@ -43,7 +43,7 @@ import torch.optim as optim
 from ..fvm.riemann_solver import compute_fvm_residual
 from ..fvm.time_stepping import run_fvm_rk2
 from ..pinn.network import SWENet, SirenSWENet, NetworkConfig
-from ..pinn.loss import LossConfig
+from ..pinn.loss import LossConfig, prediction_in_ref_form
 from .base_trainer import _to_device
 from .memory_tracker import MemoryTracker
 
@@ -558,7 +558,7 @@ class TeacherTrainer:
         """
         xyt = ref_data["xyt"]
         U_ref = ref_data["U_ref"]
-        Q_pred = self.network(xyt)
+        Q_pred = prediction_in_ref_form(self.network(xyt), ref_data, self.cfg.h_dry)
         diff = (Q_pred - U_ref) ** 2
 
         var_mask = ref_data.get("var_mask")
