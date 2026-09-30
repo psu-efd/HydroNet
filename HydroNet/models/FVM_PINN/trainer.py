@@ -42,7 +42,7 @@ from ._internal.trainers import (
     TeacherTrainer, TeacherTrainerConfig,
 )
 from ._internal.trainers.memory_tracker import MemoryTracker
-from ._internal.pinn.loss import LossConfig, FVMPINNLoss
+from ._internal.pinn.loss import LossConfig, FVMPINNLoss, prediction_in_ref_form
 
 logger = logging.getLogger(__name__)
 
@@ -187,9 +187,15 @@ class FVM_PINNTrainer:
         if ref_data is not None:
             with torch.no_grad():
                 Q_ref = self._trainer.predict(ref_data["xyt"])
+                # Same column form as U_ref ([xi, u, v] on velocity rows).
+                Q_ref = prediction_in_ref_form(
+                    Q_ref, ref_data, self.dataset.h_dry
+                )
             out["ref_xyt"]   = ref_data["xyt"].detach().cpu()
             out["ref_U_ref"] = ref_data["U_ref"].detach().cpu()
             out["ref_U_pred"] = Q_ref.detach().cpu()
+            if "vel_target" in ref_data:
+                out["ref_vel_target"] = ref_data["vel_target"].detach().cpu()
 
         history = self._trainer.history
         out["final_loss"] = float(final_loss) if final_loss is not None else float("nan")

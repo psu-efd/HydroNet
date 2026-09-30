@@ -258,15 +258,17 @@ class TimeWindowTrainer:
         if not mask.any():
             return None
 
-        filtered = {"xyt": xyt[mask], "U_ref": self._ref_data["U_ref"][mask]}
-        if "var_mask" in self._ref_data:
-            vm = self._ref_data["var_mask"]
-            # Per-point [N, 3] masks must be filtered alongside xyt/U_ref;
-            # legacy global [3] masks (bool or float) pass through unchanged.
-            if vm.dim() >= 2 and vm.shape[0] == xyt.shape[0]:
-                filtered["var_mask"] = vm[mask]
+        # Per-point entries (xyt, U_ref, per-point var_mask, vel_target,
+        # h_still) are filtered alongside xyt; legacy global [3] var_masks
+        # (bool or float) pass through unchanged.
+        filtered = {}
+        for k, v in self._ref_data.items():
+            if k == "var_mask" and v.dim() < 2:
+                filtered[k] = v
+            elif isinstance(v, torch.Tensor) and v.dim() >= 1 and v.shape[0] == xyt.shape[0]:
+                filtered[k] = v[mask]
             else:
-                filtered["var_mask"] = vm
+                filtered[k] = v
 
         n_total = xyt.shape[0]
         n_kept = mask.sum().item()

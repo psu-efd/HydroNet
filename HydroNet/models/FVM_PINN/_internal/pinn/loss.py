@@ -30,6 +30,28 @@ logger = logging.getLogger(__name__)
 G = 9.81
 
 
+def prediction_in_ref_form(
+    Q_pred: torch.Tensor, ref_data: Dict, h_dry: float
+) -> torch.Tensor:
+    """Map network output ``[xi, hu, hv]`` onto the columns of ``U_ref``.
+
+    Rows flagged by ``ref_data["vel_target"]`` hold depth-averaged velocity
+    ``[xi, u, v]`` (e.g. image-velocimetry measurements, which carry no
+    depth information), so the predicted momentum is divided by the
+    predicted depth ``h = xi + h_still`` there. ``h`` is clamped at
+    ``h_dry`` to keep the division finite. Other rows are returned
+    unchanged. Without ``vel_target`` this is the identity.
+    """
+    vel_target = ref_data.get("vel_target")
+    if vel_target is None:
+        return Q_pred
+    h = (Q_pred[:, 0] + ref_data["h_still"]).clamp(min=h_dry)
+    is_vel = vel_target > 0.5
+    col1 = torch.where(is_vel, Q_pred[:, 1] / h, Q_pred[:, 1])
+    col2 = torch.where(is_vel, Q_pred[:, 2] / h, Q_pred[:, 2])
+    return torch.stack([Q_pred[:, 0], col1, col2], dim=1)
+
+
 @dataclass
 class LossConfig:
     """Loss weights and settings.
@@ -397,6 +419,7 @@ class FVMPINNLoss(nn.Module):
 
     def _data_loss(self, network: nn.Module, ref_data: Dict) -> Dict[str, torch.Tensor]:
         Q_pred = self._network_forward(network, ref_data["xyt"])
+        Q_pred = prediction_in_ref_form(Q_pred, ref_data, self.cfg.h_dry)
         diff_sq = (Q_pred - ref_data["U_ref"]) ** 2
         device, dtype = diff_sq.device, diff_sq.dtype
 
