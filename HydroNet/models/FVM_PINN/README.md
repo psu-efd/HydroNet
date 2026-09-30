@@ -169,6 +169,9 @@ data:
   random wet cells are drawn per time, as before.
 - A 3-column `flags_file` gives per-variable flags in `[xi, u, v]` order
   (AND-ed with `variables`), like PINN's `data_flags.npy`.
+- Paint a `flags_file` interactively (rectangle select, random % thinning,
+  undo; the file may not exist yet):
+  `cd examples/FVM_PINN/<case> && python -m HydroNet.utils.edit_flags_interactive --fvm-config <yaml>`.
 - Preview the measurements before training (no model is built):
   `cd examples/FVM_PINN/<case> && python ../plot_measurements.py --config <yaml>`.
 - Each data component is averaged over the rows that supervise it, so

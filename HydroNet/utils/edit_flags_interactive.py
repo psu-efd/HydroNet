@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Interactive PINN data flag editor.
+"""Interactive PINN / FVM-PINN data flag editor.
 
 Usage:
     python edit_flags_interactive.py [dir_path]
+    python edit_flags_interactive.py --fvm-config fvm_pinn_config.yaml
 
     dir_path: directory containing data_flags.npy and data_points.npy.
               Defaults to the current working directory.
+
+    --fvm-config: FVM-PINN YAML with data.measurements.flags_file set.
+              Run from the case directory (YAML paths are relative). One
+              point per mesh cell (its centre), flags [xi, u|hu, v|hv],
+              drawn over the SRH-2D wet-cell speed at the last measurement
+              time. If flags_file does not exist yet, all cells start
+              unflagged. Save writes (n_cells, 3) flags to flags_file
+              (.npy, or .csv / .txt as integer text).
 
 Controls:
     - Drag (left mouse) on the plot to select points inside a rectangle.
@@ -34,12 +43,39 @@ COLOR_SELECTED = "gold"
 
 
 class FlagEditor:
-    def __init__(self, dir_path: str):
-        self.dir_path = os.path.abspath(dir_path)
-        self._load_data()
+    def __init__(
+        self,
+        dir_path: str = ".",
+        *,
+        points: np.ndarray = None,
+        flags: np.ndarray = None,
+        save_path: str = None,
+        flag_names=None,
+        title: str = "PINN Data Flag Editor",
+        background=None,
+        view_var: int = 0,
+        modify_vars=None,
+    ):
+        """Edit ``data_flags.npy`` in ``dir_path``, or in-memory ``points`` /
+        ``flags`` saved to ``save_path``. ``background(ax)`` draws under the
+        points (e.g. the mesh)."""
+        self.flag_names = list(flag_names or FLAG_NAMES)
+        self._title = title
+        self._background = background
+        if points is not None:
+            self.data_points = np.asarray(points)
+            self.data_flags = np.asarray(flags).astype(np.int32)
+            self.N = self.data_points.shape[0]
+            self.save_path = os.path.abspath(save_path)
+            self.dir_path = os.path.dirname(self.save_path)
+            print(f"Loaded {self.N} points  |  flags shape: {self.data_flags.shape}")
+        else:
+            self.dir_path = os.path.abspath(dir_path)
+            self.save_path = os.path.join(self.dir_path, "data_flags.npy")
+            self._load_data()
 
-        self._view_var = 0          # index into FLAG_NAMES for the displayed variable
-        self._modify_vars = [True, True, True]  # which flags to edit
+        self._view_var = view_var   # index into flag_names for the displayed variable
+        self._modify_vars = list(modify_vars or [True, True, True])  # which flags to edit
         self._rand_pct = 100.0      # percentage of selected points to affect
         self._selected = np.zeros(self.N, dtype=bool)
         self._history: list[np.ndarray] = []
@@ -75,7 +111,7 @@ class FlagEditor:
     def _build_ui(self) -> None:
         self.fig = plt.figure(figsize=(15, 8))
         try:
-            self.fig.canvas.manager.set_window_title("PINN Data Flag Editor")
+            self.fig.canvas.manager.set_window_title(self._title)
         except Exception:
             pass
 
@@ -104,14 +140,14 @@ class FlagEditor:
         # View variable
         _label_ax([x0, 0.88, 0.30, 0.05], "View variable:")
         ax_view = self.fig.add_axes([x0, 0.73, 0.13, 0.14])
-        self.radio_view = mwidgets.RadioButtons(ax_view, FLAG_NAMES, active=0)
+        self.radio_view = mwidgets.RadioButtons(ax_view, self.flag_names, active=self._view_var)
         self.radio_view.on_clicked(self._on_view_change)
 
         # Modify variables
         _label_ax([x0, 0.68, 0.30, 0.05], "Modify flags:")
         ax_check = self.fig.add_axes([x0, 0.53, 0.13, 0.14])
         self.check_modify = mwidgets.CheckButtons(
-            ax_check, FLAG_NAMES, [True, True, True]
+            ax_check, self.flag_names, list(self._modify_vars)
         )
         self.check_modify.on_clicked(self._on_modify_change)
 
@@ -175,6 +211,8 @@ class FlagEditor:
         self.ax_main.set_xlabel("X")
         self.ax_main.set_ylabel("Y")
         self.ax_main.set_aspect("equal", adjustable="datalim")
+        if self._background is not None:
+            self._background(self.ax_main)
 
         colors = self._point_colors()
         sizes = self._point_sizes()
@@ -225,7 +263,7 @@ class FlagEditor:
         self._scatter.set_facecolors(colors)
         self._scatter.set_sizes(sizes)
 
-        var_name = FLAG_NAMES[self._view_var]
+        var_name = self.flag_names[self._view_var]
         n_active = int(self.data_flags[:, self._view_var].sum())
         n_sel = int(self._selected.sum())
 
@@ -249,7 +287,7 @@ class FlagEditor:
     def _update_status(self) -> None:
         n_sel = int(self._selected.sum())
         modify_str = (
-            "+".join(FLAG_NAMES[i] for i, v in enumerate(self._modify_vars) if v) or "none"
+            "+".join(self.flag_names[i] for i, v in enumerate(self._modify_vars) if v) or "none"
         )
         self.status_text.set_text(
             f"dir: {self.dir_path}  |  selected: {n_sel}/{self.N}  |  "
@@ -263,12 +301,12 @@ class FlagEditor:
     # ------------------------------------------------------------------
 
     def _on_view_change(self, label: str) -> None:
-        self._view_var = FLAG_NAMES.index(label)
+        self._view_var = self.flag_names.index(label)
         self._update_scatter()
         self._update_status()
 
     def _on_modify_change(self, label: str) -> None:
-        idx = FLAG_NAMES.index(label)
+        idx = self.flag_names.index(label)
         self._modify_vars[idx] = not self._modify_vars[idx]
         self._update_status()
 
@@ -359,9 +397,13 @@ class FlagEditor:
         self._update_status()
 
     def _on_save(self, _event) -> None:
-        out_path = os.path.join(self.dir_path, "data_flags.npy")
-        np.save(out_path, self.data_flags)
-        print(f"Saved → {out_path}")
+        out_path = self.save_path
+        if out_path.lower().endswith(".npy"):
+            np.save(out_path, self.data_flags)
+        else:
+            delim = "," if out_path.lower().endswith(".csv") else " "
+            np.savetxt(out_path, self.data_flags, fmt="%d", delimiter=delim)
+        print(f"Saved -> {out_path}")
         self.ax_main.set_title(
             f"  SAVED to {out_path}  ", color="green", fontsize=11, fontweight="bold"
         )
@@ -376,16 +418,102 @@ class FlagEditor:
 # Entry point
 # ----------------------------------------------------------------------
 
+def fvm_editor_kwargs(config_path: str) -> dict:
+    """FlagEditor arguments for an FVM-PINN config's ``flags_file``."""
+    from HydroNet.utils.config import Config
+    from HydroNet.models.FVM_PINN.data import FVM_PINNDataset
+    from HydroNet.models.FVM_PINN._internal.mesh.srh2d_reader import SRH2DMeshReader
+    from HydroNet.models.FVM_PINN._internal.mesh.mesh_topology import build_mesh
+
+    config = Config(config_path)
+    flags_file = config.get("data.measurements.flags_file", None)
+    if not flags_file:
+        raise SystemExit(
+            f"{config_path}: set data.measurements.flags_file to the file to edit."
+        )
+    mesh = build_mesh(SRH2DMeshReader(str(config.get_required_config("data.srhhydro"))).read())
+    n_cells = mesh.n_cells
+
+    if os.path.exists(flags_file):
+        flags = FVM_PINNDataset._load_table(flags_file)
+        if flags.ndim == 2 and flags.shape[1] == 1:
+            flags = flags[:, 0]
+        if flags.ndim == 1:
+            # 1-column file: the cell flag applies to every variable.
+            flags = np.repeat(flags[:, None], 3, axis=1)
+        if flags.shape != (n_cells, 3):
+            raise SystemExit(
+                f"{flags_file} has shape {flags.shape}; expected ({n_cells},) or ({n_cells}, 3)."
+            )
+        flags = (flags != 0).astype(np.int32)
+    else:
+        print(f"{flags_file} not found: starting with all {n_cells} cells unflagged.")
+        flags = np.zeros((n_cells, 3), dtype=np.int32)
+
+    variables = list(config.get("data.measurements.variables", ["xi", "hu", "hv"]))
+    names = ["xi", "u", "v"] if {"u", "v"} & set(variables) else ["xi", "hu", "hv"]
+
+    # Background: SRH-2D wet-cell speed at the last measurement time (if available).
+    speed, t_bg = None, None
+    h5_file = config.get("data.srh2d_h5_file", None)
+    if h5_file and os.path.exists(str(h5_file)):
+        import h5py
+        meas = config.get("data.measurements", {}) or {}
+        req = list(meas.get("times", []) or meas.get("sparse_times", []) or [])
+        t_bg = float(req[-1]) if req else float(config.get("training.t_end", 0.0))
+        h_dry = float(config.get("physics.h_dry", 1e-2))
+        with h5py.File(str(h5_file), "r") as f:
+            times = f["Water_Depth_m/Times"][:]
+            ti = int(np.argmin(np.abs(times - t_bg)))
+            h = f["Water_Depth_m/Values"][ti, :]
+            vel = f["Velocity_m_p_s/Values"][ti, :, :]
+        t_bg = float(times[ti])
+        speed = np.where(h > h_dry, np.hypot(vel[:, 0], vel[:, 1]), np.nan)
+
+    def background(ax):
+        tris, tri_cell = [], []
+        for ci, cn in enumerate(mesh.cell_nodes):
+            for k in range(1, len(cn) - 1):
+                tris.append([cn[0], cn[k], cn[k + 1]])
+                tri_cell.append(ci)
+        x, y = mesh.node_xy[:, 0], mesh.node_xy[:, 1]
+        if speed is not None:
+            pc = ax.tripcolor(x, y, tris, facecolors=speed[tri_cell], cmap="Greys",
+                              alpha=0.5, zorder=1)
+            ax.figure.colorbar(pc, ax=ax, shrink=0.6, pad=0.01,
+                               label=f"SRH-2D |V| at t = {t_bg:g} s [m/s]")
+        ax.triplot(x, y, tris, color="k", lw=0.15, alpha=0.3, zorder=2)
+
+    return dict(
+        points=mesh.cell_center,
+        flags=flags,
+        save_path=flags_file,
+        flag_names=names,
+        title=f"FVM-PINN Flag Editor: {flags_file}",
+        background=background,
+        view_var=1,
+        modify_vars=["xi" in variables, True, True],
+    )
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Interactive PINN data flag editor")
+    parser = argparse.ArgumentParser(description="Interactive PINN / FVM-PINN data flag editor")
     parser.add_argument(
         "dir_path",
         nargs="?",
         default=".",
         help="Directory containing data_flags.npy and data_points.npy",
     )
+    parser.add_argument(
+        "--fvm-config",
+        default=None,
+        help="FVM-PINN YAML; edits its data.measurements.flags_file (one flag row per cell)",
+    )
     args = parser.parse_args()
-    FlagEditor(args.dir_path)
+    if args.fvm_config:
+        FlagEditor(**fvm_editor_kwargs(args.fvm_config))
+    else:
+        FlagEditor(args.dir_path)
     plt.show()
 
 
