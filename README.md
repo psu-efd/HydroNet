@@ -199,7 +199,17 @@ Xiaofeng Liu (xiaofengliu19@gmail.com)
 If you use HydroNet in your research, please cite:
 
 ```bibtex
-@misc{liu2026,
+@misc{liu2026finitevolumeinformedneuralnetwork,
+      title={Finite Volume-Informed Neural Network Framework for 2D Shallow Water Equations: Rugged Loss Landscapes and the Importance of Data Guidance}, 
+      author={Xiaofeng Liu},
+      year={2026},
+      eprint={2605.11001},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2605.11001}, 
+}
+
+@misc{liu2026pideeponetswe,
       title={Physics-Informed Deep Operator Learning for Computational Hydraulics Modeling}, 
       author={Xiaofeng Liu and Yong G. Lai},
       year={2026},
