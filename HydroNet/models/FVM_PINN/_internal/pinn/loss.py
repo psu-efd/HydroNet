@@ -429,16 +429,16 @@ class FVMPINNLoss(nn.Module):
         # Accepts either a global mask of shape [3] or a per-point mask of
         # shape [n_pts, 3] (useful when concatenating sparse-velocity and
         # dense all-variable reference data in a single ref_data dict).
+        # Each component is averaged over its own supervised rows, so rows
+        # masked out for a variable don't dilute that variable's loss.
+        keep = torch.ones_like(diff_sq)
         if "var_mask" in ref_data:
-            mask = ref_data["var_mask"]
-            keep = mask.to(dtype=dtype, device=device)
-            if keep.dim() == 1:
-                keep = keep.unsqueeze(0)  # [3] -> [1, 3] broadcast
+            keep = keep * ref_data["var_mask"].to(dtype=dtype, device=device)
             diff_sq = diff_sq * keep
 
         def _component(j):
-            # If this column is fully zeroed by var_mask, mean() is still 0
-            return diff_sq[:, j].mean()
+            # A column fully zeroed by var_mask gives 0 (denominator >= 1)
+            return diff_sq[:, j].sum() / keep[:, j].sum().clamp(min=1.0)
 
         l_xi = _component(0)
         l_hu = _component(1)

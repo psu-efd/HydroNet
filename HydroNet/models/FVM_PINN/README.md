@@ -169,6 +169,8 @@ data:
   random wet cells are drawn per time, as before.
 - A 3-column `flags_file` gives per-variable flags in `[xi, u, v]` order
   (AND-ed with `variables`), like PINN's `data_flags.npy`.
+- Each data component is averaged over the rows that supervise it, so
+  sparse rows are not diluted by rows masked out for that variable.
 - In velocity mode the history keys `data_hu` / `data_hv` hold the `u` / `v`
   misfits, and `lambda_hu` / `lambda_hv` weight them. Velocities are
   smaller than unit discharges wherever `h > 1 m`, so you may need to
