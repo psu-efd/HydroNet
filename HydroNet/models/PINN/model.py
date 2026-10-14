@@ -650,7 +650,7 @@ class SWE_PINN(nn.Module):
                 q_specified_per_point = torch.full((n_inlet_q_points, 1), q_specified_tensor / float(n_inlet_q_points), device=self.device)
 
                 # Compute discharge per point
-                q_computed_per_point = (-h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask]).unsqueeze(1)
+                q_computed_per_point = -h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask].unsqueeze(1)
                 
                 # Loss is the squared difference between computed and specified discharge per point
                 discharge_loss = torch.mean((q_computed_per_point - q_specified_per_point)**2 + eps)
