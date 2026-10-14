@@ -323,18 +323,6 @@ class SWE_PINN(nn.Module):
         """
         return self.bSteady
     
-    def get_bNormalize(self):
-        """
-        Get the normalize flag.
-        """
-        return self.bNormalize
-    
-    def get_normalization_method(self):
-        """
-        Get the normalization method.
-        """
-        return self.normalization_method
-    
     def get_device(self):
         """
         Get the device.
@@ -506,20 +494,25 @@ class SWE_PINN(nn.Module):
             initial_values (torch.Tensor): True values at initial points.
             
         Returns:
-            torch.Tensor: Initial condition loss.
+            torch.Tensor: Initial condition loss (MSE, normalized).
+            dict: Loss components.
+            h, u, v: Predicted values at initial points (normalized).
         """
         # Get model predictions at initial points
         predictions = self.forward(initial_points)
 
+        # Predictions are z-score normalized, so h is not clipped to be positive here
         h, u, v = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
 
-        #clip h to be positive
-        h = torch.clip(h, min=1e-3)
-        
         # Compute MSE loss
         initial_loss = torch.mean((predictions - initial_values)**2)
-        
-        return initial_loss, h, u, v
+
+        # store loss components
+        initial_loss_components = {
+            'initial_loss': initial_loss.item()
+        }
+
+        return initial_loss, initial_loss_components, h, u, v
         
     def compute_boundary_loss(self, boundary_info, mesh_stats, data_stats):
         """
@@ -972,6 +965,7 @@ class SWE_PINN(nn.Module):
             }
         else:
             loss_components_for_return = {
+                'loss_components': loss_components,
                 'pde_loss_components': pde_loss_components,
                 'initial_loss_components': initial_loss_components,
                 'boundary_loss_components': boundary_loss_components,

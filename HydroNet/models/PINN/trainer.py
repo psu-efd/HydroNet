@@ -592,7 +592,7 @@ class PINNTrainer:
         # Compute initial loss if enabled
         if self.bInitial_loss and initial_points is not None and initial_values is not None:
             with torch.no_grad():
-                initial_loss, _, _ = self.model.compute_initial_loss(initial_points, initial_values)
+                initial_loss, _, _, _, _ = self.model.compute_initial_loss(initial_points, initial_values)
                 initial_losses.append(initial_loss.item())
         
         # Compute boundary loss if enabled
