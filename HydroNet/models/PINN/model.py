@@ -670,7 +670,7 @@ class SWE_PINN(nn.Module):
                 exit_h_option = bc_config['exit_h_option']
 
                 # Get bed elevation 
-                bed_elevation = boundary_z[bc_mask]
+                bed_elevation = boundary_z[bc_mask].unsqueeze(1)  # Keep dimension
                 bed_tensor = bed_elevation.clone().detach().to(device)
 
                 if exit_h_option == "constant":
@@ -681,7 +681,7 @@ class SWE_PINN(nn.Module):
                     
                 elif exit_h_option == "rating-curve":
                     # Compute the total discharge from the predicted velocities and water depth 
-                    q_computed = torch.sum(h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask])
+                    q_computed = torch.sum(h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask].unsqueeze(1))  # Keep dimension
                     q_computed_tensor = torch.clip(q_computed.clone().detach(), min=0.0)                    
                     
                     # Find the WSE that corresponds to the computed discharge using linear interpolation
