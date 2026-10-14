@@ -541,9 +541,9 @@ class SWE_PINN(nn.Module):
         """
 
         # Get the stats
-        x_min = mesh_stats['x_mean']
+        x_min = mesh_stats['x_min']
         x_max = mesh_stats['x_max']
-        y_min = mesh_stats['y_mean']
+        y_min = mesh_stats['y_min']
         y_max = mesh_stats['y_max']
         if not self.bSteady:
             t_min = mesh_stats['t_min']
@@ -562,10 +562,11 @@ class SWE_PINN(nn.Module):
         sigma_v = data_stats['v_std']
 
         boundary_points, boundary_ids, boundary_z, boundary_normals, boundary_lengths, boundary_ManningN = boundary_info
-
+                
         device = boundary_points.device
         
         # Get model predictions
+        boundary_points = boundary_points.requires_grad_(True)
         predictions = self.forward(boundary_points)
         h_hat, u_hat, v_hat = predictions[:, 0:1], predictions[:, 1:2], predictions[:, 2:3]
 
@@ -639,17 +640,17 @@ class SWE_PINN(nn.Module):
                 
             if bc_type == "inlet-q":
                 # Get number of points on the boundary
-                n_inlet_q_points = torch.sum(bc_mask)
+                n_inlet_q_points = int(torch.sum(bc_mask).item())
 
                 # Get specified discharge from config
                 q_specified = bc_config['q_value']
 
                 # Convert specified discharge to tensor and distribute evenly across points
-                q_specified_tensor = torch.tensor(q_specified, device=self.device)
-                q_specified_per_point = torch.full((n_inlet_q_points,), q_specified_tensor / n_inlet_q_points, device=self.device)
-                
+                q_specified_tensor = torch.tensor(q_specified, dtype=torch.float32, device=self.device)
+                q_specified_per_point = torch.full((n_inlet_q_points, 1), q_specified_tensor / float(n_inlet_q_points), device=self.device)
+
                 # Compute discharge per point
-                q_computed_per_point = -h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask]
+                q_computed_per_point = (-h[bc_mask] * u_normal[bc_mask] * boundary_lengths[bc_mask]).unsqueeze(1)
                 
                 # Loss is the squared difference between computed and specified discharge per point
                 discharge_loss = torch.mean((q_computed_per_point - q_specified_per_point)**2 + eps)
