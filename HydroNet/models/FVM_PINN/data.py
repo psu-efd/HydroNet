@@ -14,6 +14,7 @@ dataset is therefore "one case per instance" and the ``__len__`` /
 training is full-batch, driven by ``get_*_data()`` accessors.
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,8 @@ from ...utils.config import Config
 from ._internal.mesh.srh2d_reader import SRH2DMeshReader
 from ._internal.mesh.mesh_topology import build_mesh
 from ._internal.fvm.geometry import compute_cell_geometry
+
+logger = logging.getLogger(__name__)
 
 
 class FVM_PINNDataset(Dataset):
@@ -254,10 +257,15 @@ class FVM_PINNDataset(Dataset):
             bc_id = int(raw_id)
             bc_type = bc_info.get("type")
             if bc_type == "inlet-q":
+                hydro = _hydrograph_table(bc_info, bc_id)
                 bc_ghost[bc_id] = {
                     "type": "inlet-q",
-                    "value": float(bc_info["value"]),
+                    # Constant Q, or Q at the first table entry (unused when
+                    # the hydrograph is present; kept for code that reads it).
+                    "value": float(hydro[0][1]) if hydro else float(bc_info["value"]),
                 }
+                if hydro:
+                    bc_ghost[bc_id]["hydrograph"] = hydro
             elif bc_type == "exit-h":
                 # Caller specifies WSE (not depth); ghost builder will
                 # subtract per-face bed to get h_ghost.
@@ -369,7 +377,10 @@ class FVM_PINNDataset(Dataset):
             ], dim=-1)
 
             if bc_type == "inlet-q":
-                total_Q = float(bc_info["value"])
+                hydro = _hydrograph_table(bc_info, bc_id)
+                # With a hydrograph, value is per unit Q and the loss
+                # multiplies it by Q(t).
+                total_Q = 1.0 if hydro else float(bc_info["value"])
                 inlet_len = face_length[mask].sum()
                 q_per_width = total_Q / inlet_len.clamp(min=1e-12)
                 bc_data[bc_id] = {
@@ -379,6 +390,10 @@ class FVM_PINNDataset(Dataset):
                     "nx":    face_normal[mask, 0],
                     "ny":    face_normal[mask, 1],
                 }
+                if hydro:
+                    bc_data[bc_id]["hydrograph"] = torch.tensor(
+                        hydro, dtype=self.dtype, device=fc.device
+                    )
             elif bc_type == "exit-h":
                 wse_exit = float(bc_info["value"])
                 exit_cells = face_left[mask]
@@ -481,6 +496,7 @@ class FVM_PINNDataset(Dataset):
                 variables=default_vars,
                 noise_sigma=default_noise,
                 seed=default_seed,
+                fixed_locations=bool(meas_cfg.get("fixed_locations", False)),
             )
 
         # mode == "both"
@@ -493,6 +509,7 @@ class FVM_PINNDataset(Dataset):
             variables=default_vars,
             noise_sigma=default_noise,
             seed=default_seed,
+            fixed_locations=bool(meas_cfg.get("fixed_locations", False)),
         )
         dense_block = self._ref_data_dense(
             times_all, h_all, vel_all, xc, yc, h_still_np,
@@ -567,8 +584,13 @@ class FVM_PINNDataset(Dataset):
         variables: list,
         noise_sigma: float,
         seed: int,
+        fixed_locations: bool = False,
     ) -> Optional[Dict[str, torch.Tensor]]:
-        """Subsample ``n_points`` wet cells at each selected snapshot time."""
+        """Subsample ``n_points`` wet cells at each selected snapshot time.
+
+        ``fixed_locations=True`` draws the cells once (at the first selected
+        snapshot) and reuses them at every time, i.e. fixed gauges.
+        """
         # Resolve requested times: empty list => all in-window snapshots.
         tol = 0.01 * max(self.t_end - self.t_start, 1.0)
         if not req_times:
@@ -603,6 +625,10 @@ class FVM_PINNDataset(Dataset):
         rng = np.random.default_rng(seed)
         all_xyt: list = []
         all_U: list = []
+        gauges = None
+        if fixed_locations and sel_ti:
+            wet0 = np.where(h_all[sel_ti[0]] > self.h_dry)[0]
+            gauges = rng.choice(wet0, size=min(n_points, len(wet0)), replace=False)
         for ti in sel_ti:
             t_val = float(times_all[ti])
             h_ref = h_all[ti]
@@ -610,8 +636,12 @@ class FVM_PINNDataset(Dataset):
             wet = np.where(h_ref > self.h_dry)[0]
             if len(wet) == 0:
                 continue
-            take = min(n_points, len(wet))
-            pick = rng.choice(wet, size=take, replace=False)
+            if gauges is not None:
+                pick = gauges[h_ref[gauges] > self.h_dry]
+                take = len(pick)
+            else:
+                take = min(n_points, len(wet))
+                pick = rng.choice(wet, size=take, replace=False)
 
             xi_t = h_ref[pick] - h_still_np[pick]
             hu_t = h_ref[pick] * vel_ref[pick, 0]
@@ -665,12 +695,17 @@ class FVM_PINNDataset(Dataset):
         }
 
     def _load_srh2d_ic_at(self, t_target: float):
-        """Load h/hu/hv from an SRH-2D h5 snapshot nearest to ``t_target``."""
-        if self.srh2d_h5_file is None:
+        """Load h/hu/hv from an SRH-2D h5 snapshot nearest to ``t_target``.
+
+        The file is ``initial_condition.h5_file`` if given (e.g. a spin-up
+        run), else ``data.srh2d_h5_file``.
+        """
+        ic_file = self.config.get('initial_condition.h5_file', None) or self.srh2d_h5_file
+        if ic_file is None:
             raise ValueError(
                 "initial_condition.mode='srh2d-snapshot' requires data.srh2d_h5_file"
             )
-        h5_path = Path(self.srh2d_h5_file)
+        h5_path = Path(ic_file)
         if not h5_path.exists():
             raise FileNotFoundError(f"SRH-2D H5 file not found: {h5_path}")
 
@@ -678,6 +713,11 @@ class FVM_PINNDataset(Dataset):
         with h5py.File(h5_path, "r") as f:
             times = f["Water_Depth_m/Times"][:].astype(np.float64)
             ti = int(np.argmin(np.abs(times - t_target)))
+            if abs(times[ti] - t_target) > 1.0:
+                logger.warning(
+                    f"IC snapshot: nearest time in {h5_path.name} is {times[ti]:.1f}s, "
+                    f"requested {t_target:.1f}s"
+                )
             h_ic = f["Water_Depth_m/Values"][ti, :].astype(np.float64).copy()
             vel_ic = f["Velocity_m_p_s/Values"][ti, :, :].astype(np.float64)
 
@@ -688,3 +728,19 @@ class FVM_PINNDataset(Dataset):
         hu_ic[dry] = 0.0
         hv_ic[dry] = 0.0
         return h_ic, hu_ic, hv_ic
+
+
+def _hydrograph_table(bc_info: Dict, bc_id: int) -> Optional[list]:
+    """Return the inlet ``hydrograph: [[t_s, Q_m3s], ...]`` as a list of
+    float pairs (strictly increasing t), or None for a constant ``value``."""
+    hydro = bc_info.get("hydrograph", None)
+    if hydro is None:
+        return None
+    table = [[float(t), float(q)] for t, q in hydro]
+    ts = [t for t, _ in table]
+    if len(table) < 2 or any(b <= a for a, b in zip(ts, ts[1:])):
+        raise ValueError(
+            f"boundary_conditions.{bc_id}.hydrograph needs >= 2 rows with "
+            f"strictly increasing t, got {hydro!r}"
+        )
+    return table

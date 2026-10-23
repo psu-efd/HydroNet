@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from ..fvm.riemann_solver import compute_fvm_residual
+from ..fvm.riemann_solver import compute_fvm_residual, interp_hydrograph
 
 logger = logging.getLogger(__name__)
 
@@ -244,9 +244,9 @@ class FVMPINNLoss(nn.Module):
             # FVM residual (well-balanced, includes bed slope + friction)
             if stencil_idx is not None:
                 local_md = _local_mesh_data(self.mesh_data, stencil_idx, n_cells)
-                R = compute_fvm_residual(Q_stencil, local_md, stencil_hs, self.cfg.h_dry)
+                R = compute_fvm_residual(Q_stencil, local_md, stencil_hs, self.cfg.h_dry, t=t[ti])
             else:
-                R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry)
+                R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry, t=t[ti])
 
             residual = dQ_dt + R
 
@@ -378,6 +378,9 @@ class FVMPINNLoss(nn.Module):
                 val = bc_info["value"]
                 if isinstance(val, torch.Tensor):
                     val = val.repeat(n_t)
+                if "hydrograph" in bc_info:
+                    # value = 1 / inlet width; scale by Q(t), rows time-major
+                    val = val * interp_hydrograph(bc_info["hydrograph"], t).repeat_interleave(n_pts)
                 hu_n = Q_pred[:, 1] * nx + Q_pred[:, 2] * ny
                 sq = (hu_n + val) ** 2
 

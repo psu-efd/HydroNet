@@ -147,16 +147,19 @@ def evaluate_and_plot(
     # For strategy=window, model(xyt) holds no trained window network;
     # trainer.predict routes each query to its window (as in the SR script).
     device = model.get_device()
-    xyt = torch.column_stack([
-        torch.tensor(xc, dtype=torch.float64, device=device),
-        torch.tensor(yc, dtype=torch.float64, device=device),
-        torch.full((n,), t_end, dtype=torch.float64, device=device),
-    ])
-    with torch.no_grad():
-        if trainer is not None and trainer.strategy == "window":
-            Q_phys = trainer.predict(xyt).cpu().numpy()
-        else:
-            Q_phys = model(xyt).cpu().numpy()
+
+    def _predict(t_val: float) -> np.ndarray:
+        xyt = torch.column_stack([
+            torch.tensor(xc, dtype=torch.float64, device=device),
+            torch.tensor(yc, dtype=torch.float64, device=device),
+            torch.full((n,), t_val, dtype=torch.float64, device=device),
+        ])
+        with torch.no_grad():
+            if trainer is not None and trainer.strategy == "window":
+                return trainer.predict(xyt).cpu().numpy()
+            return model(xyt).cpu().numpy()
+
+    Q_phys = _predict(t_end)
     h_pred = Q_phys[:, 0]
     u_pred = Q_phys[:, 1]
     v_pred = Q_phys[:, 2]
@@ -216,8 +219,26 @@ def evaluate_and_plot(
         L2_h=l2_h, max_h=max_h, L2_vel=l2_vel, max_vel=max_vel,
     )
 
-    return {"L2_h": l2_h, "max_h": max_h,
-            "L2_vel": l2_vel, "max_vel": max_vel}
+    metrics = {"L2_h": l2_h, "max_h": max_h,
+               "L2_vel": l2_vel, "max_vel": max_vel}
+
+    # Optional errors at several times (unsteady cases): evaluation.times
+    eval_times = config.get("evaluation.times", None)
+    if eval_times:
+        per_time = []
+        for t_e in eval_times:
+            h_r, u_r, v_r = load_srh2d_reference_at(h5_path, float(t_e))
+            Q_e = _predict(float(t_e))
+            m = h_r > 0.01
+            dv = np.hypot(Q_e[:, 1], Q_e[:, 2]) - np.hypot(u_r, v_r)
+            row = {"t": float(t_e),
+                   "L2_h": float(np.sqrt(np.mean((Q_e[m, 0] - h_r[m]) ** 2))),
+                   "L2_vel": float(np.sqrt(np.mean(dv[m] ** 2)))}
+            per_time.append(row)
+            logger.info(f"  t={row['t']:6.1f}s  L2(h)={row['L2_h']:.4e}  "
+                        f"L2(|V|)={row['L2_vel']:.4e}")
+        metrics["per_time"] = per_time
+    return metrics
 
 
 def plot_loss_history(history: dict, out_dir: Path) -> None:

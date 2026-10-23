@@ -50,6 +50,8 @@
 #   BIC-A-SA: BIC-A + self-adaptive point weights (R3-C5)
 #   BIC-A-TM: BIC-A + 10-window time-marching curriculum (R3-C5)
 #   BIC-A-SAS: BIC-A-SA with SGD ascent, linear mask (R3-C5)
+#   BICU-A/B/E/H: unsteady BIC (inflow pulse, t = 360-600 s): physics only /
+#             10 depth gauges / gauges + dense / dense data-only (R1-M3, R2-5)
 
 set -euo pipefail
 
@@ -95,6 +97,10 @@ declare -a RUN_SPEC=(
   "BIC_A_SA block_in_channel block_in_channel_FVM_PINN.py   fvm_pinn_config_BIC_A_SA.yaml"
   "BIC_A_TM block_in_channel block_in_channel_FVM_PINN.py   fvm_pinn_config_BIC_A_TM.yaml"
   "BIC_A_SAS block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BIC_A_SAS.yaml"
+  "BICU_A   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_A.yaml"
+  "BICU_B   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_B.yaml"
+  "BICU_E   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_E.yaml"
+  "BICU_H   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_H.yaml"
 )
 
 # Parse filter args (if any)

@@ -480,7 +480,7 @@ class TeacherTrainer:
                 )[0]
                 dQ_dt[:, j] = grads.squeeze(-1)
             R = compute_fvm_residual(Q_pred_p, self.mesh_data, self.h_still,
-                                     self.cfg.h_dry)
+                                     self.cfg.h_dry, t=t_k)
             diff_p = (dQ_dt + R) ** 2
             p_xi = diff_p[:, 0].mean()
             p_hu = diff_p[:, 1].mean()

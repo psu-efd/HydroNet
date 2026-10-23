@@ -7,12 +7,16 @@
 #   1 DB_1   2 BP_1   3 BIC_A  4 BIC_B  5 BIC_C  6 BIC_D  7 BIC_E  8 BIC_F
 #   9 BIC_G 10 BIC_H 11 SR_A  12 SR_B  13 SR_C  14 SR_D  15 SR_E  16 SR_F  17 SR_G
 #  18 BIC_A_GN  19 BIC_A_SA  20 BIC_A_TM  21 BIC_A_SAS   (adaptive-weighting tests, R3-C5)
+#  22 BICU_A  23 BICU_B  24 BICU_E  25 BICU_H   (unsteady BIC; needs the SRH-2D
+#     result data/hydrograph/block_in_channel_hydrograph_XMDFC.h5 first)
 #
 # Submit from examples/FVM_PINN/:
 #   GPU runs (configs with device "cuda"):
 #     sbatch --array=3-5,7-17 run_experiments_array.sbatch
 #   Adaptive-weighting runs (R3-C5):
 #     sbatch --array=18-21 run_experiments_array.sbatch
+#   Unsteady BIC (R1-M3, R2-5):
+#     sbatch --array=22-25 run_experiments_array.sbatch
 #   CPU runs (configs with device "cpu": DB_1, BP_1, BIC_D):
 #     sbatch --array=1,2,6 --partition=basic --gres=none --mem=32G --time=24:00:00 \
 #            run_experiments_array.sbatch
@@ -34,7 +38,8 @@
 
 RUN_IDS=(_ DB_1 BP_1 BIC_A BIC_B BIC_C BIC_D BIC_E BIC_F BIC_G BIC_H
          SR_A SR_B SR_C SR_D SR_E SR_F SR_G
-         BIC_A_GN BIC_A_SA BIC_A_TM BIC_A_SAS)
+         BIC_A_GN BIC_A_SA BIC_A_TM BIC_A_SAS
+         BICU_A BICU_B BICU_E BICU_H)
 RID=${RUN_IDS[$SLURM_ARRAY_TASK_ID]}
 
 module purge

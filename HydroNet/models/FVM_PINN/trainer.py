@@ -109,6 +109,11 @@ class FVM_PINNTrainer:
             # ``_net`` therefore reflects only the final window after train;
             # use ``trainer.predict(xyt)`` for across-window inference.
         elif self.strategy == 'teacher':
+            if any("hydrograph" in b for b in mesh_data.get("bc_ghost", {}).values()):
+                raise NotImplementedError(
+                    "strategy='teacher' does not support a hydrograph inlet yet "
+                    "(its soft BC loss uses the constant value)"
+                )
             teacher_cfg = self._build_teacher_cfg()
             self._trainer = TeacherTrainer(
                 teacher_cfg, net_cfg, loss_cfg, mesh_data,
