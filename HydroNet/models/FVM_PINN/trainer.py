@@ -272,6 +272,7 @@ class FVM_PINNTrainer:
             cfg.get('training.logging.checkpoint_dir',
                     cfg.get('training.output_dir', 'outputs'))
         )
+        cfg_obj.resume_from = cfg.get('training.resume_from', None)
         cfg_obj.device = str(self.device)
         cfg_obj.dtype = "float64"
         return cfg_obj

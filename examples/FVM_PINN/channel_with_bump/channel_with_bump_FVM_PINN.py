@@ -380,7 +380,13 @@ def main() -> None:
              "checkpoints/teacher_final.pt for strategy=teacher, "
              "checkpoints/ckpt_final.pt otherwise).",
     )
+    parser.add_argument("--run-id", default=None,
+                        help="Subfolder for this run's outputs under plots/ and runs/ "
+                             "(default: config name minus 'fvm_pinn_config_').")
     args = parser.parse_args()
+    run_id = args.run_id or (
+        Path(args.config).stem.replace("fvm_pinn_config", "").lstrip("_") or "default"
+    )
 
     np.random.seed(42)
     torch.manual_seed(42)
@@ -416,7 +422,7 @@ def main() -> None:
         history, _ = trainer.train()
 
     # ---- Evaluate / plot ----
-    out_dir = Path("plots")
+    out_dir = Path("plots") / run_id   # one folder per run so runs don't overwrite each other
     metrics = evaluate_and_plot(model, config, dataset, out_dir)
     if history:
         plot_loss_history(history, out_dir)
@@ -425,7 +431,8 @@ def main() -> None:
     # history — ``evaluate_and_plot`` already wrote the metrics + npz).
     if not args.post_only or history:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        hist_file = Path(f"history_fvm_pinn_{ts}.json")
+        hist_file = Path("runs") / run_id / f"history_fvm_pinn_{ts}.json"
+        hist_file.parent.mkdir(parents=True, exist_ok=True)
         with open(hist_file, "w") as f:
             json.dump({"history": history, "metrics": metrics}, f, indent=2)
         logger.info(f"Training history: {hist_file}")

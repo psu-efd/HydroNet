@@ -46,6 +46,7 @@ from ..pinn.network import SWENet, SirenSWENet, NetworkConfig
 from ..pinn.loss import LossConfig
 from .base_trainer import _to_device
 from .memory_tracker import MemoryTracker
+from .step_timer import StepTimer
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,7 @@ class TeacherTrainer:
         comp_keys = ("distill", "distill_xi", "distill_hu", "distill_hv",
                      "phys", "phys_xi", "phys_hu", "phys_hv")
 
+        timer = StepTimer()
         for epoch in range(1, self.cfg.adam_epochs + 1):
             optimizer.zero_grad()
             lam_phys = self._phys_weight(epoch)
@@ -332,7 +334,7 @@ class TeacherTrainer:
 
             if epoch % self.cfg.log_every == 0 or epoch == 1:
                 msg = (
-                    f"Teacher [{epoch}/{self.cfg.adam_epochs}]  "
+                    f"Teacher [{epoch}/{self.cfg.adam_epochs}]{timer.tag(epoch)}  "
                     f"total={total:.4e}  distill={avgs['distill']:.4e}  "
                     f"bc={avg_b:.4e}  phys={avgs['phys']:.4e}  lp={lam_phys:.3f}"
                 )
@@ -369,6 +371,7 @@ class TeacherTrainer:
         )
         norm = float(self._Q_snaps.shape[0])
         counter = [0]
+        timer = StepTimer()
 
         comp_keys = ("distill", "distill_xi", "distill_hu", "distill_hv",
                      "phys", "phys_xi", "phys_hu", "phys_hv")
@@ -409,7 +412,7 @@ class TeacherTrainer:
 
             counter[0] += 1
             if counter[0] % self.cfg.log_every == 0:
-                msg = (f"L-BFGS [{counter[0]}]  total={total:.4e}  "
+                msg = (f"L-BFGS [{counter[0]}]{timer.tag(counter[0])}  total={total:.4e}  "
                        f"distill={avgs['distill']:.4e}  bc={avg_b:.4e}  "
                        f"phys={avgs['phys']:.4e}")
                 if has_anchor:

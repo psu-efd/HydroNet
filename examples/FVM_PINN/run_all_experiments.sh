@@ -9,6 +9,7 @@
 #   bash examples/FVM_PINN/run_all_experiments.sh                 # run everything
 #   bash examples/FVM_PINN/run_all_experiments.sh BIC_A BIC_H     # run a subset
 #   DRY_RUN=1 bash examples/FVM_PINN/run_all_experiments.sh       # print commands only
+#   EXTRA_ARGS="--device cuda" bash examples/FVM_PINN/run_all_experiments.sh BIC_D  # extra driver args
 #
 # Pre-reqs
 # --------
@@ -133,7 +134,13 @@ for spec in "${RUN_SPEC[@]}"; do
 
   mkdir -p "$RUN_DIR"
 
-  CMD=("$PYTHON_BIN" "$DRIVER" --config "$CONFIG")
+  # A resumed run keeps the earlier leg's log instead of overwriting it
+  if [[ "${EXTRA_ARGS:-}" == *--resume* && -f "$LOG_FILE" ]]; then
+    mv "$LOG_FILE" "$RUN_DIR/stdout_$(date -r "$LOG_FILE" +%Y%m%d_%H%M%S).log"
+  fi
+
+  # shellcheck disable=SC2206
+  CMD=("$PYTHON_BIN" "$DRIVER" --config "$CONFIG" --run-id "$RID" ${EXTRA_ARGS:-})
 
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
     echo "DRY_RUN: (cd $WORKDIR && ${CMD[*]}) | tee $LOG_FILE"
