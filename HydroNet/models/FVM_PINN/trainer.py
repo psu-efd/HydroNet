@@ -273,6 +273,8 @@ class FVM_PINNTrainer:
                     cfg.get('training.output_dir', 'outputs'))
         )
         cfg_obj.resume_from = cfg.get('training.resume_from', None)
+        lw = cfg.get('training.loss_weighting', None)
+        cfg_obj.loss_weighting = dict(lw) if lw else None
         cfg_obj.device = str(self.device)
         cfg_obj.dtype = "float64"
         return cfg_obj

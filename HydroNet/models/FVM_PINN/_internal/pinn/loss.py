@@ -105,12 +105,21 @@ class FVMPINNLoss(nn.Module):
         bc_data: Optional[Dict] = None,
         ref_data: Optional[Dict] = None,
         cell_mask: Optional[torch.Tensor] = None,
+        point_weights: Optional[Dict] = None,
     ) -> Dict[str, torch.Tensor]:
+        """
+        point_weights : optional per-point loss weights (self-adaptive
+            weighting): ``{"fvm": [n_cells], "ic": [n_ic], "bc": {bc_id:
+            [n_pts]}}``, any key may be absent. Weighted terms are returned
+            as ``fvm_w`` / ``ic_w`` / ``bc_w`` and replace the plain terms in
+            ``total``; ``fvm`` / ``ic`` / ``bc`` stay the unweighted MSEs.
+        """
         device = self.mesh_data["cell_center"].device
         zero = torch.tensor(0.0, device=device, dtype=t.dtype)
+        pw = point_weights or {}
 
         # FVM loss with per-equation breakdown
-        fvm_result = self._fvm_loss(network, t, cell_mask)
+        fvm_result = self._fvm_loss(network, t, cell_mask, pw.get("fvm"))
 
         losses = {
             "fvm":       fvm_result["fvm"],
@@ -118,14 +127,18 @@ class FVMPINNLoss(nn.Module):
             "fvm_hu":    fvm_result["fvm_hu"],
             "fvm_hv":    fvm_result["fvm_hv"],
         }
+        if "fvm_w" in fvm_result:
+            losses["fvm_w"] = fvm_result["fvm_w"]
 
         # IC loss with per-equation breakdown
         if ic_data is not None:
-            ic_result = self._ic_loss(network, ic_data)
+            ic_result = self._ic_loss(network, ic_data, pw.get("ic"))
             losses["ic"]    = ic_result["ic"]
             losses["ic_xi"] = ic_result["ic_xi"]
             losses["ic_hu"] = ic_result["ic_hu"]
             losses["ic_hv"] = ic_result["ic_hv"]
+            if "ic_w" in ic_result:
+                losses["ic_w"] = ic_result["ic_w"]
         else:
             losses["ic"] = zero
             losses["ic_xi"] = zero
@@ -147,7 +160,7 @@ class FVMPINNLoss(nn.Module):
 
         # BC loss with per-boundary breakdown
         if bc_data is not None:
-            bc_result = self._bc_loss(network, t, bc_data)
+            bc_result = self._bc_loss(network, t, bc_data, pw.get("bc"))
             losses["bc"] = bc_result["bc"]
             for k, v in bc_result.items():
                 if k.startswith("bc_"):
@@ -155,14 +168,20 @@ class FVMPINNLoss(nn.Module):
         else:
             losses["bc"] = zero
 
+        losses["total"] = self.weighted_total(losses)
+        return losses
+
+    def weighted_total(self, losses: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Total loss from the current ``cfg.lambda_*`` (re-read each call,
+        so adaptive schemes can change the weights between steps). Uses the
+        point-weighted terms when present."""
         cfg = self.cfg
-        losses["total"] = (
-            cfg.lambda_fvm  * losses["fvm"]
-            + cfg.lambda_ic   * losses["ic"]
-            + cfg.lambda_bc   * losses["bc"]
+        return (
+            cfg.lambda_fvm  * losses.get("fvm_w", losses["fvm"])
+            + cfg.lambda_ic   * losses.get("ic_w", losses["ic"])
+            + cfg.lambda_bc   * losses.get("bc_w", losses["bc"])
             + cfg.lambda_data * losses["data"]
         )
-        return losses
 
     # ------------------------------------------------------------------
     # FVM physics loss (well-balanced)
@@ -173,6 +192,7 @@ class FVMPINNLoss(nn.Module):
         network: nn.Module,
         t: torch.Tensor,
         cell_mask: Optional[torch.Tensor],
+        cell_weights: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Well-balanced FVM residual loss: dQ/dt + R(Q) = 0
@@ -181,6 +201,7 @@ class FVMPINNLoss(nn.Module):
         R = flux_divergence - source (bed slope + friction).
 
         Returns dict with 'fvm' (total) and per-equation 'fvm_xi', 'fvm_hu', 'fvm_hv'.
+        With ``cell_weights`` [n_cells] it also returns the weighted 'fvm_w'.
         """
         cell_xy = self.mesh_data["cell_center"]
         n_cells = cell_xy.shape[0]
@@ -197,8 +218,13 @@ class FVMPINNLoss(nn.Module):
             stencil_xy = cell_xy
             stencil_hs = self.h_still
 
+        # Per-cell weights restricted to the cells that are evaluated
+        if cell_weights is not None and cell_mask is not None:
+            cell_weights = cell_weights[stencil_idx][eval_mask]
+
         zero = torch.tensor(0.0, device=device, dtype=cell_xy.dtype)
         total_res = zero.clone()
+        total_w = zero.clone()
         total_xi = zero.clone()
         total_hu = zero.clone()
         total_hv = zero.clone()
@@ -249,13 +275,27 @@ class FVMPINNLoss(nn.Module):
                 total_xi = total_xi + l_xi
                 total_hu = total_hu + l_hu
                 total_hv = total_hv + l_hv
+                if cell_weights is not None:
+                    r2w = (r_wet ** 2 * cell_weights[wet].unsqueeze(-1)).mean(0)
+                    total_w = total_w + self._combine_components(r2w)
 
-        return {
+        result = {
             "fvm": total_res / n_t,
             "fvm_xi": total_xi / n_t,
             "fvm_hu": total_hu / n_t,
             "fvm_hv": total_hv / n_t,
         }
+        if cell_weights is not None:
+            result["fvm_w"] = total_w / n_t
+        return result
+
+    def _combine_components(self, v: torch.Tensor) -> torch.Tensor:
+        """Component-weighted sum of a [3] tensor (xi, hu, hv)."""
+        return (
+            self.cfg.lambda_xi * v[0]
+            + self.cfg.lambda_hu * v[1]
+            + self.cfg.lambda_hv * v[2]
+        )
 
     def _network_forward(self, network: nn.Module, xyt: torch.Tensor) -> torch.Tensor:
         if self.cfg.use_grad_checkpoint:
@@ -266,7 +306,10 @@ class FVMPINNLoss(nn.Module):
     # IC / BC / data losses
     # ------------------------------------------------------------------
 
-    def _ic_loss(self, network: nn.Module, ic_data: Dict) -> Dict[str, torch.Tensor]:
+    def _ic_loss(
+        self, network: nn.Module, ic_data: Dict,
+        point_weights: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         Q_pred = self._network_forward(network, ic_data["xyt"])
         diff_sq = (Q_pred - ic_data["U_true"]) ** 2
         l_xi = diff_sq[:, 0].mean()
@@ -277,10 +320,16 @@ class FVMPINNLoss(nn.Module):
             + self.cfg.lambda_hu * l_hu
             + self.cfg.lambda_hv * l_hv
         )
-        return {"ic": total, "ic_xi": l_xi, "ic_hu": l_hu, "ic_hv": l_hv}
+        result = {"ic": total, "ic_xi": l_xi, "ic_hu": l_hu, "ic_hv": l_hv}
+        if point_weights is not None:
+            result["ic_w"] = self._combine_components(
+                (diff_sq * point_weights.unsqueeze(-1)).mean(0)
+            )
+        return result
 
     def _bc_loss(
-        self, network: nn.Module, t: torch.Tensor, bc_data: Dict
+        self, network: nn.Module, t: torch.Tensor, bc_data: Dict,
+        point_weights: Optional[Dict] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         BC loss evaluated at all sampled times.
@@ -290,8 +339,11 @@ class FVMPINNLoss(nn.Module):
         For inlet-q BC: hu_n = -q (inflow opposes outward normal).
 
         Returns dict with 'bc' (total) and 'bc_{bc_id}_{type}' per boundary.
+        With ``point_weights`` ({bc_id: [n_pts]}, shared over the sampled
+        times) it also returns the weighted 'bc_w'.
         """
         total = torch.tensor(0.0, device=t.device, dtype=t.dtype)
+        total_w = total.clone()
         result = {}
         n_bc = 0
         n_t = len(t)
@@ -308,6 +360,7 @@ class FVMPINNLoss(nn.Module):
 
             Q_pred = self._network_forward(network, xyt_all)
             bc_loss_val = torch.tensor(0.0, device=t.device, dtype=t.dtype)
+            sq = None   # pointwise squared error [n_t * n_pts]
 
             if bc_type == "exit-h":
                 val = bc_info["value"]
@@ -317,7 +370,7 @@ class FVMPINNLoss(nn.Module):
                 if isinstance(h_still_bc, torch.Tensor):
                     h_still_bc = h_still_bc.repeat(n_t)
                 h_pred = Q_pred[:, 0] + h_still_bc
-                bc_loss_val = ((h_pred - val) ** 2).mean()
+                sq = (h_pred - val) ** 2
 
             elif bc_type == "inlet-q":
                 nx = bc_info["nx"].repeat(n_t)
@@ -326,19 +379,31 @@ class FVMPINNLoss(nn.Module):
                 if isinstance(val, torch.Tensor):
                     val = val.repeat(n_t)
                 hu_n = Q_pred[:, 1] * nx + Q_pred[:, 2] * ny
-                bc_loss_val = ((hu_n + val) ** 2).mean()
+                sq = (hu_n + val) ** 2
 
             elif bc_type in ("wall", "symmetry"):
                 nx = bc_info["nx"].repeat(n_t)
                 ny = bc_info["ny"].repeat(n_t)
                 un = Q_pred[:, 1] * nx + Q_pred[:, 2] * ny
-                bc_loss_val = (un ** 2).mean()
+                sq = un ** 2
+
+            if sq is not None:
+                bc_loss_val = sq.mean()
+            if point_weights is not None:
+                # Rows are time-major (t * n_pts + p), as for nx.repeat(n_t)
+                w = point_weights.get(bc_id)
+                total_w = total_w + (
+                    (sq * w.repeat(n_t)).mean() if (w is not None and sq is not None)
+                    else bc_loss_val
+                )
 
             total = total + bc_loss_val
             result[f"bc_{bc_id}_{bc_type}"] = bc_loss_val
             n_bc += 1
 
         result["bc"] = total / max(n_bc, 1)
+        if point_weights is not None:
+            result["bc_w"] = total_w / max(n_bc, 1)
         return result
 
     def _data_loss(self, network: nn.Module, ref_data: Dict) -> Dict[str, torch.Tensor]:

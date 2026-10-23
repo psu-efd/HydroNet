@@ -26,6 +26,7 @@ import torch.optim as optim
 
 from ..pinn.network import SWENet, NetworkConfig
 from ..pinn.loss import FVMPINNLoss, LossConfig
+from .loss_weighting import LossWeighting, build_loss_weighting
 from .memory_tracker import MemoryTracker
 from .step_timer import StepTimer
 
@@ -70,6 +71,11 @@ class BaseTrainerConfig:
     # Resume from a checkpoint written by _save_checkpoint (e.g. a run killed
     # by the wall-time limit). None = train from scratch.
     resume_from: Optional[str] = None
+
+    # Adaptive loss weighting (see loss_weighting.py), e.g.
+    # {"method": "grad_norm", "update_every": 10, "alpha": 0.9}.
+    # None = static weights from LossConfig.
+    loss_weighting: Optional[Dict] = None
 
     # Hardware
     device: str = "cpu"
@@ -147,6 +153,11 @@ class BaseTrainer(ABC):
         self._adam_sched_state: Optional[Dict] = None
         self._timer = StepTimer()
 
+        # Built in train(), once the training data and final network/loss
+        # (possibly swapped in by the public wrapper) are in place.
+        self.weighting: Optional[LossWeighting] = None
+        self._weighting_state: Optional[Dict] = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -197,8 +208,11 @@ class BaseTrainer(ABC):
         logger.info(f"=== {self.__class__.__name__} training start ===")
         t0 = time.perf_counter()
 
+        self.weighting = build_loss_weighting(self.cfg.loss_weighting, self)
         if self.cfg.resume_from:
             self._resume(self.cfg.resume_from)
+        if self.weighting is not None and self._weighting_state:
+            self.weighting.load_state_dict(self._weighting_state)
         self._adam_phase()
         self._lbfgs_phase()
 
@@ -234,6 +248,7 @@ class BaseTrainer(ABC):
         self._lbfgs_done = int(ck.get("lbfgs_done", 0))
         self._adam_opt_state = ck.get("adam_optimizer")
         self._adam_sched_state = ck.get("adam_scheduler")
+        self._weighting_state = ck.get("loss_weighting")
         logger.info(
             f"Resumed from {path}: Adam {self._adam_done}/{self.cfg.adam_epochs}, "
             f"L-BFGS {self._lbfgs_done}/{self.cfg.lbfgs_epochs}"
@@ -290,10 +305,14 @@ class BaseTrainer(ABC):
         for epoch in range(self._adam_done, self.cfg.adam_epochs):
             optimizer.zero_grad()
             losses = self._step()
+            if self.weighting is not None:
+                self.weighting.before_backward(losses, epoch)
             losses["total"].backward()
             nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
+            if self.weighting is not None:
+                self.weighting.after_step()
             self._record(losses)
             self._adam_done = epoch + 1
             if (epoch + 1) % self.cfg.log_every == 0:
@@ -309,6 +328,8 @@ class BaseTrainer(ABC):
         if self._lbfgs_done >= self.cfg.lbfgs_epochs:
             return
         self._adam_optimizer = self._adam_scheduler = None
+        if self.weighting is not None:
+            self.weighting.freeze()   # L-BFGS needs a fixed objective
         logger.info(
             f"L-BFGS: {self.cfg.lbfgs_epochs} steps"
             + (f" (resuming at {self._lbfgs_done})" if self._lbfgs_done else "")
@@ -350,13 +371,24 @@ class BaseTrainer(ABC):
         self.network.train()
         t = self._sample_times()
         cell_mask = self._make_cell_mask()
-        return self.loss_fn(
+        if self.weighting is None:
+            return self.loss_fn(
+                self.network, t,
+                ic_data=self.ic_data,
+                bc_data=self.bc_data,
+                ref_data=self.ref_data,
+                cell_mask=cell_mask,
+            )
+        losses = self.loss_fn(
             self.network, t,
             ic_data=self.ic_data,
             bc_data=self.bc_data,
             ref_data=self.ref_data,
             cell_mask=cell_mask,
+            point_weights=self.weighting.point_weights(),
         )
+        losses.update(self.weighting.scalars())
+        return losses
 
     # ------------------------------------------------------------------
     # Utilities
@@ -407,6 +439,8 @@ class BaseTrainer(ABC):
             parts.append(f"data={losses['data'].item():.3e}")
         if lr is not None:
             parts.append(f"lr={lr:.2e}")
+        if self.weighting is not None:
+            parts.append(self.weighting.describe())
         logger.info(f"{prefix}  " + "  ".join(parts))
 
         # Detailed log at lower frequency (every 5x log_every)
@@ -437,6 +471,8 @@ class BaseTrainer(ABC):
                                if getattr(self, "_adam_optimizer", None) else None),
             "adam_scheduler": (self._adam_scheduler.state_dict()
                                if getattr(self, "_adam_scheduler", None) else None),
+            "loss_weighting": (self.weighting.state_dict()
+                               if self.weighting is not None else None),
         }, path)
         logger.debug(f"Checkpoint: {path}")
 

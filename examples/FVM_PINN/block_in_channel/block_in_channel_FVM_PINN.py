@@ -129,6 +129,7 @@ def evaluate_and_plot(
     config: Config,
     dataset: FVM_PINNDataset,
     out_dir: Path,
+    trainer: FVM_PINNTrainer = None,
 ):
     t_end = float(config.get_required_config("training.t_end"))
     mesh = dataset.get_mesh()
@@ -143,6 +144,8 @@ def evaluate_and_plot(
     vel_ref = np.sqrt(u_ref ** 2 + v_ref ** 2)
 
     # ---- PINN prediction at t_end (public forward returns [h, u, v]) ----
+    # For strategy=window, model(xyt) holds no trained window network;
+    # trainer.predict routes each query to its window (as in the SR script).
     device = model.get_device()
     xyt = torch.column_stack([
         torch.tensor(xc, dtype=torch.float64, device=device),
@@ -150,7 +153,10 @@ def evaluate_and_plot(
         torch.full((n,), t_end, dtype=torch.float64, device=device),
     ])
     with torch.no_grad():
-        Q_phys = model(xyt).cpu().numpy()
+        if trainer is not None and trainer.strategy == "window":
+            Q_phys = trainer.predict(xyt).cpu().numpy()
+        else:
+            Q_phys = model(xyt).cpu().numpy()
     h_pred = Q_phys[:, 0]
     u_pred = Q_phys[:, 1]
     v_pred = Q_phys[:, 2]
@@ -298,6 +304,7 @@ def main() -> None:
     logger.info(f"h_still: [{dataset.get_h_still().min().item():.3f}, "
                 f"{dataset.get_h_still().max().item():.3f}]")
 
+    trainer = None
     if args.post_only:
         model.set_mesh_context(
             h_still_cells=dataset.get_h_still(),
@@ -312,7 +319,7 @@ def main() -> None:
 
     # ---- Evaluate / plot ----
     out_dir = Path("plots") / run_id   # one folder per run so runs don't overwrite each other
-    metrics = evaluate_and_plot(model, config, dataset, out_dir)
+    metrics = evaluate_and_plot(model, config, dataset, out_dir, trainer=trainer)
     if history:
         plot_loss_history(history, out_dir)
 

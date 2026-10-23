@@ -46,6 +46,10 @@
 #   SR-E    : Savannah, teacher mode — in-loop FVM trajectory + SRH-2D anchor
 #   SR-F    : Savannah, standard + 200 sparse velocity measurements only
 #   SR-G    : Savannah, standard, lambda_fvm = 0 + dense SRH-2D
+#   BIC-A-GN: BIC-A + learning-rate annealing of loss weights (R3-C5)
+#   BIC-A-SA: BIC-A + self-adaptive point weights (R3-C5)
+#   BIC-A-TM: BIC-A + 10-window time-marching curriculum (R3-C5)
+#   BIC-A-SAS: BIC-A-SA with SGD ascent, linear mask (R3-C5)
 
 set -euo pipefail
 
@@ -87,6 +91,10 @@ declare -a RUN_SPEC=(
   "SR_E   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_E.yaml"
   "SR_F   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_F.yaml"
   "SR_G   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_G.yaml"
+  "BIC_A_GN block_in_channel block_in_channel_FVM_PINN.py   fvm_pinn_config_BIC_A_GN.yaml"
+  "BIC_A_SA block_in_channel block_in_channel_FVM_PINN.py   fvm_pinn_config_BIC_A_SA.yaml"
+  "BIC_A_TM block_in_channel block_in_channel_FVM_PINN.py   fvm_pinn_config_BIC_A_TM.yaml"
+  "BIC_A_SAS block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BIC_A_SAS.yaml"
 )
 
 # Parse filter args (if any)
