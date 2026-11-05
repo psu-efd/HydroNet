@@ -52,6 +52,12 @@
 #   BIC-A-SAS: BIC-A-SA with SGD ascent, linear mask (R3-C5)
 #   BICU-A/B/E/H: unsteady BIC (inflow pulse, t = 360-600 s): physics only /
 #             10 depth gauges / gauges + dense / dense data-only (R1-M3, R2-5)
+#   BICU-ET/HT: BICU-E/H with time Fourier scale 30; BICU-EW/HW: 8 time windows
+#   BICU-C/D: physics + 10 fixed velocity / full-state gauges (fourier_scale_t 30)
+#   BICU-EWL1/EWL2: BICU-EW with lambda_fvm = 0.1 / 0.01
+#   SR-A/F/B-SF: SR-A/F/B with the strong-form PINN residual (R3-B2 baseline)
+#   BICU-T: network distilled from the FVM solver only (no SRH-2D data)
+#   BICU-CT/PT/GT: fine-tuned from BICU-T with physics + gauges / physics / gauges
 
 set -euo pipefail
 
@@ -101,6 +107,52 @@ declare -a RUN_SPEC=(
   "BICU_B   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_B.yaml"
   "BICU_E   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_E.yaml"
   "BICU_H   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_H.yaml"
+  "BICU_ET   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_ET.yaml"
+  "BICU_HT   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_HT.yaml"
+  "BICU_EW   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_EW.yaml"
+  "BICU_HW   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_HW.yaml"
+  "BICU_C    block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_C.yaml"
+  "BICU_D    block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_D.yaml"
+  "BICU_EWL1 block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_EWL1.yaml"
+  "BICU_EWL2 block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_EWL2.yaml"
+  "SR_A_SF   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_A_SF.yaml"
+  "SR_F_SF   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_F_SF.yaml"
+  "SR_B_SF   savannah_river     savannah_river_FVM_PINN.py     fvm_pinn_config_SR_B_SF.yaml"
+  "BICU_T    block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_T.yaml"
+  "BICU_CT   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_CT.yaml"
+  "BICU_PT   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_PT.yaml"
+  "BICU_GT   block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_GT.yaml"
+  "BIC_A_SS  block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BIC_A_SS.yaml"
+  "BIC_B_SS  block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BIC_B_SS.yaml"
+  "BICU_C_NT5 block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_C_NT5.yaml"
+  "BICU_C_NT20 block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_C_NT20.yaml"
+  "BICU_C_NT40 block_in_channel block_in_channel_FVM_PINN.py  fvm_pinn_config_BICU_C_NT40.yaml"
+  "BIC_B_AW block_in_channel block_in_channel_FVM_PINN.py fvm_pinn_config_BIC_B_AW.yaml"
+  "SR_B_AW savannah_river savannah_river_FVM_PINN.py fvm_pinn_config_SR_B_AW.yaml"
+  "DB_NT1_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT1_S1.yaml"
+  "DB_NT1_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT1_S2.yaml"
+  "DB_NT1_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT1_S3.yaml"
+  "DB_NT2_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT2_S1.yaml"
+  "DB_NT2_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT2_S2.yaml"
+  "DB_NT2_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT2_S3.yaml"
+  "DB_NT5_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT5_S1.yaml"
+  "DB_NT5_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT5_S2.yaml"
+  "DB_NT5_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT5_S3.yaml"
+  "DB_NT10_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT10_S1.yaml"
+  "DB_NT10_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT10_S2.yaml"
+  "DB_NT10_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT10_S3.yaml"
+  "DB_NT20_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT20_S1.yaml"
+  "DB_NT20_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT20_S2.yaml"
+  "DB_NT20_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_NT20_S3.yaml"
+  "DB_FX2_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX2_S1.yaml"
+  "DB_FX2_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX2_S2.yaml"
+  "DB_FX2_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX2_S3.yaml"
+  "DB_FX5_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX5_S1.yaml"
+  "DB_FX5_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX5_S2.yaml"
+  "DB_FX5_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX5_S3.yaml"
+  "DB_FX20_S1 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX20_S1.yaml"
+  "DB_FX20_S2 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX20_S2.yaml"
+  "DB_FX20_S3 dam_break_1d dam_break_1d_FVM_PINN.py nt_sweep/DB_FX20_S3.yaml"
 )
 
 # Parse filter args (if any)

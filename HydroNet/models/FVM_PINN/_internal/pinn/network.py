@@ -12,6 +12,7 @@ spatial variation across large domains (typical for hydraulic applications).
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -26,6 +27,10 @@ class NetworkConfig:
     n_layers: int = 6
     n_fourier: int = 64           # number of Fourier feature pairs
     fourier_scale: float = 1.0    # scale for random Fourier frequencies
+    # Separate scale for the time frequencies (None = fourier_scale). Time is
+    # normalised by the training window, so with scale 1 the shortest period
+    # is ~ window/2; unsteady cases with short events need a larger value.
+    fourier_scale_t: Optional[float] = None
     activation: str = "tanh"      # tanh or gelu
     use_residual: bool = True      # residual connections every 2 layers
     output_dim: int = 3           # [h, hu, hv]
@@ -39,9 +44,16 @@ class FourierEmbedding(nn.Module):
     Output dim = 2 * n_fourier.
     """
 
-    def __init__(self, in_dim: int, n_fourier: int, scale: float) -> None:
+    def __init__(
+        self, in_dim: int, n_fourier: int, scale: float,
+        scale_t: Optional[float] = None,
+    ) -> None:
         super().__init__()
         B = torch.randn(in_dim, n_fourier) * scale
+        if scale_t is not None:
+            # Rescale the time row only, so the random draws (and runs
+            # without scale_t) are unchanged
+            B[-1] = B[-1] * (scale_t / scale)
         self.register_buffer("B", B)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -64,7 +76,7 @@ class SWENet(nn.Module):
         self.cfg = cfg
 
         # Fourier embedding: 3 input dims → 2*n_fourier
-        self.embed = FourierEmbedding(3, cfg.n_fourier, cfg.fourier_scale)
+        self.embed = FourierEmbedding(3, cfg.n_fourier, cfg.fourier_scale, cfg.fourier_scale_t)
         embed_dim = 2 * cfg.n_fourier
 
         act_map = {"tanh": nn.Tanh, "gelu": nn.GELU, "silu": nn.SiLU}
@@ -93,8 +105,9 @@ class SWENet(nn.Module):
         self._init_weights()
         res_str = " (residual)" if cfg.use_residual else ""
         logger.info(
-            f"SWENet: {cfg.n_fourier} Fourier features, "
-            f"{cfg.n_layers} hidden layers × {cfg.hidden_dim}{res_str}"
+            f"SWENet: {cfg.n_fourier} Fourier features (scale {cfg.fourier_scale}"
+            + (f", t {cfg.fourier_scale_t}" if cfg.fourier_scale_t is not None else "")
+            + f"), {cfg.n_layers} hidden layers × {cfg.hidden_dim}{res_str}"
         )
 
     def set_normalisation(

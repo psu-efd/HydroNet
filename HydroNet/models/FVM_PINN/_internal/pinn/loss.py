@@ -8,7 +8,9 @@ Total loss:
     L = lambda_fvm * L_fvm + lambda_ic * L_ic + lambda_bc * L_bc + lambda_data * L_data
 
 where:
-    L_fvm  = FVM cell-residual loss (physics, weak form, well-balanced)
+    L_fvm  = FVM cell-residual loss (physics, weak form, well-balanced), or
+             with LossConfig.residual = "strong_form" the pointwise SWE
+             residual by automatic differentiation (baseline PINN)
     L_ic   = initial condition loss
     L_bc   = boundary condition loss (inflow/outflow/wall)
     L_data = optional data fitting loss
@@ -23,6 +25,7 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from ..fvm.riemann_solver import compute_fvm_residual, interp_hydrograph
+from ..fvm.smooth_ops import smooth_pow, smooth_sqrt
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,18 @@ class LossConfig:
     lambda_hv: float = 1.0
     h_dry: float = 1e-4            # wet/dry threshold
     use_grad_checkpoint: bool = False
+    # Physics residual: "fvm" (well-balanced Roe finite-volume residual) or
+    # "strong_form" (pointwise PDE residual by autograd at the same points,
+    # the standard-PINN baseline). lambda_fvm weights either; the history
+    # keys stay "fvm*".
+    residual: str = "fvm"
+    # Steady-form residual (FVM only): drop dQ/dt, so R(Q) = 0 is enforced at
+    # every sampled time independently. Pair with lambda_ic = 0 (R1-M4 test).
+    steady: bool = False
+    # Weight each cell's squared FVM residual by A_i / mean(A). Off by default:
+    # the loss is an unweighted mean over wet cells. Normalising by the mean
+    # keeps the loss scale, and leaves uniform meshes unchanged (side test).
+    area_weighted: bool = False
 
 
 class FVMPINNLoss(nn.Module):
@@ -119,7 +134,13 @@ class FVMPINNLoss(nn.Module):
         pw = point_weights or {}
 
         # FVM loss with per-equation breakdown
-        fvm_result = self._fvm_loss(network, t, cell_mask, pw.get("fvm"))
+        if self.cfg.residual == "fvm":
+            fvm_result = self._fvm_loss(network, t, cell_mask, pw.get("fvm"))
+        elif self.cfg.residual == "strong_form":
+            fvm_result = self._strong_form_loss(network, t, cell_mask, pw.get("fvm"))
+        else:
+            raise ValueError(f"LossConfig.residual must be 'fvm' or 'strong_form', "
+                             f"got {self.cfg.residual!r}")
 
         losses = {
             "fvm":       fvm_result["fvm"],
@@ -230,6 +251,13 @@ class FVMPINNLoss(nn.Module):
         total_hv = zero.clone()
         n_t = len(t)
 
+        area_w = None
+        if self.cfg.area_weighted:
+            area = self.mesh_data["cell_area"]
+            area_w = area / area.mean()
+            if cell_mask is not None:
+                area_w = area_w[stencil_idx][eval_mask]
+
         for ti in range(n_t):
             t_k = t[ti : ti + 1].expand(stencil_xy.shape[0])
             xyt = torch.cat([stencil_xy, t_k.unsqueeze(-1)], dim=-1)
@@ -238,9 +266,6 @@ class FVMPINNLoss(nn.Module):
             # Network forward: outputs [xi, hu, hv]
             Q_stencil = self._network_forward(network, xyt)
 
-            # dQ/dt via autograd
-            dQ_dt = _batch_time_grad(Q_stencil, xyt)
-
             # FVM residual (well-balanced, includes bed slope + friction)
             if stencil_idx is not None:
                 local_md = _local_mesh_data(self.mesh_data, stencil_idx, n_cells)
@@ -248,7 +273,10 @@ class FVMPINNLoss(nn.Module):
             else:
                 R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry, t=t[ti])
 
-            residual = dQ_dt + R
+            if self.cfg.steady:
+                residual = R                                       # steady form: R(Q) = 0
+            else:
+                residual = _batch_time_grad(Q_stencil, xyt) + R    # dQ/dt + R(Q) = 0
 
             # Restrict to sampled cells
             if cell_mask is not None:
@@ -261,9 +289,12 @@ class FVMPINNLoss(nn.Module):
             wet = h_check > self.cfg.h_dry
             if wet.any():
                 r_wet = residual[wet]
-                l_xi = (r_wet[:, 0] ** 2).mean()
-                l_hu = (r_wet[:, 1] ** 2).mean()
-                l_hv = (r_wet[:, 2] ** 2).mean()
+                r2_wet = r_wet ** 2
+                if area_w is not None:
+                    r2_wet = r2_wet * area_w[wet].unsqueeze(-1)
+                l_xi = r2_wet[:, 0].mean()
+                l_hu = r2_wet[:, 1].mean()
+                l_hv = r2_wet[:, 2].mean()
                 # Weighted sum across conserved variables. Component weights
                 # default to 1.0 (uniform), but can be tuned per case to
                 # balance scale mismatches between xi and hu/hv.
@@ -296,6 +327,93 @@ class FVMPINNLoss(nn.Module):
             + self.cfg.lambda_hu * v[1]
             + self.cfg.lambda_hv * v[2]
         )
+
+    def _strong_form_loss(
+        self,
+        network: nn.Module,
+        t: torch.Tensor,
+        cell_mask: Optional[torch.Tensor],
+        cell_weights: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Pointwise (strong-form) SWE residual at the cell centres, by autograd.
+
+        Same PDE as the FVM residual, in perturbation variables
+        Q = [xi, hu, hv], h = xi + h_still:
+            d(xi)/dt + d(hu)/dx + d(hv)/dy = 0
+            d(hu)/dt + d(hu^2/h)/dx + d(hu hv/h)/dy + g h d(xi)/dx + tau_x = 0
+            d(hv)/dt + d(hu hv/h)/dx + d(hv^2/h)/dy + g h d(xi)/dy + tau_y = 0
+        with Manning friction tau = g n^2 |q| q / h^(7/3) as in the FVM source.
+        The pressure term g h grad(xi) = g h grad(h + zb) needs no bed
+        derivative; the advection terms need grad h = grad xi + grad h_still,
+        so h_still is extended linearly about each cell centre with
+        grad h_still = -grad zb = S0_cells.
+
+        Returns the same keys as ``_fvm_loss``.
+        """
+        md = self.mesh_data
+        idx = (torch.arange(md["cell_center"].shape[0], device=t.device)
+               if cell_mask is None else cell_mask.nonzero(as_tuple=False).view(-1))
+        xy = md["cell_center"][idx]
+        hs = self.h_still[idx]
+        S0 = md["S0_cells"][idx]
+        n_man = md["cell_manning"][idx]
+        if cell_weights is not None:
+            cell_weights = cell_weights[idx]
+
+        zero = torch.tensor(0.0, device=xy.device, dtype=xy.dtype)
+        total_res, total_w = zero.clone(), zero.clone()
+        total_xi, total_hu, total_hv = zero.clone(), zero.clone(), zero.clone()
+        n_t = len(t)
+        h_dry = self.cfg.h_dry
+
+        for ti in range(n_t):
+            t_k = t[ti:ti + 1].expand(xy.shape[0])
+            xyt = torch.cat([xy, t_k.unsqueeze(-1)], dim=-1).requires_grad_(True)
+            Q = self._network_forward(network, xyt)
+            xi, hu, hv = Q[:, 0], Q[:, 1], Q[:, 2]
+            # Zero at the centres; carries grad h_still into autograd
+            h = xi + hs + ((xyt[:, :2] - xy) * S0).sum(-1)
+            hc = h.clamp(min=h_dry)
+
+            def d(f):   # [n, 3] = (d/dx, d/dy, d/dt)
+                return torch.autograd.grad(f.sum(), xyt, create_graph=True)[0]
+
+            d_xi, d_hu, d_hv = d(xi), d(hu), d(hv)
+            d_uu, d_uv, d_vv = d(hu * hu / hc), d(hu * hv / hc), d(hv * hv / hc)
+            fric = G * n_man ** 2 * smooth_sqrt(hu * hu + hv * hv) / smooth_pow(h + h_dry, 7.0 / 3.0)
+
+            residual = torch.stack([
+                d_xi[:, 2] + d_hu[:, 0] + d_hv[:, 1],
+                d_hu[:, 2] + d_uu[:, 0] + d_uv[:, 1] + G * h * d_xi[:, 0] + fric * hu,
+                d_hv[:, 2] + d_uv[:, 0] + d_vv[:, 1] + G * h * d_xi[:, 1] + fric * hv,
+            ], dim=-1)
+
+            wet = h.detach() > h_dry
+            if wet.any():
+                r2 = residual[wet] ** 2
+                l_xi, l_hu, l_hv = r2[:, 0].mean(), r2[:, 1].mean(), r2[:, 2].mean()
+                total_res = total_res + (
+                    self.cfg.lambda_xi * l_xi
+                    + self.cfg.lambda_hu * l_hu
+                    + self.cfg.lambda_hv * l_hv
+                )
+                total_xi = total_xi + l_xi
+                total_hu = total_hu + l_hu
+                total_hv = total_hv + l_hv
+                if cell_weights is not None:
+                    total_w = total_w + self._combine_components(
+                        (r2 * cell_weights[wet].unsqueeze(-1)).mean(0))
+
+        result = {
+            "fvm": total_res / n_t,
+            "fvm_xi": total_xi / n_t,
+            "fvm_hu": total_hu / n_t,
+            "fvm_hv": total_hv / n_t,
+        }
+        if cell_weights is not None:
+            result["fvm_w"] = total_w / n_t
+        return result
 
     def _network_forward(self, network: nn.Module, xyt: torch.Tensor) -> torch.Tensor:
         if self.cfg.use_grad_checkpoint:

@@ -57,6 +57,9 @@ class BaseTrainerConfig:
 
     # Time sampling (per step)
     n_time_samples: int = 8
+    # False: redraw n_time_samples uniform times at every step (default).
+    # True: reuse the fixed grid t_k = t_start + k*dt, k = 1..n_time_samples.
+    fixed_time_levels: bool = False
     t_start: float = 0.0
     t_end: float = 1.0
 
@@ -71,6 +74,11 @@ class BaseTrainerConfig:
     # Resume from a checkpoint written by _save_checkpoint (e.g. a run killed
     # by the wall-time limit). None = train from scratch.
     resume_from: Optional[str] = None
+
+    # Initialise the network weights and input normalisation from another
+    # run's checkpoint (e.g. teacher_final.pt of a distillation run). Unlike
+    # resume_from, the optimiser, schedule and history start fresh.
+    init_from: Optional[str] = None
 
     # Adaptive loss weighting (see loss_weighting.py), e.g.
     # {"method": "grad_norm", "update_every": 10, "alpha": 0.9}.
@@ -209,6 +217,12 @@ class BaseTrainer(ABC):
         t0 = time.perf_counter()
 
         self.weighting = build_loss_weighting(self.cfg.loss_weighting, self)
+        if self.cfg.init_from and not self.cfg.resume_from:
+            ck = torch.load(self.cfg.init_from, map_location=self.device, weights_only=False)
+            self.network.load_state_dict(ck["network_state"])
+            self.network.set_normalisation(ck["x_mean"].to(self.device, self.dtype),
+                                           ck["x_std"].to(self.device, self.dtype))
+            logger.info(f"Initialised network from {self.cfg.init_from}")
         if self.cfg.resume_from:
             self._resume(self.cfg.resume_from)
         if self.weighting is not None and self._weighting_state:
@@ -395,6 +409,13 @@ class BaseTrainer(ABC):
     # ------------------------------------------------------------------
 
     def _sample_times(self) -> torch.Tensor:
+        if self.cfg.fixed_time_levels:
+            n = self.cfg.n_time_samples
+            dt = (self.cfg.t_end - self.cfg.t_start) / n
+            t = self.cfg.t_start + dt * torch.arange(
+                1, n + 1, device=self.device, dtype=self.dtype
+            )
+            return t.requires_grad_(True)
         t = torch.rand(self.cfg.n_time_samples, device=self.device, dtype=self.dtype)
         t = self.cfg.t_start + t * (self.cfg.t_end - self.cfg.t_start)
         return t.requires_grad_(True)

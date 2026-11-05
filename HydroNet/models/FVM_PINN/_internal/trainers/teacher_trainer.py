@@ -40,7 +40,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from ..fvm.riemann_solver import compute_fvm_residual
+from ..fvm.riemann_solver import compute_fvm_residual, interp_hydrograph
 from ..fvm.time_stepping import run_fvm_rk2
 from ..pinn.network import SWENet, SirenSWENet, NetworkConfig
 from ..pinn.loss import LossConfig
@@ -516,6 +516,9 @@ class TeacherTrainer:
             if bc_type == "inlet-q":
                 nx, ny = bc_info["nx"], bc_info["ny"]
                 val = bc_info["value"]
+                if "hydrograph" in bc_info:
+                    # value = 1 / inlet width; scale by Q(t)
+                    val = val * interp_hydrograph(bc_info["hydrograph"], t_val).to(val)
                 hu_n = Q_pred[:, 1] * nx + Q_pred[:, 2] * ny
                 l = ((hu_n + val) ** 2).mean()
             elif bc_type == "exit-h":
@@ -613,9 +616,7 @@ class TeacherTrainer:
             f"[{self.cfg.t_start}, {self.cfg.t_end}]s (duration {duration}s, cfl={self.cfg.cfl})"
         )
         t0 = time.time()
-        t_snaps_rel, Q_snaps = self._run_trajectory(Q_init, duration, M)
-        self._t_snaps = t_snaps_rel + self.cfg.t_start
-        self._Q_snaps = Q_snaps
+        self._t_snaps, self._Q_snaps = self._run_trajectory(Q_init, M)
         logger.info(f"Trajectory generated in {time.time() - t0:.1f}s")
 
         # Save cache
@@ -628,19 +629,21 @@ class TeacherTrainer:
         logger.info(f"Cached trajectory to {cache_path}")
 
     def _run_trajectory(
-        self, Q_init: torch.Tensor, t_end: float, n_snapshots: int,
+        self, Q_init: torch.Tensor, n_snapshots: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Thin wrapper over the shared ``run_fvm_rk2`` helper.
 
-        Produces ``n_snapshots+1`` snapshots evenly spaced over ``[0, t_end]``
-        (including t=0). All step logic — CFL dt, Heun RK2 stages, physical-h
+        Produces ``n_snapshots+1`` snapshots evenly spaced over
+        ``[t_start, t_end]`` (inclusive). Integrates in absolute time so that
+        time-dependent BCs (inlet hydrographs) are evaluated at the right t. All step logic — CFL dt, Heun RK2 stages, physical-h
         clamp, dry-cell momentum zeroing — lives in
         ``_internal/fvm/time_stepping.py`` so the teacher trainer and the
         standalone ``<case>_fvm_only.py`` drivers share a single
         implementation.
         """
         t_snaps = torch.linspace(
-            0.0, t_end, n_snapshots + 1, dtype=self.dtype, device=self.device,
+            self.cfg.t_start, self.cfg.t_end, n_snapshots + 1,
+            dtype=self.dtype, device=self.device,
         )
         return run_fvm_rk2(
             Q_init, self.mesh_data, self.h_still,
@@ -658,6 +661,11 @@ class TeacherTrainer:
             "snapshots":  int(self.cfg.n_snapshots),
             "cfl":        float(self.cfg.cfl),
             "h_dry":      float(self.cfg.h_dry),
+            # Time-dependent inflow changes the trajectory
+            "hydrographs": str(sorted(
+                (k, [list(map(float, r)) for r in v["hydrograph"]])
+                for k, v in self.mesh_data.get("bc_ghost", {}).items() if "hydrograph" in v
+            )),
         }
 
     # ------------------------------------------------------------------
