@@ -18,6 +18,9 @@
 #  46-60 DB_NT{1,2,5,10,20}_S{1,2,3}  61-69 DB_FX{2,5,20}_S{1,2,3}
 #     (dam-break time-sampling sweep, redrawn and fixed levels, CPU; R1-M5)
 #  70 BIC_B_AW  71 SR_B_AW   (FVM residual weighted by A_i/mean(A); side test)
+#  72 BIC_B_CTL  73 SR_B_CTL   (unweighted controls for 70-71, on the same code)
+#  74 SR_B_FL 75 SR_C_FL 76 SR_D_FL 77 SR_E_FL 78 SR_F_FL 79 SR_G_FL 80 SR_B_SF_FL 81 SR_F_SF_FL 82 SR_B_AW_FL
+#     (Case 4 retrained on the flat-start SRH-2D reference)
 #
 # Submit from examples/FVM_PINN/:
 #   GPU runs (configs with device "cuda"):
@@ -59,7 +62,8 @@ RUN_IDS=(_ DB_1 BP_1 BIC_A BIC_B BIC_C BIC_D BIC_E BIC_F BIC_G BIC_H
          BIC_A_SS BIC_B_SS
          BICU_C_NT5 BICU_C_NT20 BICU_C_NT40
          DB_NT1_S1 DB_NT1_S2 DB_NT1_S3 DB_NT2_S1 DB_NT2_S2 DB_NT2_S3 DB_NT5_S1 DB_NT5_S2 DB_NT5_S3 DB_NT10_S1 DB_NT10_S2 DB_NT10_S3 DB_NT20_S1 DB_NT20_S2 DB_NT20_S3 DB_FX2_S1 DB_FX2_S2 DB_FX2_S3 DB_FX5_S1 DB_FX5_S2 DB_FX5_S3 DB_FX20_S1 DB_FX20_S2 DB_FX20_S3
-         BIC_B_AW SR_B_AW)
+         BIC_B_AW SR_B_AW BIC_B_CTL SR_B_CTL
+         SR_B_FL SR_C_FL SR_D_FL SR_E_FL SR_F_FL SR_G_FL SR_B_SF_FL SR_F_SF_FL SR_B_AW_FL)
 RID=${RUN_IDS[$SLURM_ARRAY_TASK_ID]}
 
 module purge
