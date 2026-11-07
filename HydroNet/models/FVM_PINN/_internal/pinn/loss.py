@@ -108,6 +108,20 @@ class FVMPINNLoss(nn.Module):
         else:
             self.h_still = torch.zeros(n_cells, device=device, dtype=dtype)
 
+        # Cells adjacent to inlet-q faces. The inlet ghost state shares the
+        # discharge over all inlet faces by conveyance, so a mini-batch stencil
+        # must contain every inlet cell or the discharge is concentrated on the
+        # sampled ones. Empty when there is no inlet-q boundary.
+        inlet_ids = [k for k, v in mesh_data.get("bc_ghost", {}).items()
+                     if v.get("type") == "inlet-q"]
+        if inlet_ids and "face_bc_id" in mesh_data:
+            fb = mesh_data["face_bc_id"]
+            on_inlet = (mesh_data["face_right"] < 0) & torch.isin(
+                fb, torch.tensor(inlet_ids, device=fb.device, dtype=fb.dtype))
+            self.inlet_cells = torch.unique(mesh_data["face_left"][on_inlet])
+        else:
+            self.inlet_cells = None
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -230,7 +244,8 @@ class FVMPINNLoss(nn.Module):
 
         if cell_mask is not None:
             stencil_idx, eval_mask = _build_stencil(
-                cell_mask, self.mesh_data["face_left"], self.mesh_data["face_right"]
+                cell_mask, self.mesh_data["face_left"], self.mesh_data["face_right"],
+                always_include=self.inlet_cells,
             )
             stencil_xy = cell_xy[stencil_idx]
             stencil_hs = self.h_still[stencil_idx]
@@ -578,26 +593,26 @@ def _build_stencil(
     cell_mask: torch.Tensor,
     face_left: torch.Tensor,
     face_right: torch.Tensor,
+    always_include: Optional[torch.Tensor] = None,
 ) -> tuple:
-    """Build stencil for mini-batch FVM evaluation."""
-    sample_set = set(cell_mask.nonzero(as_tuple=False).view(-1).tolist())
-    stencil_set = set(sample_set)
-    fl = face_left.tolist()
-    fr = face_right.tolist()
-    for fi, (l, r) in enumerate(zip(fl, fr)):
-        if l in sample_set and r >= 0:
-            stencil_set.add(r)
-        if r in sample_set:
-            stencil_set.add(l)
+    """Build the stencil for a mini-batch FVM evaluation.
 
-    stencil_list = sorted(stencil_set)
-    stencil_idx = torch.tensor(stencil_list, dtype=torch.long, device=cell_mask.device)
+    The stencil holds the sampled cells, their face neighbours (so every face
+    flux of a sampled cell is exact) and ``always_include`` (the inlet-q
+    cells, whose states set the inlet discharge distribution).
 
-    stencil_to_local = {g: loc for loc, g in enumerate(stencil_list)}
-    eval_positions = [stencil_to_local[g] for g in sorted(sample_set)]
-    eval_mask = torch.zeros(len(stencil_list), dtype=torch.bool, device=cell_mask.device)
-    eval_mask[eval_positions] = True
-
+    Returns ``stencil_idx`` (sorted global cell indices) and ``eval_mask``
+    (True at the sampled cells, the only ones whose residual is used).
+    """
+    in_stencil = cell_mask.clone()
+    interior = face_right >= 0
+    fl, fr = face_left[interior], face_right[interior]
+    in_stencil[fr[cell_mask[fl]]] = True
+    in_stencil[fl[cell_mask[fr]]] = True
+    if always_include is not None:
+        in_stencil[always_include] = True
+    stencil_idx = in_stencil.nonzero(as_tuple=False).view(-1)
+    eval_mask = cell_mask[stencil_idx]
     return stencil_idx, eval_mask
 
 
