@@ -305,11 +305,11 @@ def main() -> None:
         Path(args.config).stem.replace("fvm_pinn_config", "").lstrip("_") or "default"
     )
 
-    np.random.seed(42)
-    torch.manual_seed(42)
-
     wall_start = time.time()
     config = Config(args.config)
+    seed = int(config.get("training.seed", 42))  # network init and time sampling
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if args.device:
         config.set("device.type", args.device)
     if args.resume:

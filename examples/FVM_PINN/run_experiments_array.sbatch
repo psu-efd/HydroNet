@@ -21,6 +21,11 @@
 #  72 BIC_B_CTL  73 SR_B_CTL   (unweighted controls for 70-71, on the same code)
 #  74 SR_B_FL 75 SR_C_FL 76 SR_D_FL 77 SR_E_FL 78 SR_F_FL 79 SR_G_FL 80 SR_B_SF_FL 81 SR_F_SF_FL 82 SR_B_AW_FL
 #     (Case 4 retrained on the flat-start SRH-2D reference)
+#  83 BICU_TX450 84 BICU_TX540 85 BICU_CTX450 86 BICU_CTX540 87 BICU_GTX450 88 BICU_GTX540
+#     (R2-4 temporal extrapolation; 85-88 need 83-84 first: --dependency)
+#  89 BP_T  90 BP_A  91 BP_T_SF  92 BP_A_SF   (Case 2 loss x data design, R3-B1b)
+#  93 BP_T_EF  94 BP_A_EF   (Case 2 with the Harten-Hyman fix in the loss, R3-B1c)
+#  95 DB_1_SF   (Case 1 strong-form PINN, CPU: --partition=basic --gres=none; R3-B1c)
 #
 # Submit from examples/FVM_PINN/:
 #   GPU runs (configs with device "cuda"):
@@ -63,7 +68,12 @@ RUN_IDS=(_ DB_1 BP_1 BIC_A BIC_B BIC_C BIC_D BIC_E BIC_F BIC_G BIC_H
          BICU_C_NT5 BICU_C_NT20 BICU_C_NT40
          DB_NT1_S1 DB_NT1_S2 DB_NT1_S3 DB_NT2_S1 DB_NT2_S2 DB_NT2_S3 DB_NT5_S1 DB_NT5_S2 DB_NT5_S3 DB_NT10_S1 DB_NT10_S2 DB_NT10_S3 DB_NT20_S1 DB_NT20_S2 DB_NT20_S3 DB_FX2_S1 DB_FX2_S2 DB_FX2_S3 DB_FX5_S1 DB_FX5_S2 DB_FX5_S3 DB_FX20_S1 DB_FX20_S2 DB_FX20_S3
          BIC_B_AW SR_B_AW BIC_B_CTL SR_B_CTL
-         SR_B_FL SR_C_FL SR_D_FL SR_E_FL SR_F_FL SR_G_FL SR_B_SF_FL SR_F_SF_FL SR_B_AW_FL)
+         SR_B_FL SR_C_FL SR_D_FL SR_E_FL SR_F_FL SR_G_FL SR_B_SF_FL SR_F_SF_FL SR_B_AW_FL
+         BICU_TX450 BICU_TX540 BICU_CTX450 BICU_CTX540 BICU_GTX450 BICU_GTX540
+         BP_T BP_A BP_T_SF BP_A_SF
+         BP_T_EF BP_A_EF DB_1_SF
+         BIC_A_SF BIC_B_SF BIC_E_SF
+         BIC_B_S2 BIC_B_S3 BIC_G_S2 BIC_G_S3 BIC_E_S2 BIC_E_S3 BIC_H_S2 BIC_H_S3)
 RID=${RUN_IDS[$SLURM_ARRAY_TASK_ID]}
 
 module purge
