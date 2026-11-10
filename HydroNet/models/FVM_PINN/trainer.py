@@ -109,11 +109,6 @@ class FVM_PINNTrainer:
             # ``_net`` therefore reflects only the final window after train;
             # use ``trainer.predict(xyt)`` for across-window inference.
         elif self.strategy == 'teacher':
-            if loss_cfg.residual != "fvm":
-                raise NotImplementedError(
-                    "strategy='teacher' computes the FVM residual itself; "
-                    "training.loss_type must be 'fvm'"
-                )
             teacher_cfg = self._build_teacher_cfg()
             self._trainer = TeacherTrainer(
                 teacher_cfg, net_cfg, loss_cfg, mesh_data,
@@ -253,6 +248,8 @@ class FVM_PINNTrainer:
             steady=bool(cfg.get('training.steady_form', False)),
             # Weight the FVM residual by A_i / mean(A); off by default
             area_weighted=bool(cfg.get('training.fvm_area_weighted', False)),
+            # Harten-Hyman fix in the training residual only; off by default
+            entropy_fix=bool(cfg.get('training.entropy_fix', False)),
         )
 
     def _fill_base_cfg(self, cfg_obj: BaseTrainerConfig) -> BaseTrainerConfig:

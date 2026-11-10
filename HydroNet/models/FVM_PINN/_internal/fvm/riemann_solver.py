@@ -31,6 +31,18 @@ from .smooth_ops import smooth_abs, smooth_sqrt, smooth_pow
 G: float = 9.81   # gravitational acceleration (m/s²)
 
 
+def _harten_hyman(
+    abs_lam: torch.Tensor,
+    lam: torch.Tensor,
+    lam_L: torch.Tensor,
+    lam_R: torch.Tensor,
+) -> torch.Tensor:
+    """Harten-Hyman entropy fix: |lam| is replaced by max(|lam|, delta), with
+    delta = max(0, lam - lam_L, lam_R - lam). delta > 0 only in an expansion."""
+    delta = torch.maximum(lam - lam_L, lam_R - lam).clamp(min=0.0)
+    return torch.maximum(abs_lam, delta)
+
+
 # ---------------------------------------------------------------------------
 # Roe Riemann solver for 2D SWE (well-balanced, perturbation form)
 # ---------------------------------------------------------------------------
@@ -45,6 +57,7 @@ def roe_flux_2d(
     nx: torch.Tensor,
     ny: torch.Tensor,
     h_small: float = 1e-3,
+    entropy_fix: bool = False,
 ) -> torch.Tensor:
     """
     Compute Roe numerical flux for 2D SWE in perturbation form.
@@ -155,6 +168,11 @@ def roe_flux_2d(
     lam1 = smooth_abs(un_Roe)           # contact wave
     lam2 = smooth_abs(un_Roe - c_Roe)   # left acoustic
     lam3 = smooth_abs(un_Roe + c_Roe)   # right acoustic
+    if entropy_fix:  # acoustic waves only; off by default
+        c_L = smooth_sqrt(G * h_L)
+        c_R = smooth_sqrt(G * h_R)
+        lam2 = _harten_hyman(lam2, un_Roe - c_Roe, un_L - c_L, un_R - c_R)
+        lam3 = _harten_hyman(lam3, un_Roe + c_Roe, un_L + c_L, un_R + c_R)
 
     # R |Lambda| L * dQ  (following Hydrograd's matrix form)
     # L * dQ (project onto characteristic variables)
@@ -291,6 +309,7 @@ def compute_fvm_residual(
     h_still: torch.Tensor,
     h_small: float = 1e-2,
     t=None,
+    entropy_fix: bool = False,
 ) -> torch.Tensor:
     """
     Compute FVM residual for the well-balanced SWE.
@@ -349,7 +368,7 @@ def compute_fvm_residual(
         )
 
     # --- Roe flux ---
-    flux = roe_flux_2d(Q_L, Q_R, hs_L, hs_R, zb_L, zb_R, nx, ny, h_small)
+    flux = roe_flux_2d(Q_L, Q_R, hs_L, hs_R, zb_L, zb_R, nx, ny, h_small, entropy_fix)
 
     # --- Scatter fluxes to cells ---
     flux_scaled = flux * face_length.unsqueeze(-1)

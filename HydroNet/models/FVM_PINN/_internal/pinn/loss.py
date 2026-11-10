@@ -68,6 +68,9 @@ class LossConfig:
     # the loss is an unweighted mean over wet cells. Normalising by the mean
     # keeps the loss scale, and leaves uniform meshes unchanged (side test).
     area_weighted: bool = False
+    # Harten-Hyman entropy fix on the acoustic waves of the Roe flux in the
+    # FVM residual. Off by default (ablation only).
+    entropy_fix: bool = False
 
 
 class FVMPINNLoss(nn.Module):
@@ -284,9 +287,11 @@ class FVMPINNLoss(nn.Module):
             # FVM residual (well-balanced, includes bed slope + friction)
             if stencil_idx is not None:
                 local_md = _local_mesh_data(self.mesh_data, stencil_idx, n_cells)
-                R = compute_fvm_residual(Q_stencil, local_md, stencil_hs, self.cfg.h_dry, t=t[ti])
+                R = compute_fvm_residual(Q_stencil, local_md, stencil_hs, self.cfg.h_dry, t=t[ti],
+                                         entropy_fix=self.cfg.entropy_fix)
             else:
-                R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry, t=t[ti])
+                R = compute_fvm_residual(Q_stencil, self.mesh_data, stencil_hs, self.cfg.h_dry, t=t[ti],
+                                         entropy_fix=self.cfg.entropy_fix)
 
             if self.cfg.steady:
                 residual = R                                       # steady form: R(Q) = 0
@@ -382,6 +387,14 @@ class FVMPINNLoss(nn.Module):
         n_t = len(t)
         h_dry = self.cfg.h_dry
 
+        # A one-cell-wide (quasi-1D) mesh has no extent in one coordinate. The
+        # input normalisation then clamps that std to 1e-6, so autograd would
+        # return a spurious derivative about 1e6 times too large. The flow does
+        # not vary along such a coordinate, so its derivatives are dropped.
+        centres = md["cell_center"]
+        has_extent = (centres.max(0)[0] - centres.min(0)[0]) > 1e-9
+        axis_mask = torch.cat([has_extent.to(xy.dtype), torch.ones(1, device=xy.device, dtype=xy.dtype)])
+
         for ti in range(n_t):
             t_k = t[ti:ti + 1].expand(xy.shape[0])
             xyt = torch.cat([xy, t_k.unsqueeze(-1)], dim=-1).requires_grad_(True)
@@ -392,7 +405,7 @@ class FVMPINNLoss(nn.Module):
             hc = h.clamp(min=h_dry)
 
             def d(f):   # [n, 3] = (d/dx, d/dy, d/dt)
-                return torch.autograd.grad(f.sum(), xyt, create_graph=True)[0]
+                return torch.autograd.grad(f.sum(), xyt, create_graph=True)[0] * axis_mask
 
             d_xi, d_hu, d_hv = d(xi), d(hu), d(hv)
             d_uu, d_uv, d_vv = d(hu * hu / hc), d(hu * hv / hc), d(hv * hv / hc)

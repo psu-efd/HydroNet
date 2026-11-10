@@ -43,7 +43,7 @@ import torch.optim as optim
 from ..fvm.riemann_solver import compute_fvm_residual, interp_hydrograph
 from ..fvm.time_stepping import run_fvm_rk2
 from ..pinn.network import SWENet, SirenSWENet, NetworkConfig
-from ..pinn.loss import LossConfig
+from ..pinn.loss import FVMPINNLoss, LossConfig
 from .base_trainer import _to_device
 from .memory_tracker import MemoryTracker
 from .step_timer import StepTimer
@@ -167,6 +167,13 @@ class TeacherTrainer:
             self.h_still = torch.zeros(n_cells, dtype=self.dtype, device=self.device)
         else:
             self.h_still = h_still.to(dtype=self.dtype, device=self.device)
+
+        # Strong-form baseline: the physics regulariser uses the pointwise SWE
+        # residual instead of the FVM one. The teacher trajectory is unchanged.
+        self._strong_form_loss = (
+            FVMPINNLoss(loss_cfg, self.mesh_data, self.h_still)
+            if loss_cfg.residual == "strong_form" else None
+        )
 
         # Build the network. If FVM_PINNTrainer is wrapping us, it will
         # immediately reassign ``self.network`` to the model's internal net;
@@ -466,7 +473,15 @@ class TeacherTrainer:
 
         # --- Physics residual (only if λ_phys > 0) ---
         zero = torch.tensor(0.0, device=self.device, dtype=self.dtype)
-        if lam_phys > 0:
+        if lam_phys > 0 and self._strong_form_loss is not None:
+            sf = self._strong_form_loss._strong_form_loss(
+                self.network,
+                torch.tensor([t_k], device=self.device, dtype=self.dtype),
+                None,
+            )
+            p_xi, p_hu, p_hv = sf["fvm_xi"], sf["fvm_hu"], sf["fvm_hv"]
+            l_phys = w_xi * p_xi + w_hu * p_hu + w_hv * p_hv
+        elif lam_phys > 0:
             t_col = torch.full(
                 (n_cells, 1), t_k, dtype=self.dtype,
                 device=self.device, requires_grad=True,
@@ -480,7 +495,8 @@ class TeacherTrainer:
                 )[0]
                 dQ_dt[:, j] = grads.squeeze(-1)
             R = compute_fvm_residual(Q_pred_p, self.mesh_data, self.h_still,
-                                     self.cfg.h_dry, t=t_k)
+                                     self.cfg.h_dry, t=t_k,
+                                     entropy_fix=self.loss_cfg.entropy_fix)
             diff_p = (dQ_dt + R) ** 2
             p_xi = diff_p[:, 0].mean()
             p_hu = diff_p[:, 1].mean()
