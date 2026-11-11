@@ -84,6 +84,8 @@ class FVM_SWE_PINN(nn.Module):
             n_layers=int(config.get('model.n_layers', 6)),
             n_fourier=int(config.get('model.n_fourier', 64)),
             fourier_scale=float(config.get('model.fourier_scale', 1.0)),
+            fourier_scale_t=(None if config.get('model.fourier_scale_t', None) is None
+                             else float(config.get('model.fourier_scale_t'))),
             activation=str(config.get('model.activation', 'tanh')),
             use_residual=bool(config.get('model.use_residual', True)),
             output_dim=3,

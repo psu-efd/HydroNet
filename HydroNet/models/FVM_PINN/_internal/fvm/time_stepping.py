@@ -81,6 +81,7 @@ def run_fvm_rk2(
     cfl: float = 0.3,
     h_dry: float = 1e-2,
     progress_cb: Optional[callable] = None,
+    entropy_fix: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Heun RK2 integration of the well-balanced FVM SWE residual from
@@ -139,7 +140,8 @@ def run_fvm_rk2(
                     dt = t_target - t_cur
 
                 # ---- Heun RK2 stage 1 ----
-                R1 = compute_fvm_residual(Q_cur, mesh_data, h_still)
+                R1 = compute_fvm_residual(Q_cur, mesh_data, h_still, t=t_cur,
+                                          entropy_fix=entropy_fix)
                 Q_star = Q_cur - dt * R1
                 h_star = (Q_star[:, 0] + h_still).clamp(min=0.0)
                 Q_star[:, 0] = h_star - h_still
@@ -148,7 +150,8 @@ def run_fvm_rk2(
                 Q_star[dry1, 2] = 0.0
 
                 # ---- Heun RK2 stage 2 ----
-                R2 = compute_fvm_residual(Q_star, mesh_data, h_still)
+                R2 = compute_fvm_residual(Q_star, mesh_data, h_still, t=t_cur + float(dt),
+                                          entropy_fix=entropy_fix)
                 Q_cur = Q_cur - 0.5 * dt * (R1 + R2)
                 h_new = (Q_cur[:, 0] + h_still).clamp(min=0.0)
                 Q_cur[:, 0] = h_new - h_still

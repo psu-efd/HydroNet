@@ -1,0 +1,80 @@
+{
+  "info": {
+    "tag": "n200000",
+    "srhhydro": "data_refined/n200000/savana_n200000.srhhydro",
+    "n_cells": 188876,
+    "n_faces": 284400,
+    "dataset_build_s": 7.75783556420356,
+    "n_time_samples": 10,
+    "n_warm": 10,
+    "n_steps": 50,
+    "torch": "2.11.0+cu128",
+    "host": "p-gc-3029",
+    "gpu": "NVIDIA A100-PCIE-40GB",
+    "gpu_total_mib": 40440.375
+  },
+  "results": [
+    {
+      "setting": "full",
+      "strategy": "standard",
+      "cell_frac": null,
+      "grad_checkpoint": false,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 186.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 81.50 MiB is free. Including non-PyTorch memory, this process has 39.40 GiB memory in use. Of the allocated memory 38.48 GiB is allocated by PyTorch, and 436.03 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "full_ckpt",
+      "strategy": "standard",
+      "cell_frac": null,
+      "grad_checkpoint": true,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 186.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 93.50 MiB is free. Including non-PyTorch memory, this process has 39.39 GiB memory in use. Of the allocated memory 38.49 GiB is allocated by PyTorch, and 412.95 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "mb0.25",
+      "strategy": "minibatch",
+      "cell_frac": 0.25,
+      "grad_checkpoint": false,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 43.50 MiB is free. Including non-PyTorch memory, this process has 39.44 GiB memory in use. Of the allocated memory 38.83 GiB is allocated by PyTorch, and 119.52 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "mb0.10",
+      "strategy": "minibatch",
+      "cell_frac": 0.1,
+      "grad_checkpoint": false,
+      "status": "ok",
+      "s_per_step_median": 0.547026599990204,
+      "s_per_step_mean": 0.5470858663320541,
+      "s_per_step_p90": 0.5479179442627355,
+      "final_total_loss": 1.039115941752267,
+      "final_fvm_loss": 0.007425693139901615,
+      "peak_mib": 35698.77294921875,
+      "peak_above_start_mib": 35637.677734375,
+      "reserved_peak_mib": 36432.0
+    },
+    {
+      "setting": "mb0.10_ckpt",
+      "strategy": "minibatch",
+      "cell_frac": 0.1,
+      "grad_checkpoint": true,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 31.50 MiB is free. Including non-PyTorch memory, this process has 39.45 GiB memory in use. Of the allocated memory 38.81 GiB is allocated by PyTorch, and 149.65 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "mb0.02",
+      "strategy": "minibatch",
+      "cell_frac": 0.02,
+      "grad_checkpoint": false,
+      "status": "ok",
+      "s_per_step_median": 0.2525271929334849,
+      "s_per_step_mean": 0.2633721883781254,
+      "s_per_step_p90": 0.2773967598332092,
+      "final_total_loss": 1.4469624173433397,
+      "final_fvm_loss": 0.025520009675676303,
+      "peak_mib": 9694.43505859375,
+      "peak_above_start_mib": 9633.33984375,
+      "reserved_peak_mib": 11316.0
+    }
+  ]
+}

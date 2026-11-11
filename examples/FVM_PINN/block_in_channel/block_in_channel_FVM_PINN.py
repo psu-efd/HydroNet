@@ -22,6 +22,8 @@ Usage
     python block_in_channel_FVM_PINN.py                          # CPU
     python block_in_channel_FVM_PINN.py --device cuda             # GPU (recommended for 1326 cells)
     python block_in_channel_FVM_PINN.py --post-only               # skip training, plot from checkpoint
+    python block_in_channel_FVM_PINN.py --config fvm_pinn_config_BIC_F.yaml \
+        --resume checkpoints/BIC_F/ckpt_adam_5000.pt               # continue a killed run
 """
 
 import argparse
@@ -127,6 +129,7 @@ def evaluate_and_plot(
     config: Config,
     dataset: FVM_PINNDataset,
     out_dir: Path,
+    trainer: FVM_PINNTrainer = None,
 ):
     t_end = float(config.get_required_config("training.t_end"))
     mesh = dataset.get_mesh()
@@ -141,14 +144,22 @@ def evaluate_and_plot(
     vel_ref = np.sqrt(u_ref ** 2 + v_ref ** 2)
 
     # ---- PINN prediction at t_end (public forward returns [h, u, v]) ----
+    # For strategy=window, model(xyt) holds no trained window network;
+    # trainer.predict routes each query to its window (as in the SR script).
     device = model.get_device()
-    xyt = torch.column_stack([
-        torch.tensor(xc, dtype=torch.float64, device=device),
-        torch.tensor(yc, dtype=torch.float64, device=device),
-        torch.full((n,), t_end, dtype=torch.float64, device=device),
-    ])
-    with torch.no_grad():
-        Q_phys = model(xyt).cpu().numpy()
+
+    def _predict(t_val: float) -> np.ndarray:
+        xyt = torch.column_stack([
+            torch.tensor(xc, dtype=torch.float64, device=device),
+            torch.tensor(yc, dtype=torch.float64, device=device),
+            torch.full((n,), t_val, dtype=torch.float64, device=device),
+        ])
+        with torch.no_grad():
+            if trainer is not None and trainer.strategy == "window":
+                return trainer.predict(xyt).cpu().numpy()
+            return model(xyt).cpu().numpy()
+
+    Q_phys = _predict(t_end)
     h_pred = Q_phys[:, 0]
     u_pred = Q_phys[:, 1]
     v_pred = Q_phys[:, 2]
@@ -208,8 +219,26 @@ def evaluate_and_plot(
         L2_h=l2_h, max_h=max_h, L2_vel=l2_vel, max_vel=max_vel,
     )
 
-    return {"L2_h": l2_h, "max_h": max_h,
-            "L2_vel": l2_vel, "max_vel": max_vel}
+    metrics = {"L2_h": l2_h, "max_h": max_h,
+               "L2_vel": l2_vel, "max_vel": max_vel}
+
+    # Optional errors at several times (unsteady cases): evaluation.times
+    eval_times = config.get("evaluation.times", None)
+    if eval_times:
+        per_time = []
+        for t_e in eval_times:
+            h_r, u_r, v_r = load_srh2d_reference_at(h5_path, float(t_e))
+            Q_e = _predict(float(t_e))
+            m = h_r > 0.01
+            dv = np.hypot(Q_e[:, 1], Q_e[:, 2]) - np.hypot(u_r, v_r)
+            row = {"t": float(t_e),
+                   "L2_h": float(np.sqrt(np.mean((Q_e[m, 0] - h_r[m]) ** 2))),
+                   "L2_vel": float(np.sqrt(np.mean(dv[m] ** 2)))}
+            per_time.append(row)
+            logger.info(f"  t={row['t']:6.1f}s  L2(h)={row['L2_h']:.4e}  "
+                        f"L2(|V|)={row['L2_vel']:.4e}")
+        metrics["per_time"] = per_time
+    return metrics
 
 
 def plot_loss_history(history: dict, out_dir: Path) -> None:
@@ -266,15 +295,25 @@ def main() -> None:
                         help="Skip training; load existing checkpoint and evaluate.")
     parser.add_argument("--checkpoint", default=None,
                         help="Explicit checkpoint path (default: strategy-based).")
+    parser.add_argument("--resume", default=None,
+                        help="Continue training from a ckpt_*.pt (standard/minibatch strategies).")
+    parser.add_argument("--run-id", default=None,
+                        help="Subfolder for this run's outputs under plots/ and runs/ "
+                             "(default: config name minus 'fvm_pinn_config_').")
     args = parser.parse_args()
-
-    np.random.seed(42)
-    torch.manual_seed(42)
+    run_id = args.run_id or (
+        Path(args.config).stem.replace("fvm_pinn_config", "").lstrip("_") or "default"
+    )
 
     wall_start = time.time()
     config = Config(args.config)
+    seed = int(config.get("training.seed", 42))  # network init and time sampling
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if args.device:
         config.set("device.type", args.device)
+    if args.resume:
+        config.set("training.resume_from", args.resume)
 
     # ---- Build model + dataset ----
     model = FVM_SWE_PINN(config)
@@ -286,6 +325,7 @@ def main() -> None:
     logger.info(f"h_still: [{dataset.get_h_still().min().item():.3f}, "
                 f"{dataset.get_h_still().max().item():.3f}]")
 
+    trainer = None
     if args.post_only:
         model.set_mesh_context(
             h_still_cells=dataset.get_h_still(),
@@ -299,15 +339,16 @@ def main() -> None:
         history, _ = trainer.train()
 
     # ---- Evaluate / plot ----
-    out_dir = Path("plots")
-    metrics = evaluate_and_plot(model, config, dataset, out_dir)
+    out_dir = Path("plots") / run_id   # one folder per run so runs don't overwrite each other
+    metrics = evaluate_and_plot(model, config, dataset, out_dir, trainer=trainer)
     if history:
         plot_loss_history(history, out_dir)
 
     # Training history dump
     if not args.post_only or history:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        hist_file = Path(f"history_fvm_pinn_{ts}.json")
+        hist_file = Path("runs") / run_id / f"history_fvm_pinn_{ts}.json"
+        hist_file.parent.mkdir(parents=True, exist_ok=True)
         with open(hist_file, "w") as f:
             json.dump({"history": history, "metrics": metrics}, f, indent=2)
         logger.info(f"Training history: {hist_file}")

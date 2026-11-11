@@ -31,6 +31,18 @@ from .smooth_ops import smooth_abs, smooth_sqrt, smooth_pow
 G: float = 9.81   # gravitational acceleration (m/s²)
 
 
+def _harten_hyman(
+    abs_lam: torch.Tensor,
+    lam: torch.Tensor,
+    lam_L: torch.Tensor,
+    lam_R: torch.Tensor,
+) -> torch.Tensor:
+    """Harten-Hyman entropy fix: |lam| is replaced by max(|lam|, delta), with
+    delta = max(0, lam - lam_L, lam_R - lam). delta > 0 only in an expansion."""
+    delta = torch.maximum(lam - lam_L, lam_R - lam).clamp(min=0.0)
+    return torch.maximum(abs_lam, delta)
+
+
 # ---------------------------------------------------------------------------
 # Roe Riemann solver for 2D SWE (well-balanced, perturbation form)
 # ---------------------------------------------------------------------------
@@ -45,6 +57,7 @@ def roe_flux_2d(
     nx: torch.Tensor,
     ny: torch.Tensor,
     h_small: float = 1e-3,
+    entropy_fix: bool = False,
 ) -> torch.Tensor:
     """
     Compute Roe numerical flux for 2D SWE in perturbation form.
@@ -155,6 +168,11 @@ def roe_flux_2d(
     lam1 = smooth_abs(un_Roe)           # contact wave
     lam2 = smooth_abs(un_Roe - c_Roe)   # left acoustic
     lam3 = smooth_abs(un_Roe + c_Roe)   # right acoustic
+    if entropy_fix:  # acoustic waves only; off by default
+        c_L = smooth_sqrt(G * h_L)
+        c_R = smooth_sqrt(G * h_R)
+        lam2 = _harten_hyman(lam2, un_Roe - c_Roe, un_L - c_L, un_R - c_R)
+        lam3 = _harten_hyman(lam3, un_Roe + c_Roe, un_L + c_L, un_R + c_R)
 
     # R |Lambda| L * dQ  (following Hydrograd's matrix form)
     # L * dQ (project onto characteristic variables)
@@ -269,11 +287,29 @@ def compute_source_terms(
 # Full FVM residual
 # ---------------------------------------------------------------------------
 
+def interp_hydrograph(table, t) -> torch.Tensor:
+    """
+    Piecewise-linear discharge Q(t) from a ``[[t, Q], ...]`` table (t in s,
+    increasing); held constant outside the table. ``t`` may be a float or a
+    tensor of any shape; the result has the shape of ``t``. No gradient
+    flows through ``t`` (the BC value is data).
+    """
+    t = t.detach() if torch.is_tensor(t) else torch.tensor(float(t), dtype=torch.float64)
+    tab = torch.as_tensor(table, dtype=t.dtype, device=t.device)
+    tt, qq = tab[:, 0].contiguous(), tab[:, 1].contiguous()
+    tc = torch.minimum(torch.maximum(t.reshape(-1), tt[0]), tt[-1])
+    i = torch.searchsorted(tt, tc, right=True).clamp(1, len(tt) - 1)
+    w = (tc - tt[i - 1]) / (tt[i] - tt[i - 1])
+    return (qq[i - 1] + w * (qq[i] - qq[i - 1])).reshape(t.shape)
+
+
 def compute_fvm_residual(
     Q_cells: torch.Tensor,
     mesh_data: dict,
     h_still: torch.Tensor,
     h_small: float = 1e-2,
+    t=None,
+    entropy_fix: bool = False,
 ) -> torch.Tensor:
     """
     Compute FVM residual for the well-balanced SWE.
@@ -288,6 +324,8 @@ def compute_fvm_residual(
     mesh_data : dict with face/cell topology and bed data
     h_still : [n_cells]  still water depth reference
     h_small : float  dry threshold
+    t : float or 0-d tensor, optional — time of ``Q_cells``. Required only
+        when a ``bc_ghost`` entry carries a ``hydrograph``.
 
     Returns
     -------
@@ -326,11 +364,11 @@ def compute_fvm_residual(
         Q_R[bnd_mask], hs_R[bnd_mask], zb_R[bnd_mask] = _build_ghost_states(
             Q_L[bnd_mask], hs_L[bnd_mask], zb_L[bnd_mask],
             nx[bnd_mask], ny[bnd_mask],
-            mesh_data, bnd_mask, h_small,
+            mesh_data, bnd_mask, h_small, t,
         )
 
     # --- Roe flux ---
-    flux = roe_flux_2d(Q_L, Q_R, hs_L, hs_R, zb_L, zb_R, nx, ny, h_small)
+    flux = roe_flux_2d(Q_L, Q_R, hs_L, hs_R, zb_L, zb_R, nx, ny, h_small, entropy_fix)
 
     # --- Scatter fluxes to cells ---
     flux_scaled = flux * face_length.unsqueeze(-1)
@@ -367,12 +405,14 @@ def _build_ghost_states(
     mesh_data: dict,
     bnd_mask: torch.Tensor,
     h_small: float,
+    t=None,
 ):
     """
     Build ghost states for boundary faces.
 
     Default: reflective (wall/symmetry).
-    Overrides for inlet-q and exit-h via mesh_data["bc_ghost"].
+    Overrides for inlet-q and exit-h via mesh_data["bc_ghost"]. An inlet-q
+    entry with a ``hydrograph`` table takes its discharge at time ``t``.
     """
     # Default: reflective ghost (wall/symmetry)
     Q_ghost = _reflective_ghost(Q_L, nx, ny)
@@ -400,6 +440,13 @@ def _build_ghost_states(
                 continue
 
             if bc_type == "inlet-q":
+                if "hydrograph" in bc_info:
+                    if t is None:
+                        raise ValueError(
+                            f"inlet-q BC {bc_id} has a hydrograph; "
+                            "compute_fvm_residual needs the time t"
+                        )
+                    bc_val = interp_hydrograph(bc_info["hydrograph"], t).to(Q_L)
                 Q_ghost[local_mask] = _inlet_q_ghost(
                     Q_L[local_mask], hs_L[local_mask],
                     nx[local_mask], ny[local_mask],

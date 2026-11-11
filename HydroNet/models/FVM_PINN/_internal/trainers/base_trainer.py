@@ -14,6 +14,7 @@ All trainers share the same public API:
 
 import logging
 import time
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,7 +26,9 @@ import torch.optim as optim
 
 from ..pinn.network import SWENet, NetworkConfig
 from ..pinn.loss import FVMPINNLoss, LossConfig
+from .loss_weighting import LossWeighting, build_loss_weighting
 from .memory_tracker import MemoryTracker
+from .step_timer import StepTimer
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,9 @@ class BaseTrainerConfig:
 
     # Time sampling (per step)
     n_time_samples: int = 8
+    # False: redraw n_time_samples uniform times at every step (default).
+    # True: reuse the fixed grid t_k = t_start + k*dt, k = 1..n_time_samples.
+    fixed_time_levels: bool = False
     t_start: float = 0.0
     t_end: float = 1.0
 
@@ -64,6 +70,20 @@ class BaseTrainerConfig:
     log_every: int = 200
     checkpoint_every: int = 1000
     output_dir: str = "outputs"
+
+    # Resume from a checkpoint written by _save_checkpoint (e.g. a run killed
+    # by the wall-time limit). None = train from scratch.
+    resume_from: Optional[str] = None
+
+    # Initialise the network weights and input normalisation from another
+    # run's checkpoint (e.g. teacher_final.pt of a distillation run). Unlike
+    # resume_from, the optimiser, schedule and history start fresh.
+    init_from: Optional[str] = None
+
+    # Adaptive loss weighting (see loss_weighting.py), e.g.
+    # {"method": "grad_norm", "update_every": 10, "alpha": 0.9}.
+    # None = static weights from LossConfig.
+    loss_weighting: Optional[Dict] = None
 
     # Hardware
     device: str = "cpu"
@@ -134,6 +154,18 @@ class BaseTrainer(ABC):
         # see no behavioural change.
         self.memory_tracker: Optional[MemoryTracker] = None
 
+        # Progress counters (saved in checkpoints so a run can be resumed)
+        self._adam_done = 0
+        self._lbfgs_done = 0
+        self._adam_opt_state: Optional[Dict] = None
+        self._adam_sched_state: Optional[Dict] = None
+        self._timer = StepTimer()
+
+        # Built in train(), once the training data and final network/loss
+        # (possibly swapped in by the public wrapper) are in place.
+        self.weighting: Optional[LossWeighting] = None
+        self._weighting_state: Optional[Dict] = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -184,6 +216,17 @@ class BaseTrainer(ABC):
         logger.info(f"=== {self.__class__.__name__} training start ===")
         t0 = time.perf_counter()
 
+        self.weighting = build_loss_weighting(self.cfg.loss_weighting, self)
+        if self.cfg.init_from and not self.cfg.resume_from:
+            ck = torch.load(self.cfg.init_from, map_location=self.device, weights_only=False)
+            self.network.load_state_dict(ck["network_state"])
+            self.network.set_normalisation(ck["x_mean"].to(self.device, self.dtype),
+                                           ck["x_std"].to(self.device, self.dtype))
+            logger.info(f"Initialised network from {self.cfg.init_from}")
+        if self.cfg.resume_from:
+            self._resume(self.cfg.resume_from)
+        if self.weighting is not None and self._weighting_state:
+            self.weighting.load_state_dict(self._weighting_state)
         self._adam_phase()
         self._lbfgs_phase()
 
@@ -200,6 +243,31 @@ class BaseTrainer(ABC):
         with torch.no_grad():
             xyt = xyt.to(self.device, dtype=self.dtype)
             return self.network(xyt).detach()
+
+    def _resume(self, path: str) -> None:
+        """
+        Restore network weights, history and progress counters.
+
+        Checkpoints written before the counters were saved carry only the
+        weights and history; for those the Adam epoch is the history length
+        and the LR schedule is fast-forwarded, but Adam's moment estimates
+        restart from zero.
+        """
+        ck = torch.load(path, map_location=self.device, weights_only=False)
+        self.network.load_state_dict(ck["network_state"])
+        self.network.set_normalisation(ck["x_mean"], ck["x_std"])
+        self.history = ck["history"]
+        n_steps = len(self.history.get("total", []))
+        self._adam_done = int(ck.get("adam_done", min(n_steps, self.cfg.adam_epochs)))
+        self._lbfgs_done = int(ck.get("lbfgs_done", 0))
+        self._adam_opt_state = ck.get("adam_optimizer")
+        self._adam_sched_state = ck.get("adam_scheduler")
+        self._weighting_state = ck.get("loss_weighting")
+        logger.info(
+            f"Resumed from {path}: Adam {self._adam_done}/{self.cfg.adam_epochs}, "
+            f"L-BFGS {self._lbfgs_done}/{self.cfg.lbfgs_epochs}"
+            + ("" if self._adam_opt_state else " (no optimizer state; Adam moments reset)")
+        )
 
     def load_checkpoint(self, path: str) -> None:
         ck = torch.load(path, map_location=self.device)
@@ -227,7 +295,7 @@ class BaseTrainer(ABC):
     # ------------------------------------------------------------------
 
     def _adam_phase(self) -> None:
-        if self.cfg.adam_epochs <= 0:
+        if self._adam_done >= self.cfg.adam_epochs:
             return
         logger.info(f"Adam: {self.cfg.adam_epochs} epochs, lr={self.cfg.adam_lr}")
         if self.memory_tracker is not None:
@@ -237,26 +305,49 @@ class BaseTrainer(ABC):
         scheduler = optim.lr_scheduler.StepLR(
             optimizer, self.cfg.adam_decay_every, self.cfg.adam_lr_decay
         )
-        for epoch in range(self.cfg.adam_epochs):
+        if self._adam_opt_state is not None:
+            optimizer.load_state_dict(self._adam_opt_state)
+            scheduler.load_state_dict(self._adam_sched_state)
+        elif self._adam_done > 0:
+            # Old checkpoint: replay the step schedule to the resumed epoch
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)  # step before optimizer.step
+                for _ in range(self._adam_done):
+                    scheduler.step()
+        self._adam_optimizer, self._adam_scheduler = optimizer, scheduler
+        self._timer.start(self._adam_done)
+        for epoch in range(self._adam_done, self.cfg.adam_epochs):
             optimizer.zero_grad()
             losses = self._step()
+            if self.weighting is not None:
+                self.weighting.before_backward(losses, epoch)
             losses["total"].backward()
             nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
+            if self.weighting is not None:
+                self.weighting.after_step()
             self._record(losses)
+            self._adam_done = epoch + 1
             if (epoch + 1) % self.cfg.log_every == 0:
                 lr = optimizer.param_groups[0]["lr"]
-                self._log(f"Adam [{epoch+1}/{self.cfg.adam_epochs}]", losses, lr)
+                self._log(f"Adam [{epoch+1}/{self.cfg.adam_epochs}]"
+                          f"{self._timer.tag(epoch + 1)}", losses, lr)
                 if self.memory_tracker is not None:
                     self.memory_tracker.sample("adam", epoch + 1)
             if (epoch + 1) % self.cfg.checkpoint_every == 0:
                 self._save_checkpoint(f"adam_{epoch+1}")
 
     def _lbfgs_phase(self) -> None:
-        if self.cfg.lbfgs_epochs <= 0:
+        if self._lbfgs_done >= self.cfg.lbfgs_epochs:
             return
-        logger.info(f"L-BFGS: {self.cfg.lbfgs_epochs} steps")
+        self._adam_optimizer = self._adam_scheduler = None
+        if self.weighting is not None:
+            self.weighting.freeze()   # L-BFGS needs a fixed objective
+        logger.info(
+            f"L-BFGS: {self.cfg.lbfgs_epochs} steps"
+            + (f" (resuming at {self._lbfgs_done})" if self._lbfgs_done else "")
+        )
         if self.memory_tracker is not None:
             self.memory_tracker.reset_peak("lbfgs-start")
             self.memory_tracker.sample("lbfgs", 0)
@@ -268,6 +359,7 @@ class BaseTrainer(ABC):
             line_search_fn="strong_wolfe",
         )
         counter = [0]
+        self._timer.start(0)
 
         def closure():
             optimizer.zero_grad()
@@ -276,32 +368,54 @@ class BaseTrainer(ABC):
             self._record(losses)
             counter[0] += 1
             if counter[0] % self.cfg.log_every == 0:
-                self._log(f"L-BFGS [{counter[0]}]", losses)
+                self._log(f"L-BFGS [{counter[0]}]{self._timer.tag(counter[0])}", losses)
                 if self.memory_tracker is not None:
                     self.memory_tracker.sample("lbfgs", counter[0])
             return losses["total"]
 
-        for _ in range(self.cfg.lbfgs_epochs):
+        # Curvature pairs are not checkpointed; a resumed run rebuilds them.
+        for step in range(self._lbfgs_done, self.cfg.lbfgs_epochs):
             optimizer.step(closure)
+            self._lbfgs_done = step + 1
+            if self._lbfgs_done % 50 == 0:
+                self._save_checkpoint("lbfgs_latest")
 
     def _step(self) -> Dict[str, torch.Tensor]:
         """Single training step: sample times + cell mask, compute losses."""
         self.network.train()
         t = self._sample_times()
         cell_mask = self._make_cell_mask()
-        return self.loss_fn(
+        if self.weighting is None:
+            return self.loss_fn(
+                self.network, t,
+                ic_data=self.ic_data,
+                bc_data=self.bc_data,
+                ref_data=self.ref_data,
+                cell_mask=cell_mask,
+            )
+        losses = self.loss_fn(
             self.network, t,
             ic_data=self.ic_data,
             bc_data=self.bc_data,
             ref_data=self.ref_data,
             cell_mask=cell_mask,
+            point_weights=self.weighting.point_weights(),
         )
+        losses.update(self.weighting.scalars())
+        return losses
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 
     def _sample_times(self) -> torch.Tensor:
+        if self.cfg.fixed_time_levels:
+            n = self.cfg.n_time_samples
+            dt = (self.cfg.t_end - self.cfg.t_start) / n
+            t = self.cfg.t_start + dt * torch.arange(
+                1, n + 1, device=self.device, dtype=self.dtype
+            )
+            return t.requires_grad_(True)
         t = torch.rand(self.cfg.n_time_samples, device=self.device, dtype=self.dtype)
         t = self.cfg.t_start + t * (self.cfg.t_end - self.cfg.t_start)
         return t.requires_grad_(True)
@@ -346,6 +460,8 @@ class BaseTrainer(ABC):
             parts.append(f"data={losses['data'].item():.3e}")
         if lr is not None:
             parts.append(f"lr={lr:.2e}")
+        if self.weighting is not None:
+            parts.append(self.weighting.describe())
         logger.info(f"{prefix}  " + "  ".join(parts))
 
         # Detailed log at lower frequency (every 5x log_every)
@@ -370,6 +486,14 @@ class BaseTrainer(ABC):
             "history": self.history,
             "x_mean": self.network.x_mean,
             "x_std": self.network.x_std,
+            "adam_done": self._adam_done,
+            "lbfgs_done": self._lbfgs_done,
+            "adam_optimizer": (self._adam_optimizer.state_dict()
+                               if getattr(self, "_adam_optimizer", None) else None),
+            "adam_scheduler": (self._adam_scheduler.state_dict()
+                               if getattr(self, "_adam_scheduler", None) else None),
+            "loss_weighting": (self.weighting.state_dict()
+                               if self.weighting is not None else None),
         }, path)
         logger.debug(f"Checkpoint: {path}")
 

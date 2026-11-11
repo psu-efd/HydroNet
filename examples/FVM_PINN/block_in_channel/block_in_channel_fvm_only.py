@@ -160,6 +160,25 @@ def evaluate_and_plot(
 # Main
 # ---------------------------------------------------------------------------
 
+def save_xmdfc_like(path: Path, t_snaps, Q_snaps, h_still) -> None:
+    """Write an FVM trajectory with the dataset names FVM_PINNDataset reads
+    from SRH-2D XMDFC output (cell-centred, times in seconds)."""
+    import h5py
+    Q = Q_snaps.cpu().numpy()
+    h = Q[:, :, 0] + h_still.cpu().numpy()[None, :]
+    h_safe = np.maximum(h, 1e-6)
+    vel = np.stack([Q[:, :, 1] / h_safe, Q[:, :, 2] / h_safe], axis=-1)
+    times = t_snaps.cpu().numpy()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as f:
+        for name, vals in (("Water_Depth_m", h), ("Velocity_m_p_s", vel)):
+            g = f.create_group(name)
+            g["Times"] = times
+            g["Values"] = vals
+    logger.info(f"FVM trajectory (XMDFC layout): {path}, {len(times)} snapshots "
+                f"t=[{times[0]:.0f}, {times[-1]:.0f}] s")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="FVM-only baseline for block-in-channel")
     parser.add_argument("--config", default="fvm_pinn_config.yaml",
@@ -169,6 +188,10 @@ def main() -> None:
                         help="Number of VTK snapshots (evenly over [t_start, t_end])")
     parser.add_argument("--cfl", type=float, default=None,
                         help="Override training.teacher.cfl")
+    parser.add_argument("--save-h5", default=None,
+                        help="Also write the snapshots to this .h5 in the SRH-2D XMDFC "
+                             "layout (Water_Depth_m / Velocity_m_p_s, times in s), so "
+                             "it can be used as data.srh2d_h5_file")
     args = parser.parse_args()
 
     np.random.seed(42); torch.manual_seed(42)
@@ -222,6 +245,9 @@ def main() -> None:
             vtk_dir / f"fvm_t{k:04d}.vtk", mesh, U_phys, float(t_snaps[k]),
         )
     logger.info(f"VTK snapshots: {vtk_dir}")
+
+    if args.save_h5:
+        save_xmdfc_like(Path(args.save_h5), t_snaps, Q_snaps, h_still)
 
     out_dir = Path("plots")
     metrics = evaluate_and_plot(

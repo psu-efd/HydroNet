@@ -344,6 +344,10 @@ def main() -> None:
     parser.add_argument("--dpi", type=int, default=200, help="Figure DPI.")
     parser.add_argument("--no-tex", action="store_true",
                         help="Disable LaTeX rendering.")
+    parser.add_argument("--case-dir", type=Path, default=SCRIPT_DIR,
+                        help="Folder holding the configs, data/ and checkpoints/ "
+                             "(the manuscript figure uses the A100 timing tree). "
+                             "Run from this folder: config paths are relative.")
     parser.add_argument("--out-dir", default=str(SCRIPT_DIR / "plots"),
                         help="Output directory for the combined PNG.")
     args = parser.parse_args()
@@ -358,7 +362,7 @@ def main() -> None:
     # IC, BC, and architecture; only the trained network weights differ.
     # We use SR-B (the standard + anchor run) as the base config because
     # SR-A may not be trained yet when this script runs.
-    base_yaml = SCRIPT_DIR / "fvm_pinn_config_SR_B.yaml"
+    base_yaml = args.case_dir / "fvm_pinn_config_SR_B.yaml"
     base_config = Config(str(base_yaml))
     if args.device:
         base_config.set("device.type", args.device)
@@ -369,7 +373,7 @@ def main() -> None:
 
     # ---- SRH-2D reference at t = t_end (closest snapshot) ----
     t_target = float(base_config.get("training.t_end", 3600.0))
-    t_actual, h_srh, vel_srh = load_srh2d_reference(H5_REF, t_target)
+    t_actual, h_srh, vel_srh = load_srh2d_reference(args.case_dir / "data" / H5_REF.name, t_target)
     vmag_srh = np.sqrt(vel_srh[:, 0] ** 2 + vel_srh[:, 1] ** 2)
     logger.info(f"SRH-2D reference: t = {t_actual:.2f} s "
                 f"(requested {t_target:.2f} s)")
@@ -380,7 +384,7 @@ def main() -> None:
     runs_h: List[Tuple[str, np.ndarray]] = []
     runs_vmag: List[Tuple[str, np.ndarray]] = []
     for run_id, _yaml, ckpt_relpath, label in SR_RUNS:
-        ckpt_path = SCRIPT_DIR / "checkpoints" / run_id / ckpt_relpath
+        ckpt_path = args.case_dir / "checkpoints" / run_id / ckpt_relpath
         if not ckpt_path.exists():
             logger.warning(f"[{run_id}] checkpoint missing -> skip: {ckpt_path}")
             continue

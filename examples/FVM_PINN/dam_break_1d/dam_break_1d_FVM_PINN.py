@@ -254,6 +254,54 @@ def evaluate_and_plot(model, config, mesh, out_dir: Path):
     return {"L2_h": l2_h, "max_h": max_h, "L2_u": l2_u, "max_u": max_u}
 
 
+def evaluate_spacetime(model, config, mesh, out_dir: Path, n_times: int = 80):
+    """Errors against Stoker on a uniform time grid over (t_start, t_end].
+
+    The default 80 intervals contain the fixed time levels of n_t = 1, 2, 5,
+    10, 20 and the points midway between them, so the errors of a run with
+    fixed levels can be separated into on-level and between-level parts.
+    """
+    h_L = float(config.get_required_config('case.h_L'))
+    h_R = float(config.get_required_config('case.h_R'))
+    x_dam = float(config.get_required_config('case.x_dam'))
+    t0 = float(config.get('training.t_start', 0.0))
+    t1 = float(config.get_required_config('training.t_end'))
+    xc = mesh.cell_center[:, 0]
+    yc = mesh.cell_center[:, 1]
+    n = mesh.n_cells
+    device = model.get_device()
+
+    times = t0 + (t1 - t0) * np.arange(1, n_times + 1) / n_times
+    l2_h, l2_u, max_h, max_u = [], [], [], []
+    for t in times:
+        h_exact, u_exact = dam_break_exact(xc, float(t), h_L, h_R, x_dam)
+        xyt = torch.column_stack([
+            torch.tensor(xc, dtype=torch.float64, device=device),
+            torch.tensor(yc, dtype=torch.float64, device=device),
+            torch.full((n,), float(t), dtype=torch.float64, device=device),
+        ])
+        with torch.no_grad():
+            Q_phys = model(xyt).cpu().numpy()
+        dh = Q_phys[:, 0] - h_exact
+        du = Q_phys[:, 1] - u_exact
+        l2_h.append(np.sqrt(np.mean(dh ** 2)))
+        l2_u.append(np.sqrt(np.mean(du ** 2)))
+        max_h.append(np.max(np.abs(dh)))
+        max_u.append(np.max(np.abs(du)))
+    l2_h, l2_u = np.array(l2_h), np.array(l2_u)
+
+    # Root-mean-square over all cells and times
+    st_h = float(np.sqrt(np.mean(l2_h ** 2)))
+    st_u = float(np.sqrt(np.mean(l2_u ** 2)))
+    logger.info(f"space-time h: L2={st_h:.4e}")
+    logger.info(f"space-time u: L2={st_u:.4e}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(out_dir / "spacetime_errors.npz", times=times, L2_h=l2_h, L2_u=l2_u,
+             max_h=np.array(max_h), max_u=np.array(max_u),
+             spacetime_L2_h=st_h, spacetime_L2_u=st_u)
+    return {"spacetime_L2_h": st_h, "spacetime_L2_u": st_u}
+
+
 def plot_loss_history(history: dict, out_dir: Path) -> None:
     """Three-panel loss plot: aggregate + per-component FVM + per-component IC."""
     def _nonempty(key):
@@ -344,13 +392,19 @@ def main() -> None:
         "--checkpoint", default=None,
         help="Explicit checkpoint path (default: based on training.strategy).",
     )
+    parser.add_argument("--run-id", default=None,
+                        help="Subfolder for this run's outputs under plots/ and runs/ "
+                             "(default: config name minus 'fvm_pinn_config_').")
     args = parser.parse_args()
-
-    np.random.seed(123456)
-    torch.manual_seed(123456)
+    run_id = args.run_id or (
+        Path(args.config).stem.replace("fvm_pinn_config", "").lstrip("_") or "default"
+    )
 
     wall_start = time.time()
     config = Config(args.config)
+    seed = int(config.get('training.seed', 123456))
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if args.device:
         config.set("device.type", args.device)
 
@@ -383,14 +437,16 @@ def main() -> None:
         history, _ = trainer.train()
 
     # ---- Evaluate / plot ----
-    out_dir = Path("plots")
+    out_dir = Path("plots") / run_id   # one folder per run so runs don't overwrite each other
     metrics = evaluate_and_plot(model, config, mesh, out_dir)
+    metrics.update(evaluate_spacetime(model, config, mesh, out_dir))
     if history:
         plot_loss_history(history, out_dir)
 
     # Training history dump (matches the PINN example idiom)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    hist_file = Path(f"history_fvm_pinn_{ts}.json")
+    hist_file = Path("runs") / run_id / f"history_fvm_pinn_{ts}.json"
+    hist_file.parent.mkdir(parents=True, exist_ok=True)
     with open(hist_file, "w") as f:
         json.dump({"history": history, "metrics": metrics}, f, indent=2)
     logger.info(f"Training history: {hist_file}")

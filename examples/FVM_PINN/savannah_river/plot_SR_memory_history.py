@@ -38,19 +38,19 @@ logger = logging.getLogger(__name__)
 
 # Match the colors used by fig_savannah_l2_by_time so the two figures
 # are visually consistent.
-SR_RUNS: List[Tuple[str, str, str]] = [
-    ("SR_A", "physics only",                 "#7f7f7f"),
-    ("SR_B", "standard",                     "#d62728"),
-    ("SR_C", "window(5)",                    "#1f77b4"),
-    ("SR_D", "window(10)",                   "#2ca02c"),
-    ("SR_E", "FVM teacher",                  "#ff7f0e"),
-    ("SR_F", r"sparse $N_d=200$",            "#9467bd"),
-    ("SR_G", r"anchor, $\lambda_{PDEs}=0$",  "#8c564b"),
+SR_RUNS: List[Tuple[str, str, str, str]] = [
+    ("SR_A", "physics only",                 "#333333", "o"),
+    ("SR_B", "standard",                     "#D55E00", "s"),
+    ("SR_C", "window(5)",                    "#0072B2", "^"),
+    ("SR_D", "window(10)",                   "#009E73", "D"),
+    ("SR_E", "FVM teacher",                  "#E69F00", "v"),
+    ("SR_F", r"sparse $N_d=200$",            "#CC79A7", "P"),
+    ("SR_G", r"anchor, $\lambda_{\mathrm{fvm\mbox{-}pinn}}=0$",  "#56B4E9", "X"),
 ]
 
 
-def load_history(run_id: str) -> Optional[Dict]:
-    path = SCRIPT_DIR / "checkpoints" / run_id / "memory_history.json"
+def load_history(run_id: str, ckpt_dir: Path = SCRIPT_DIR / "checkpoints") -> Optional[Dict]:
+    path = ckpt_dir / run_id / "memory_history.json"
     if not path.exists():
         logger.warning(f"[{run_id}] memory_history.json missing -> skip")
         return None
@@ -83,6 +83,9 @@ def main() -> None:
     )
     parser.add_argument("--out", default=str(SCRIPT_DIR / "plots" / "SR_memory_history.png"))
     parser.add_argument("--no-tex", action="store_true")
+    parser.add_argument("--checkpoints", type=Path, default=SCRIPT_DIR / "checkpoints",
+                        help="Folder holding <run>/memory_history.json (the manuscript "
+                             "figure uses the A100 timing tree).")
     parser.add_argument("--dpi", type=int, default=200)
     args = parser.parse_args()
 
@@ -94,8 +97,8 @@ def main() -> None:
     fig, (ax_p, ax_a) = plt.subplots(2, 1, figsize=(8, 9.5), constrained_layout=True)
 
     n_loaded = 0
-    for run_id, label, color in SR_RUNS:
-        data = load_history(run_id)
+    for run_id, label, color, marker in SR_RUNS:
+        data = load_history(run_id, args.checkpoints)
         if data is None:
             continue
         records = data["records"]
@@ -107,10 +110,10 @@ def main() -> None:
         peak = np.maximum.accumulate(peak_phase)
         alloc = np.array([r["alloc_mib"] for r in records])
 
-        ax_p.plot(wall, peak, marker="o", markersize=3.5, linewidth=1.4,
-                  color=color, label=f"{run_id} ({label})", alpha=0.9)
-        ax_a.plot(wall, alloc, marker="o", markersize=3.5, linewidth=1.4,
-                  color=color, label=f"{run_id} ({label})", alpha=0.9)
+        ax_p.plot(wall, peak, marker=marker, markersize=4.5, linewidth=1.4,
+                  color=color, label=f"{run_id.replace('_', '-')} ({label})", alpha=0.9)
+        ax_a.plot(wall, alloc, marker=marker, markersize=4.5, linewidth=1.4,
+                  color=color, alpha=0.9)
         n_loaded += 1
 
         # Log a quick summary
@@ -135,13 +138,16 @@ def main() -> None:
         #set tick label size
         ax.tick_params(axis='both', which='major', labelsize=16)
         ax.grid(True, alpha=0.3)
-        ax.legend(loc="best", fontsize=10, ncol=2)
 
         #add (a) and (b) labels to the subplots
         if ax == ax_p:
             ax.text(-0.15, 1.05, "(a)", transform=ax.transAxes, fontsize=18)
         else:
             ax.text(-0.15, 1.05, "(b)", transform=ax.transAxes, fontsize=18)
+
+    # One shared legend below the panels, so it covers no data
+    handles, labels = ax_p.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=3, fontsize=12, frameon=False)
 
     fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
     pdf_path = out_path.with_suffix(".pdf")

@@ -242,6 +242,14 @@ class FVM_PINNTrainer:
             use_grad_checkpoint=bool(
                 cfg.get('training.use_grad_checkpoint', False)
             ),
+            # "fvm" (default) or "strong_form" (standard-PINN baseline)
+            residual=str(cfg.get('training.loss_type', 'fvm')),
+            # Steady-form FVM residual (no dQ/dt); use with lambda_ic = 0
+            steady=bool(cfg.get('training.steady_form', False)),
+            # Weight the FVM residual by A_i / mean(A); off by default
+            area_weighted=bool(cfg.get('training.fvm_area_weighted', False)),
+            # Harten-Hyman fix in the training residual only; off by default
+            entropy_fix=bool(cfg.get('training.entropy_fix', False)),
         )
 
     def _fill_base_cfg(self, cfg_obj: BaseTrainerConfig) -> BaseTrainerConfig:
@@ -255,6 +263,7 @@ class FVM_PINNTrainer:
         cfg_obj.lbfgs_max_iter = int(cfg.get('training.lbfgs_max_iter', 20))
         cfg_obj.lbfgs_lr = float(cfg.get('training.lbfgs_lr', 1.0))
         cfg_obj.n_time_samples = int(cfg.get('training.n_time_samples', 8))
+        cfg_obj.fixed_time_levels = bool(cfg.get('training.fixed_time_levels', False))
         cfg_obj.t_start = float(cfg.get('training.t_start', 0.0))
         cfg_obj.t_end = float(cfg.get('training.t_end', 1.0))
         cfg_obj.use_grad_checkpoint = bool(
@@ -272,6 +281,10 @@ class FVM_PINNTrainer:
             cfg.get('training.logging.checkpoint_dir',
                     cfg.get('training.output_dir', 'outputs'))
         )
+        cfg_obj.resume_from = cfg.get('training.resume_from', None)
+        cfg_obj.init_from = cfg.get('training.init_from', None)
+        lw = cfg.get('training.loss_weighting', None)
+        cfg_obj.loss_weighting = dict(lw) if lw else None
         cfg_obj.device = str(self.device)
         cfg_obj.dtype = "float64"
         return cfg_obj

@@ -1,0 +1,94 @@
+{
+  "info": {
+    "tag": "n100000",
+    "srhhydro": "data_refined/n100000/savana_n100000.srhhydro",
+    "n_cells": 94586,
+    "n_faces": 142647,
+    "dataset_build_s": 4.190962821012363,
+    "n_time_samples": 10,
+    "n_warm": 10,
+    "n_steps": 50,
+    "torch": "2.11.0+cu128",
+    "host": "p-gc-3035",
+    "gpu": "NVIDIA A100-PCIE-40GB",
+    "gpu_total_mib": 40440.375
+  },
+  "results": [
+    {
+      "setting": "full",
+      "strategy": "standard",
+      "cell_frac": null,
+      "grad_checkpoint": false,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 94.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 49.50 MiB is free. Including non-PyTorch memory, this process has 39.44 GiB memory in use. Of the allocated memory 38.75 GiB is allocated by PyTorch, and 188.17 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "full_ckpt",
+      "strategy": "standard",
+      "cell_frac": null,
+      "grad_checkpoint": true,
+      "status": "oom",
+      "error": "CUDA out of memory. Tried to allocate 94.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 43.50 MiB is free. Including non-PyTorch memory, this process has 39.44 GiB memory in use. Of the allocated memory 38.75 GiB is allocated by PyTorch, and 197.99 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "setting": "mb0.25",
+      "strategy": "minibatch",
+      "cell_frac": 0.25,
+      "grad_checkpoint": false,
+      "status": "ok",
+      "s_per_step_median": 0.5414141518995166,
+      "s_per_step_mean": 0.5452302143489942,
+      "s_per_step_p90": 0.5429882646538318,
+      "final_total_loss": 0.9504948294459526,
+      "final_fvm_loss": 0.008697214369883011,
+      "peak_mib": 34728.25927734375,
+      "peak_above_start_mib": 34688.55078125,
+      "reserved_peak_mib": 35394.0
+    },
+    {
+      "setting": "mb0.10",
+      "strategy": "minibatch",
+      "cell_frac": 0.1,
+      "grad_checkpoint": false,
+      "status": "ok",
+      "s_per_step_median": 0.36063387617468834,
+      "s_per_step_mean": 0.36063135718926786,
+      "s_per_step_p90": 0.3612997231539339,
+      "final_total_loss": 0.8514317851183816,
+      "final_fvm_loss": 0.009708269713524648,
+      "peak_mib": 17937.26953125,
+      "peak_above_start_mib": 17897.56103515625,
+      "reserved_peak_mib": 18310.0
+    },
+    {
+      "setting": "mb0.10_ckpt",
+      "strategy": "minibatch",
+      "cell_frac": 0.1,
+      "grad_checkpoint": true,
+      "status": "ok",
+      "s_per_step_median": 0.4356950419023633,
+      "s_per_step_mean": 0.4356946838693693,
+      "s_per_step_p90": 0.4363661413779482,
+      "final_total_loss": 0.8514317851183862,
+      "final_fvm_loss": 0.009708269713524686,
+      "peak_mib": 23193.61572265625,
+      "peak_above_start_mib": 23153.9072265625,
+      "reserved_peak_mib": 24008.0
+    },
+    {
+      "setting": "mb0.02",
+      "strategy": "minibatch",
+      "cell_frac": 0.02,
+      "grad_checkpoint": false,
+      "status": "ok",
+      "s_per_step_median": 0.21426914003677666,
+      "s_per_step_mean": 0.21418935222085567,
+      "s_per_step_p90": 0.21697057192213834,
+      "final_total_loss": 0.9660775413064756,
+      "final_fvm_loss": 0.008636532321903643,
+      "peak_mib": 4949.30322265625,
+      "peak_above_start_mib": 4909.5947265625,
+      "reserved_peak_mib": 6304.0
+    }
+  ]
+}

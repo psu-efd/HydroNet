@@ -1,0 +1,84 @@
+{
+  "exact": {
+    "h_star": 1.1034938538371137,
+    "u_star": 2.2785367922883673,
+    "shock": 4.1663246941874945,
+    "head": -4.4294469180700204,
+    "tail": -1.0116417296374696
+  },
+  "dx": 0.2,
+  "runs": {
+    "FVM": {
+      "shock_grad": {
+        "n_valid": 20,
+        "speed": 4.762969924812027,
+        "speed_exact": 4.1663246941874945,
+        "mean_abs_error_m": 0.1736207702609404,
+        "max_abs_error_m": 0.8307649388374987,
+        "final_error_m": 0.11117530581250534
+      },
+      "shock_mid": {
+        "n_valid": 20,
+        "speed": 4.2190605591691,
+        "speed_exact": 4.1663246941874945,
+        "mean_abs_error_m": 0.02231149453520791,
+        "max_abs_error_m": 0.03534726453081838,
+        "final_error_m": 0.031089372603537058
+      },
+      "head": {
+        "n_valid": 0,
+        "speed": null,
+        "speed_exact": -4.4294469180700204,
+        "mean_abs_error_m": null,
+        "max_abs_error_m": null,
+        "final_error_m": NaN
+      },
+      "tail": {
+        "n_valid": 20,
+        "speed": -0.731222121919709,
+        "speed_exact": -1.0116417296374696,
+        "mean_abs_error_m": 0.32608356870702204,
+        "max_abs_error_m": 0.4102123047950492,
+        "final_error_m": 0.3832192756352839
+      },
+      "shock_width_cells_mean": 5.630906496922714,
+      "shock_width_cells_final": 6.230850215579897
+    },
+    "SF": {
+      "shock_grad": {
+        "n_valid": 20,
+        "speed": 2.520037593984964,
+        "speed_exact": 4.1663246941874945,
+        "mean_abs_error_m": 1.6334454644484346,
+        "max_abs_error_m": 3.1222435206406214,
+        "final_error_m": -1.6713246941874935
+      },
+      "shock_mid": {
+        "n_valid": 20,
+        "speed": 2.6869133463015267,
+        "speed_exact": 4.1663246941874945,
+        "mean_abs_error_m": 1.3923277888241006,
+        "max_abs_error_m": 1.7617162039065128,
+        "final_error_m": -1.7617162039065128
+      },
+      "head": {
+        "n_valid": 20,
+        "speed": -4.631755550547365,
+        "speed_exact": -4.4294469180700204,
+        "mean_abs_error_m": 0.11231039763009631,
+        "max_abs_error_m": 0.2277477165639361,
+        "final_error_m": -0.004062177662442323
+      },
+      "tail": {
+        "n_valid": 20,
+        "speed": 0.7419902700810831,
+        "speed_exact": -1.0116417296374696,
+        "mean_abs_error_m": 0.694740946879868,
+        "max_abs_error_m": 1.999240219913121,
+        "final_error_m": 1.999240219913121
+      },
+      "shock_width_cells_mean": 4.785473507311873,
+      "shock_width_cells_final": 3.6432919997820346
+    }
+  }
+}
