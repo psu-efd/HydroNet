@@ -70,6 +70,10 @@ class TimeWindowConfig:
     per_window_cfg : BaseTrainerConfig
         Trainer config applied to *each* window.
         t_start / t_end are overridden per window.
+        ``init_from`` initialises the first window only; later windows
+        start from their predecessor (``warm_start``) or from a fresh
+        network. ``resume_from`` is not supported, because a checkpoint
+        holds the network and progress of a single window.
     """
     n_windows: int = 5
     overlap_frac: float = 0.10
@@ -107,6 +111,13 @@ class TimeWindowTrainer:
         self.mesh_data   = mesh_data
         self.bc_config   = bc_config
         self.trainer_cls = base_trainer_cls
+
+        if window_cfg.per_window_cfg.resume_from:
+            raise ValueError(
+                "training.resume_from is not supported with strategy 'window': "
+                "a checkpoint holds the network and progress of a single "
+                "window. Use training.init_from to initialise the first window."
+            )
 
         self.windows: List[Tuple[float, float]] = []   # (t_lo, t_hi) per window
         self.trainers: List[BaseTrainer] = []
@@ -163,6 +174,11 @@ class TimeWindowTrainer:
             w_cfg.t_start   = t_lo
             w_cfg.t_end     = t_hi
             w_cfg.output_dir = str(self._output_base / f"window_{wk:03d}")
+            if wk > 0:
+                # init_from applies to the first window only. Left set, every
+                # window would reload the same checkpoint in train() and
+                # discard the warm start from its predecessor.
+                w_cfg.init_from = None
 
             trainer = self.trainer_cls(
                 w_cfg, self.net_cfg, deepcopy(self.loss_cfg),
