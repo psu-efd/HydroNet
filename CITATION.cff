@@ -15,8 +15,11 @@ authors:
     affiliation: "Department of Civil and Environmental Engineering, Pennsylvania State University, USA"
     # TODO: replace with your ORCID iD (e.g. 0000-0002-XXXX-XXXX)
     orcid: "https://orcid.org/0000-0002-8296-7076"
-version: "1.0.0-fvm-pinn"
-date-released: "2026-05-09"
+  - family-names: Tenorio
+    given-names: Alejandro
+    affiliation: "Department of Civil and Environmental Engineering, Pennsylvania State University, USA"
+version: "1.2.0"
+date-released: "2026-11-12"
 license: MIT
 type: software
 repository-code: "https://github.com/psu-efd/HydroNet"

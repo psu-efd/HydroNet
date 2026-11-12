@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="hydronet",
-    version="0.1.0",
+    version="1.2.0",
     packages=find_packages(),
     # Runtime dependencies. ``mpi4py`` is intentionally omitted — it isn't
     # imported anywhere in the package and requires an MPI runtime that's
