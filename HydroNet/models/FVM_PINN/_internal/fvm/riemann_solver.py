@@ -13,15 +13,17 @@ Conserved variables (perturbation form):
 Well-balanced SWE (Eqs. 1-3 in Hydrograd paper):
     d(xi)/dt  + d(uh)/dx + d(vh)/dy = 0
     d(uh)/dt  + d(u²h + 0.5*g*(xi² + 2*xi*h_s))/dx + d(uvh)/dy
-              = -g*xi*S0x - tau_bx/rho
+              = g*xi*S0x - tau_bx/rho
     d(vh)/dt  + d(uvh)/dx + d(v²h + 0.5*g*(xi² + 2*xi*h_s))/dy
-              = -g*xi*S0y - tau_by/rho
+              = g*xi*S0y - tau_by/rho
 
 The pressure term 0.5*g*(xi² + 2*xi*h_still) replaces 0.5*g*h² to achieve
 exact balance at rest: when xi=0, both flux and source are zero.
 
 Source term split (Rogers et al. 2001, 2003; Liu et al. 2008):
-    g*h*d(xi)/dx = d[0.5*g*(xi² + 2*xi*h_s)]/dx - g*h*d(zb)/dx
+    g*h*d(xi)/dx = d[0.5*g*(xi² + 2*xi*h_s)]/dx + g*xi*d(zb)/dx
+
+with bed slope S0 = -grad(zb), so the bed-slope source is g*xi*S0.
 """
 
 import torch
